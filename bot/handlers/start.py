@@ -180,6 +180,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.price import show_prices
         await show_prices(update, context)
 
+    elif data == "price_fee_list":
+        from bot.handlers.price import show_fee_list
+        await show_fee_list(update, context)
+
         
     elif data == "menu_stocks":
         from bot.handlers.stocks import show_stocks

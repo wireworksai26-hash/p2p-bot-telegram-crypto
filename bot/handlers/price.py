@@ -77,6 +77,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         message_text = "\n".join(text_lines)
         
         keyboard = [
+            [InlineKeyboardButton("📋 Price List Fee Lengkap", callback_data="price_fee_list")],
             [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
             [get_owner_button()]
         ]
@@ -97,3 +98,74 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     finally:
         db.close()
+
+
+async def show_fee_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Menampilkan tabel Price List Fee Transaksi resmi untuk Altcoin dan USD.
+    """
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    fee_text = (
+        "📋 <b>PRICE LIST FEE TRANSAKSI RESMI</b>\n\n"
+        "🪙 <b>Minimum Pembelian / Penjualan: Rp 5.000</b>\n\n"
+        "🟢 <b>LIST FEE KHUSUS USD (USDT / USDC)</b>\n"
+        "<i>(USDT lebih murah & stabil)</i>\n"
+        "➡️ Jual/Beli 5k - 35k = Fee Rp 3.000\n"
+        "➡️ Jual/Beli 36k - 55k = Fee Rp 3.500\n"
+        "➡️ Jual/Beli 56k - 70k = Fee Rp 4.000\n"
+        "➡️ Jual/Beli 71k - 110k = Fee Rp 4.500\n"
+        "➡️ Jual/Beli 111k - 170k = Fee Rp 5.000\n"
+        "➡️ Jual/Beli 171k - 200k = Fee Rp 5.500\n"
+        "➡️ Jual/Beli 201k - 250k = Fee Rp 6.500\n"
+        "➡️ Jual/Beli 251k - 330k = Fee Rp 7.000\n"
+        "➡️ Jual/Beli 331k - 400k = Fee Rp 7.500\n"
+        "➡️ Jual/Beli 401k - 450k = Fee Rp 8.000\n"
+        "➡️ Jual/Beli 451k - 550k = Fee Rp 8.500\n"
+        "➡️ Jual/Beli 551k - 800k = Fee Rp 9.000\n"
+        "➡️ Jual/Beli 801k - 900k = Fee Rp 11.000\n"
+        "➡️ Jual/Beli 901k - 950k = Fee Rp 13.000\n"
+        "➡️ Jual/Beli 951k - 1015k = Fee Rp 14.500\n\n"
+        "🟣 <b>PRICE LIST KHUSUS FEE ALTCOIN</b>\n"
+        "<i>(ETH, SOL, SUI, TRX, BNB, MATIC, ARB, AVAX, dll.)</i>\n"
+        "➡️ Jual/Beli 5k - 10k = Fee Rp 3.000\n"
+        "➡️ Jual/Beli 11k - 15k = Fee Rp 3.500\n"
+        "➡️ Jual/Beli 16k - 48k = Fee Rp 4.000\n"
+        "➡️ Jual/Beli 49k - 93k = Fee Rp 5.000\n"
+        "➡️ Jual/Beli 94k - 105k = Fee Rp 5.500\n"
+        "➡️ Jual/Beli 106k - 110k = Fee Rp 6.000\n"
+        "➡️ Jual/Beli 111k - 119k = Fee Rp 6.500\n"
+        "➡️ Jual/Beli 120k - 150k = Fee Rp 7.000\n"
+        "➡️ Jual/Beli 161k - 185k = Fee Rp 7.500\n"
+        "➡️ Jual/Beli 186k - 220k = Fee Rp 8.000\n"
+        "➡️ Jual/Beli 221k - 300k = Fee Rp 8.500\n"
+        "➡️ Jual/Beli 301k - 330k = Fee Rp 9.000\n"
+        "➡️ Jual/Beli 331k - 380k = Fee Rp 9.500\n"
+        "➡️ Jual/Beli 381k - 420k = Fee Rp 10.000\n"
+        "➡️ Jual/Beli 421k - 460k = Fee Rp 10.500\n"
+        "➡️ Jual/Beli 461k - 500k = Fee Rp 11.000\n"
+        "➡️ Jual/Beli 501k - 600k = Fee Rp 11.500\n\n"
+        "🛍 <b>Pembelian atau Penjualan Nominal di atas list yang tertera tanya admin dahulu</b> 🛍\n\n"
+        "📣 <i>Adanya fee transaksi yang berbeda-beda dikarenakan volatilitas harga coin crypto yang sangat berfluktuasi (naik-turunnya nilai) dan spread usdt (selisih harga) yang berubah-ubah guna menghindari kerugian stok coin pihak admin.</i>"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("💵 Cek Kurs Koin Realtime", callback_data="menu_price")],
+        [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+        [get_owner_button()]
+    ]
+
+    if query:
+        await query.edit_message_text(
+            text=fee_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            text=fee_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
