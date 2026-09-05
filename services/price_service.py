@@ -39,7 +39,6 @@ BINANCE_PAIRS = {
     "BERA":  "BERAUSDT",
     "APT":   "APTUSDT",
     "OP":    "OPUSDT",
-    "HYPE":  "HYPEUSDT",
     "G":     "GUSDT",
 }
 

@@ -81,26 +81,67 @@ def validate_wallet_address(address: str, network: str) -> bool:
     return False
 
 
-def validate_amount_idr(amount_str: str) -> tuple[bool, int]:
+def validate_amount_idr(amount_str: str, min_amount: int = 5000, max_amount: int = 10_000_000) -> tuple[bool, int]:
     """
     Memvalidasi dan memparse string nominal rupiah.
-    Minimal order adalah Rp 5.000 (sesuai spesifikasi client).
+    Mendukung format:
+      - "50000"
+      - "50.000"
+      - "Rp 50.000" / "rp 50000" / "Rp. 50.000"
+      - "50k" / "50K" / "50rb"
+      - "50,000"
+      
+    Menolak secara ketat jika:
+      - Terdeteksi sebagai alamat wallet (0x..., T..., Base58 panjang, dll.)
+      - Mengandung huruf acak atau teks non-nominal
+      - Kurang dari min_amount (default Rp 5.000)
+      - Lebih dari max_amount (default Rp 10.000.000 / limit QRIS BI)
     
     Returns:
         tuple: (is_valid: bool, parsed_amount: int)
     """
-    try:
-        # Hapus format non-numerik seperti "Rp", titik, koma, spasi
-        cleaned = re.sub(r"[^\d]", "", amount_str)
-        if not cleaned:
+    if not amount_str or not isinstance(amount_str, str):
+        return False, 0
+
+    text = amount_str.strip()
+
+    # 1. Cek langsung jika input mirip alamat wallet blockchain
+    if (
+        text.startswith("0x")
+        or text.startswith("0X")
+        or (text.startswith("T") and len(text) == 34)
+        or (text.startswith(("EQ", "UQ")) and len(text) >= 46)
+        or len(text) > 30
+    ):
+        return False, 0
+
+    # 2. Hapus awalan "Rp", "Rp.", "IDR"
+    cleaned = re.sub(r"^(?:rp\.?|idr)\s*", "", text, flags=re.IGNORECASE).strip()
+
+    # 3. Dukung singkatan umum seperti "50k", "50K", "50rb", "50ribu"
+    k_match = re.match(r"^(\d+)\s*(?:k|rb|ribu)$", cleaned, flags=re.IGNORECASE)
+    if k_match:
+        try:
+            val = int(k_match.group(1)) * 1000
+            if val < min_amount or val > max_amount:
+                return False, val
+            return True, val
+        except Exception:
             return False, 0
-            
-        amount = int(cleaned)
-        
-        # Cek batas minimal 5.000 IDR
-        if amount < 5000:
+
+    # 4. Validasi pola angka murni Rupiah
+    # Hanya boleh angka dengan pemisah ribuan titik/koma atau angka polos
+    if not re.match(r"^(\d{1,3}(?:[.,]\d{3})+|\d+)$", cleaned):
+        return False, 0
+
+    try:
+        raw_num = cleaned.replace(".", "").replace(",", "").strip()
+        amount = int(raw_num)
+
+        # Cek batas minimal dan batas maksimal
+        if amount < min_amount or amount > max_amount:
             return False, amount
-            
+
         return True, amount
     except Exception:
         return False, 0

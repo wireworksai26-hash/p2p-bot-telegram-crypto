@@ -166,20 +166,42 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Memproses nominal rupiah, menghitung rate & fee, lalu meminta wallet address.
     """
-    text_input = update.message.text
+    text_input = (update.message.text or "").strip()
     
-    # Validasi nominal IDR
-    is_valid, nominal_idr = validate_amount_idr(text_input)
-    if not is_valid or nominal_idr < 5000:
-        keyboard = [
-            [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
-            [get_owner_button()]
-        ]
+    keyboard = [
+        [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+        [get_owner_button()]
+    ]
+
+    # 1. Cek jika user keliru menginput alamat wallet
+    if text_input.lower().startswith("0x") or (len(text_input) >= 32 and not text_input.isdigit()):
         await update.message.reply_text(
             text=(
-                "❌ <b>Nominal Tidak Valid!</b>\n\n"
-                "Format input salah atau nominal kurang dari batas minimal Rp 5.000.\n"
-                "Silakan ketik ulang nominal Rupiah (contoh: <code>50000</code>):"
+                "⚠️ <b>Input Terdeteksi Sebagai Alamat Wallet!</b>\n\n"
+                "Pada langkah ini, silakan masukkan <b>Nominal Rupiah (IDR)</b> yang ingin Anda beli, bukan alamat wallet.\n"
+                "Alamat wallet Anda akan diminta pada langkah selanjutnya.\n\n"
+                "Silakan ketik nominal Rupiah (contoh: <code>50000</code> atau <code>Rp 50.000</code>):"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return INPUT_AMOUNT
+
+    # 2. Validasi nominal IDR
+    is_valid, nominal_idr = validate_amount_idr(text_input)
+    if not is_valid:
+        if nominal_idr > 0 and nominal_idr < 5000:
+            err_msg = "Nominal kurang dari batas minimal <b>Rp 5.000</b>."
+        elif nominal_idr > 10_000_000:
+            err_msg = "Nominal melebihi batas maksimal <b>Rp 10.000.000</b> (limit transaksi QRIS BI)."
+        else:
+            err_msg = "Format input salah atau mengandung karakter yang tidak valid."
+
+        await update.message.reply_text(
+            text=(
+                f"❌ <b>Nominal Tidak Valid!</b>\n\n"
+                f"{err_msg}\n"
+                "Silakan ketik ulang nominal Rupiah (contoh: <code>50000</code> atau <code>50k</code>):"
             ),
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"

@@ -34,6 +34,7 @@ from database.crud import (
 from services.gopay_service import gopay_service
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_idr
+from bot.utils.validator import validate_amount_idr
 from config.assets import QRIS_STATIC_IMAGE
 
 logger = logging.getLogger(__name__)
@@ -129,14 +130,26 @@ async def handle_preset_nominal(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_custom_nominal_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Memvalidasi dan memproses nominal custom yang diketik user."""
-    text_input = update.message.text.strip()
-    try:
-        nominal = int(text_input.replace(".", "").replace(",", "").replace("Rp", "").strip())
-        if nominal < 5000:
-            await update.message.reply_text("❌ Minimal topup adalah Rp 5.000. Silakan ketik nominal lain:")
-            return WAITING_CUSTOM_NOMINAL
-    except ValueError:
-        await update.message.reply_text("❌ Format nominal tidak valid. Ketik angka tanpa titik (contoh: <code>25000</code>):", parse_mode="HTML")
+    text_input = (update.message.text or "").strip()
+    
+    # 1. Cek jika user keliru menginput alamat wallet
+    if text_input.lower().startswith("0x") or (len(text_input) >= 32 and not text_input.isdigit()):
+        await update.message.reply_text(
+            "⚠️ <b>Input Terdeteksi Sebagai Alamat Wallet!</b>\n\n"
+            "Pada langkah ini, silakan masukkan <b>Nominal Rupiah (IDR)</b> yang ingin di-topup (contoh: <code>50000</code> atau <code>50k</code>):",
+            parse_mode="HTML"
+        )
+        return WAITING_CUSTOM_NOMINAL
+
+    # 2. Validasi nominal IDR
+    is_valid, nominal = validate_amount_idr(text_input)
+    if not is_valid:
+        if nominal > 0 and nominal < 5000:
+            await update.message.reply_text("❌ Minimal topup adalah <b>Rp 5.000</b>. Silakan ketik nominal yang lebih besar:", parse_mode="HTML")
+        elif nominal > 10_000_000:
+            await update.message.reply_text("❌ Maksimal topup adalah <b>Rp 10.000.000</b> per transaksi (limit QRIS BI). Silakan ketik nominal lain:", parse_mode="HTML")
+        else:
+            await update.message.reply_text("❌ Format nominal tidak valid. Ketik angka nominal (contoh: <code>25000</code> atau <code>25.000</code> atau <code>25k</code>):", parse_mode="HTML")
         return WAITING_CUSTOM_NOMINAL
 
     return await generate_and_send_qris(update, context, nominal)
