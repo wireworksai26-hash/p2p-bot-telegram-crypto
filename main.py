@@ -41,6 +41,7 @@ from bot.handlers.sell import sell_conversation_handler
 from bot.handlers.swap import swap_conv_handler
 from bot.handlers.calculator import calculator_conversation_handler
 from bot.handlers.balance import topup_conversation_handler, show_balance_menu
+from bot.handlers.price import show_prices
 from bot.handlers.admin import (
     admin_handler,
     setspread_handler,
@@ -249,6 +250,8 @@ def build_bot_application() -> Application:
 
     # --- Command Handlers ---
     application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("price", show_prices))
+    application.add_handler(CommandHandler("harga", show_prices))
     application.add_handler(CommandHandler("balance", show_balance_menu))
     application.add_handler(CommandHandler("admin", admin_handler))
     application.add_handler(CommandHandler("setspread", setspread_handler))

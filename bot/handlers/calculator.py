@@ -43,8 +43,8 @@ async def start_calculator_callback(update: Update, context: ContextTypes.DEFAUL
         text=(
             "🧮 <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
-            "<i>Ketik nominal langsung di chat (contoh: 500000 atau Rp 500.000).</i>\n\n"
-            "⚠️ Minimal nominal simulasi adalah <b>Rp 10.000</b>."
+            "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
+            "⚠️ Minimal nominal simulasi adalah <b>Rp 5.000</b>."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -65,8 +65,8 @@ async def start_calculator_command(update: Update, context: ContextTypes.DEFAULT
         text=(
             "🧮 <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
-            "<i>Ketik nominal langsung di chat (contoh: 500000 atau Rp 500.000).</i>\n\n"
-            "⚠️ Minimal nominal simulasi adalah <b>Rp 10.000</b>."
+            "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
+            "⚠️ Minimal nominal simulasi adalah <b>Rp 5.000</b>."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -91,8 +91,8 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text(
             text=(
                 "❌ <b>Nominal Tidak Valid!</b>\n\n"
-                "Format input salah atau nominal kurang dari batas minimal Rp 10.000.\n"
-                "Silakan masukkan nominal kembali (contoh: <code>150000</code>):"
+                "Format input salah atau nominal kurang dari batas minimal Rp 5.000.\n"
+                "Silakan masukkan nominal kembali (contoh: <code>50000</code>):"
             ),
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
@@ -127,7 +127,7 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"🟣 <b>Altcoin Tier:</b> {fmt_fee(fee_alt)}\n"
         f"🔄 <b>Convert Tier:</b> {fmt_fee(fee_conv)}\n"
         f"────────────────────\n"
-        f"<i>Catatan: ada tambahan fee Rp 2.000 untuk koin ETH/TRX (kirim keluar).</i>"
+        f"<i>Catatan: Nominal transaksi di atas batas list resmi silakan hubungi admin.</i>"
     )
 
     keyboard = [

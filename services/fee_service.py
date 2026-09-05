@@ -117,22 +117,7 @@ def calculate_fee_idr(
             raise ValueError("Pembelian atau Penjualan Nominal Altcoin di atas Rp 600.000 silakan tanya admin dahulu.")
         base_fee = _tier_fee(nominal_idr, ALTCOIN_FEE_TIERS, "Altcoin", 5000, 600000)
 
-    # Tambahan Surcharge Fee Rp 2.000 khusus OUTGOING (Bot mengirim koin ke buyer)
-    # untuk USDT Jaringan ETH, TRX Coin / TRON Network, dan ETH Jaringan ETH Mainnet
-    surcharge = 0
-    if is_outgoing:
-        sym_upper = symbol.upper() if symbol else ""
-        net_upper = network.upper() if network else ""
-
-        is_eth_network = net_upper in ["ETH", "ETHEREUM"]
-        is_tron_network = net_upper in ["TRON", "TRX"] or sym_upper == "TRX"
-        is_usdt_eth = sym_upper == "USDT" and is_eth_network
-        is_eth_eth = sym_upper == "ETH" and is_eth_network
-
-        if is_eth_network or is_tron_network or is_usdt_eth or is_eth_eth:
-            surcharge += 2000
-
-    return base_fee + surcharge
+    return base_fee
 
 
 def get_fee_category(symbol: str) -> str:

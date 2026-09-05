@@ -268,14 +268,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         [get_owner_button()]
     ]
 
-    has_surcharge = (
-        network in ["ETH", "ETHEREUM"] or
-        network in ["TRON", "TRX"] or
-        symbol == "TRX" or
-        (symbol == "USDT" and network in ["ETH", "ETHEREUM"])
-    )
-    surcharge_note = "\n\nℹ️ <i>Catatan: Tambahan fee Rp 2.000 untuk gas fee kirim Coin yang berfluktuasi</i>" if has_surcharge else ""
-
     await update.message.reply_text(
         text=(
             f"🪙 <b>Simulasi Perhitungan Pembelian:</b>\n"
@@ -283,7 +275,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"• Kurs Beli: <code>{format_idr(buy_price_idr)}</code>\n"
             f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
             f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
-            f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>{surcharge_note}\n\n"
+            f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"
             f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
             f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
         ),
