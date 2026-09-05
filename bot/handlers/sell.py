@@ -389,12 +389,33 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             [get_owner_button()]
         ]
         
-        await safe_edit_message(
-            query,
-            text=waiting_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
+        from services.qris_generator import get_wallet_qr_stream
+        qr_stream = get_wallet_qr_stream(hot_wallet)
+        sent_photo = False
+        if qr_stream:
+            try:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=qr_stream,
+                    caption=waiting_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+                sent_photo = True
+                try:
+                    await query.delete_message()
+                except Exception:
+                    pass
+            except Exception as pe:
+                logger.warning(f"Gagal kirim QR photo deposit sell: {pe}")
+
+        if not sent_photo:
+            await safe_edit_message(
+                query,
+                text=waiting_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
         
         # Beritahu admin
         admin_alert = (

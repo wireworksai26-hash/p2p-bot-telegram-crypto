@@ -77,14 +77,33 @@ def generate_dynamic_qris_string(static_payload: str, amount: int) -> str:
     return result + checksum
 
 
+# String QRIS Statis Merchant (Toko digital HSN, Digital - GoPay Merchant)
+DEFAULT_QRIS_STATIC = "00020101021126610014COM.GO-JEK.WWW01189360091432922297020210G2922297020303UMI51440014ID.CO.QRIS.WWW0215ID10265038922870303UMI5204899953033605802ID5925Toko digital HSN, Digital6008SIDOARJO61056126162070703A016304A581"
+
+
 def get_qris_image_stream(amount: int = 0) -> io.BytesIO | None:
     """
     Menghasilkan objek buffer BytesIO gambar QRIS.
-    Prioritas:
-    1. File gambar statis asli merchant 'Qris statis.jpeg'.
-    2. Dynamic QR code yang di-generate dari string settings.QRIS_STATIC.
+    Jika amount > 0:
+      Generate Dynamic QR code dengan nominal tersemat otomatis (sehingga user tidak perlu ketik manual di e-wallet/m-banking).
+    Jika amount <= 0 atau jika pembuatan dinamis gagal:
+      Fallback ke file gambar statis 'Qris statis.jpeg' atau QR Code statis default.
     """
-    # 1. Prioritas utama: File gambar asli merchant
+    static_qris = getattr(settings, "QRIS_STATIC", "") or DEFAULT_QRIS_STATIC
+    
+    # 1. Jika ada nominal pembayaran, prioritaskan Dynamic QRIS
+    if amount > 0 and static_qris:
+        try:
+            qris_payload = generate_dynamic_qris_string(static_qris, amount)
+            img = qrcode.make(qris_payload)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            return buf
+        except Exception as e:
+            logger.warning(f"Gagal generate dynamic QR image: {e}")
+
+    # 2. Gambar statis merchant asli (jika amount <= 0 atau fallback)
     static_file = get_qris_static_image_path()
     if static_file and os.path.exists(static_file):
         try:
@@ -95,21 +114,33 @@ def get_qris_image_stream(amount: int = 0) -> io.BytesIO | None:
         except Exception as e:
             logger.warning(f"Gagal membaca static QR file: {e}")
 
-    # 2. Fallback: Generate dari string QRIS
-    static_qris = getattr(settings, "QRIS_STATIC", "") or ""
+    # 3. Fallback: generate QR statis dari payload jika file gambar tidak ditemukan
     if static_qris:
         try:
-            if amount > 0:
-                qris_payload = generate_dynamic_qris_string(static_qris, amount)
-            else:
-                qris_payload = static_qris
-            
-            img = qrcode.make(qris_payload)
+            img = qrcode.make(static_qris)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             buf.seek(0)
             return buf
         except Exception as e:
-            logger.warning(f"Gagal generate dynamic QR image: {e}")
+            logger.warning(f"Gagal generate static QR image fallback: {e}")
 
     return None
+
+
+def get_wallet_qr_stream(wallet_address: str) -> io.BytesIO | None:
+    """
+    Menghasilkan QR Code untuk alamat wallet crypto (EVM/Solana/Tron/TON)
+    agar customer dapat langsung scan dari aplikasi wallet mereka (Trust Wallet, MetaMask, Binance, dll).
+    """
+    if not wallet_address:
+        return None
+    try:
+        img = qrcode.make(wallet_address.strip())
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        logger.warning(f"Gagal generate wallet QR image: {e}")
+        return None
