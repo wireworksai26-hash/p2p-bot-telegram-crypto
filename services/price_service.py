@@ -280,17 +280,18 @@ class PriceService:
                     return None
                 market_price_idr = symbol_usdt * usdt_idr
 
-            # Step 3: Tanpa spread (0% spread) — Harga beli & jual disamakan dengan real market price
-            spread_pct = 0.0
-            buy_price_idr = market_price_idr
-            sell_price_idr = market_price_idr
+            # Step 3: Ambil spread dari database PriceConfig
+            price_config = crud.get_price_config(db, symbol)
+            spread_pct = float(price_config.spread_pct) if price_config else settings.DEFAULT_SPREAD_PCT
+            buy_price_idr = market_price_idr * (1 + spread_pct / 100)
+            sell_price_idr = market_price_idr * (1 - spread_pct / 100)
 
             return {
                 "symbol": symbol,
                 "market_price_idr": round(market_price_idr, 2),
                 "buy_price_idr": round(buy_price_idr, 2),
                 "sell_price_idr": round(sell_price_idr, 2),
-                "spread_pct": 0.0,
+                "spread_pct": spread_pct,
                 "usdt_idr_rate": round(usdt_idr, 2),
             }
         except Exception as e:
@@ -386,17 +387,18 @@ class PriceService:
                 logger.error(f"Semua sumber harga gagal untuk {symbol}!")
                 return None
                     
-            # Tanpa spread (0% spread) — Harga beli & jual disamakan dengan real market price
-            spread_pct = 0.0
-            buy_price_idr = market_price_idr
-            sell_price_idr = market_price_idr
+            # Ambil spread dari database PriceConfig
+            price_config = crud.get_price_config(db, symbol)
+            spread_pct = float(price_config.spread_pct) if price_config else settings.DEFAULT_SPREAD_PCT
+            buy_price_idr = market_price_idr * (1 + spread_pct / 100)
+            sell_price_idr = market_price_idr * (1 - spread_pct / 100)
 
             return {
                 "symbol": symbol,
                 "market_price_idr": round(market_price_idr, 2),
                 "buy_price_idr": round(buy_price_idr, 2),
                 "sell_price_idr": round(sell_price_idr, 2),
-                "spread_pct": 0.0,
+                "spread_pct": spread_pct,
                 "usdt_idr_rate": round(realtime_usdt_idr, 2),
             }
         except Exception as e:
