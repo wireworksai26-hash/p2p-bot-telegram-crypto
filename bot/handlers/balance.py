@@ -262,8 +262,13 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
             return
 
         # Check with Gopay Gateway
-        pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
-        if pay_res.get("paid"):
+        try:
+            pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
+        except Exception as gw_err:
+            logger.warning(f"GoPay Gateway error for {topup_id}: {gw_err}")
+            pay_res = {"paid": False, "transaction": None}
+
+        if pay_res and pay_res.get("paid"):
             if not claim_topup_success(db, topup.topup_id):
                 await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
                 return
@@ -282,10 +287,23 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
             keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]
             await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
-            await query.answer(
-                "⏳ Pembayaran belum terdeteksi sesuai nominal tagihan. "
-                "Jika transfer berbeda, hubungi admin untuk verifikasi manual.",
-                show_alert=True,
+            # Pembayaran belum terdeteksi — beri instruksi kirim bukti foto
+            not_found_text = (
+                f"⏳ <b>Pembayaran belum terdeteksi otomatis</b>\n\n"
+                f"🎫 ID Topup: <code>{topup_id}</code>\n"
+                f"💵 Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
+                f"Jika Anda sudah transfer, silakan <b>kirim foto bukti transfer</b> langsung ke chat ini.\n"
+                f"Admin akan memverifikasi dan menambahkan saldo secara manual.\n\n"
+                f"<i>⚠️ Pastikan nominal transfer sesuai dengan yang tertera pada invoice.</i>"
+            )
+            keyboard = [
+                [InlineKeyboardButton("🔄 Cek Ulang", callback_data=f"check_topup_{topup_id}")],
+                [InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")],
+            ]
+            await query.message.reply_text(
+                not_found_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
             )
     finally:
         db.close()
