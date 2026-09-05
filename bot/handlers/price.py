@@ -1,8 +1,10 @@
 """
-bot/handlers/price.py — Handler Cek Harga & Price List Resmi Crypto.
-=====================================================================
-Menampilkan Price List perhitungan resmi (FEE ALTCOIN & USD) saat user
-menekan tombol "💵 Cek Harga", serta opsi melihat kurs pasar koin realtime.
+bot/handlers/price.py — Handler Cek Harga Crypto Hari Ini & Price List Fee.
+==========================================================================
+Menampilkan daftar harga crypto terupdate sesuai format resmi permintaan client:
+- Pasangan koin terkurasi (USDT TON, ETH, BNB, SOL, AVAX, TRX, MATIC, G, BASE, ARB)
+- Harga Beli & Jual terupdate realtime
+- Opsi melihat Price List Fee transaksi resmi
 """
 
 import logging
@@ -17,12 +19,19 @@ from bot.utils.formatter import format_idr, format_datetime
 
 logger = logging.getLogger(__name__)
 
-# Emoji network helper
-NETWORK_EMOJIS = {
-    "BSC": "🟢", "ETH": "🔷", "SOLANA": "🟣", "AVAX": "🔴",
-    "TRON": "❤️", "POLYGON": "🟪", "GRAVITY": "🌌",
-    "BASE": "🔵", "ARB": "💎"
-}
+# Daftar 10 koin terkurasi yang wajib ditampilkan saat Cek Harga
+CURATED_PRICE_ASSETS = [
+    ("USDT", "TON", "🪙", "USDT (TON)"),
+    ("ETH", "ETH", "🔷", "ETH (ETH)"),
+    ("BNB", "BSC", "🟢", "BNB (BSC)"),
+    ("SOL", "SOLANA", "🟣", "SOL (SOLANA)"),
+    ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
+    ("TRX", "TRON", "❤️", "TRX (TRON)"),
+    ("MATIC", "POLYGON", "🟪", "MATIC (POLYGON)"),
+    ("G", "GRAVITY", "🌌", "G (GRAVITY)"),
+    ("BASE", "EVM", "🪙", "BASE (EVM)"),
+    ("ARB", "ARB", "💎", "ARB (ARB)"),
+]
 
 OFFICIAL_PRICE_LIST_TEXT = (
     "📊 <b>PRICE LIST & CARA PERHITUNGAN TRANSAKSI</b>\n\n"
@@ -69,14 +78,87 @@ OFFICIAL_PRICE_LIST_TEXT = (
 
 async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Menampilkan Price List & Skema Fee Resmi saat user menekan '💵 Cek Harga'.
+    Menampilkan Daftar Harga Crypto Hari Ini terupdate (Beli & Jual).
+    Format 100% presisi sesuai permintaan client.
+    """
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.message.reply_chat_action(action="typing")
+    elif update.message:
+        await update.message.reply_chat_action(action="typing")
+
+    db = SessionLocal()
+    try:
+        text_lines = [
+            "📊 <b>DAFTAR HARGA CRYPTO HARI INI</b>\n",
+            "<i>Berikut adalah harga beli (Rupiah ke Crypto) & jual (Crypto ke Rupiah) terupdate:</i>\n",
+        ]
+
+        for symbol, network, emoji, display_label in CURATED_PRICE_ASSETS:
+            price_data = await price_service.get_price(symbol, db)
+            if price_data:
+                buy_price = format_idr(price_data["buy_price_idr"])
+                sell_price = format_idr(price_data["sell_price_idr"])
+            else:
+                buy_price = "-"
+                sell_price = "-"
+
+            text_lines.append(
+                f"{emoji} <b>{display_label}</b>\n"
+                f"🛒 Beli: <code>{buy_price}</code>\n"
+                f"💵 Jual: <code>{sell_price}</code>\n"
+            )
+
+        update_time_str = format_datetime(datetime.now(timezone.utc))
+        text_lines.append(f"⏱️ Update: {update_time_str}")
+        text_lines.append("⚠️ Harga di atas sudah termasuk markup/markdown spread bot.")
+
+        message_text = "\n".join(text_lines)
+
+        keyboard = [
+            [InlineKeyboardButton("📋 Price List Fee Lengkap", callback_data="price_fee_list")],
+            [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
+            [get_owner_button()]
+        ]
+
+        if query:
+            await query.edit_message_text(
+                text=message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                text=message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"Error di show_prices: {e}", exc_info=True)
+        fallback_msg = "⚠️ Terjadi kesalahan saat mengambil harga crypto saat ini. Silakan coba sesaat lagi."
+        keyboard = [
+            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+            [get_owner_button()]
+        ]
+        if query:
+            await query.message.reply_text(text=fallback_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text(text=fallback_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    finally:
+        db.close()
+
+
+async def show_fee_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Menampilkan tabel Price List Fee Transaksi resmi untuk Altcoin dan USD.
     """
     query = update.callback_query
     if query:
         await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("📈 Cek Kurs Pasar Koin (Live)", callback_data="show_live_market")],
+        [InlineKeyboardButton("💵 Cek Harga Crypto Terupdate", callback_data="menu_price")],
         [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
         [get_owner_button()]
     ]
@@ -95,71 +177,5 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
 
-async def show_live_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Menampilkan harga pasar realtime dari Binance/Exchange jika user ingin memantau kurs live.
-    """
-    query = update.callback_query
-    if query:
-        await query.answer()
-        await query.message.reply_chat_action(action="typing")
-
-    db = SessionLocal()
-    try:
-        prices_data = await price_service.get_all_prices(db)
-        if not prices_data:
-            await query.message.reply_text(
-                text="⚠️ Gagal mengambil data harga saat ini. Silakan coba sesaat lagi.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Kembali ke Price List", callback_data="menu_price")
-                ]])
-            )
-            return
-
-        from config.assets import STOCK_ASSETS
-        net_mapping = {symbol: network for symbol, network in STOCK_ASSETS}
-
-        text_lines = [
-            "📈 <b>KURS PASAR CRYPTO REALTIME (BINANCE)</b>\n",
-            "<i>Berikut adalah referensi kurs pasar per koin:</i>\n",
-        ]
-
-        for symbol, data in prices_data.items():
-            network = net_mapping.get(symbol, "EVM")
-            net_emoji = NETWORK_EMOJIS.get(network.upper(), "🪙")
-            rate_price = format_idr(data["buy_price_idr"])
-
-            text_lines.append(
-                f"{net_emoji} <b>{symbol} ({network})</b>: <code>{rate_price}</code>"
-            )
-
-        text_lines.append(f"\n⏱️ <i>Update: {format_datetime(datetime.now(timezone.utc))}</i>")
-        text_lines.append("📌 <i>Perhitungan transaksi menggunakan Price List Fee resmi.</i>")
-
-        message_text = "\n".join(text_lines)
-
-        keyboard = [
-            [InlineKeyboardButton("📋 Kembali ke Price List Fee", callback_data="menu_price")],
-            [InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")],
-            [get_owner_button()]
-        ]
-
-        await query.edit_message_text(
-            text=message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logger.error(f"Error di show_live_market: {e}", exc_info=True)
-        await query.message.reply_text(
-            text="⚠️ Terjadi kesalahan internal saat mengambil kurs pasar.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Kembali ke Price List", callback_data="menu_price")
-            ]])
-        )
-    finally:
-        db.close()
-
-
-# Alias for backward compatibility
-show_fee_list = show_prices
+# Alias untuk live market
+show_live_market = show_prices
