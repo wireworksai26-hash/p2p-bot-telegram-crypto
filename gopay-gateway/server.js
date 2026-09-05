@@ -601,7 +601,7 @@ async function verifyPayment(amount, startTime, merchantIdOverride = null, userA
         const startTimeISO = validStart ? validStart.toISOString() : new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
         const endTimeISO = now.toISOString();
 
-        return await getRawTransactions(userAgent, merchantId, startTimeISO, endTimeISO, 20);
+        return await getRawTransactions(userAgent, merchantId, startTimeISO, endTimeISO, 100);
     };
 
     const rawTransactions = await fetchCheckPayment();

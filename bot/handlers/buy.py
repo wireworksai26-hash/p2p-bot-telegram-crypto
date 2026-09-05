@@ -836,24 +836,36 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
 
         pay_res = await gopay_service.check_payment(int(order.total_idr), order.order_id)
-        if not pay_res.get("paid"):
-            await query.answer(
-                "⏳ Pembayaran belum terdeteksi sesuai nominal tagihan. "
-                "Jika transfer berbeda, hubungi admin untuk verifikasi manual.",
-                show_alert=True,
-            )
+        if pay_res and pay_res.get("paid"):
+            try:
+                await query.answer("✅ Pembayaran diterima! Memproses pengiriman koin...", show_alert=False)
+            except Exception as ans_err:
+                logger.debug("query.answer error: %s", ans_err)
+
+            asyncio.create_task(_run_finalize_background(order.order_id, context.bot))
             return
 
-        try:
-            await query.answer("✅ Pembayaran diterima! Memproses pengiriman koin...", show_alert=False)
-        except Exception as ans_err:
-            logger.debug("query.answer error: %s", ans_err)
-
-        asyncio.create_task(_run_finalize_background(order.order_id, context.bot))
+        # Jika belum terdeteksi otomatis (misal delay sync mutasi GoPay)
+        not_detected_text = (
+            f"⏳ <b>Pembayaran sedang disinkronisasi...</b>\n\n"
+            f"ID Order: <code>{order.order_id}</code>\n"
+            f"Total Nominal: <b>{format_idr(order.total_idr)}</b>\n\n"
+            f"Mutasi QRIS GoPay biasanya membutuhkan waktu 30-60 detik untuk sinkron.\n\n"
+            f"👉 Silakan klik tombol <b>🔄 Cek Ulang</b> dalam beberapa saat, atau langsung <b>kirim screenshot/foto bukti transfer</b> ke chat ini untuk diproses manual oleh Admin."
+        )
+        keyboard = [
+            [InlineKeyboardButton("🔄 Cek Ulang", callback_data=f"check_buy_payment_{order.order_id}")],
+            [InlineKeyboardButton("💬 Hubungi Admin", url=f"https://t.me/{settings.OWNER_USERNAME.lstrip('@')}" if settings.OWNER_USERNAME else "https://t.me")]
+        ]
+        await query.message.reply_text(
+            not_detected_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
     except Exception as e:
         logger.error(f"Error check_buy_payment {order_id}: {e}", exc_info=True)
         try:
-            await query.answer("❌ Terjadi kesalahan. Coba lagi.", show_alert=True)
+            await query.answer("❌ Terjadi kesalahan saat memeriksa pembayaran. Coba lagi.", show_alert=True)
         except Exception:
             pass
     finally:
@@ -863,7 +875,7 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Menerima foto bukti transfer dari user untuk order Beli GoPay QRIS.
-    Simpan foto, kirim notifikasi & tombol approve ke Admin, serta lakukan cek otomatis.
+    Simpan foto, kirim notifikasi & tombol approve ke Admin, serta lakukan cek otomatis di background.
     """
     user_id = update.effective_user.id
     db = SessionLocal()
@@ -912,25 +924,21 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
                 except Exception as admin_err:
                     logger.warning(f"Gagal kirim bukti ke admin {admin_id}: {admin_err}")
 
-        # 2. Pesan penenang ke User bahwa bukti telah diterima
+        # 2. Pesan penenang ke User bahwa bukti telah diterima dan sedang diproses
         await safe_send_message(
             context.bot, user_id,
-            "⏳ <b>Bukti transfer telah diterima & sedang diverifikasi.</b>\n"
-            "Transaksi Anda sedang diperiksa oleh sistem/admin. Koin akan otomatis dikirim setelah verifikasi selesai."
+            "⏳ <b>Bukti transfer telah diterima!</b>\n\n"
+            "Admin telah menerima bukti pembayaran Anda dan sedang memverifikasinya. "
+            "Koin crypto akan otomatis dikirimkan ke alamat wallet Anda begitu disetujui."
         )
 
-        # 3. Cek otomatis via API GoPay
-        pay_res = await gopay_service.check_payment(int(order.total_idr), order.order_id)
-        if pay_res.get("paid"):
-            await finalize_gopay_buy_payment(db, order, bot=context.bot)
-        else:
-            await safe_send_message(
-                context.bot,
-                user_id,
-                "⚠️ <b>Pembayaran belum terdeteksi sesuai nominal tagihan.</b>\n\n"
-                "Jika Anda sudah transfer dengan nominal/kode unik berbeda, "
-                "silakan hubungi admin untuk verifikasi manual.",
-            )
+        # 3. Cek otomatis via API GoPay di background (jika mutasi sudah muncul, langsung eksekusi)
+        try:
+            pay_res = await gopay_service.check_payment(int(order.total_idr), order.order_id)
+            if pay_res and pay_res.get("paid"):
+                await finalize_gopay_buy_payment(db, order, bot=context.bot)
+        except Exception as check_err:
+            logger.warning("Auto-check during transfer proof failed: %s", check_err)
 
     except Exception as e:
         logger.error(f"Error handle_transfer_proof user {user_id}: {e}", exc_info=True)

@@ -618,14 +618,15 @@ def _match_transaction(txn: dict, amount: int, created_at, used_ids: set) -> boo
     except (TypeError, ValueError):
         return False
 
-    # Transaksi harus terjadi setelah order/topup dibuat
-    t_time = txn.get("transaction_time") or txn.get("created_at") or ""
+    # Transaksi harus terjadi setelah order/topup dibuat (dengan toleransi 5 menit untuk clock drift)
+    t_time = txn.get("transaction_time") or txn.get("time") or txn.get("created_at") or ""
     if t_time and created_at:
         try:
             tx_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00"))
             if tx_dt.tzinfo:
                 tx_dt = tx_dt.replace(tzinfo=None)
-            if tx_dt < created_at.replace(tzinfo=None):
+            from datetime import timedelta
+            if tx_dt < (created_at.replace(tzinfo=None) - timedelta(minutes=5)):
                 return False
         except ValueError:
             pass
