@@ -53,6 +53,10 @@ from bot.handlers.admin import (
     stats_handler,
     refreshwallet_handler,
     getemoji_handler,
+    syncpack_handler,
+    setemoji_handler,
+    listemojis_handler,
+    resetemojis_handler,
 )
 
 # FastAPI app & webhook bridge
@@ -272,6 +276,10 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("stats", stats_handler))
     application.add_handler(CommandHandler("refreshwallet", refreshwallet_handler))
     application.add_handler(CommandHandler("getemoji", getemoji_handler))
+    application.add_handler(CommandHandler("syncpack", syncpack_handler))
+    application.add_handler(CommandHandler("setemoji", setemoji_handler))
+    application.add_handler(CommandHandler("listemojis", listemojis_handler))
+    application.add_handler(CommandHandler("resetemojis", resetemojis_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands

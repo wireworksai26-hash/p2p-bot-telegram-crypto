@@ -16,6 +16,14 @@ from database.models import User, Order
 from database import crud
 from services.crypto_sender import CryptoSenderFactory
 from bot.utils.formatter import format_idr, format_crypto
+from bot.utils.emojis import (
+    CUSTOM_EMOJI_IDS,
+    CUSTOM_EMOJI_ALTS,
+    set_custom_emoji,
+    reset_custom_emojis,
+    sync_from_stickers,
+    tg_emoji,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +49,172 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "🛒 <b>Manajemen Order:</b>\n"
         "• /orders — Daftar seluruh order pending/paid aktif\n"
         "• /confirm <code>[ORDER_ID]</code> — Konfirmasi penyelesaian order manual\n\n"
+        "🎨 <b>Otomatisasi Emoji Animasi 3D:</b>\n"
+        "• /syncpack <code>[URL/NAMA_PACK]</code> — Sinkronisasi 1 pack emoji otomatis\n"
+        "• /setemoji <code>[KEY] [EMOJI]</code> — Set/ganti custom emoji langsung\n"
+        "• /listemojis — Lihat seluruh custom emoji aktif & preview\n"
+        "• /getemoji <code>[EMOJI]</code> — Deteksi custom_emoji_id dari pesan\n"
+        "• /resetemojis — Reset emoji ke default bawaan Telegram\n\n"
         "⚙️ <b>Sistem & Pengguna:</b>\n"
         "• /setspread <code>[SYMBOL] [PERCENT]</code> — Set spread koin (e.g. <code>/setspread USDT 1.2</code>)\n"
-        "• /getemoji <code>[EMOJI]</code> — Dapatkan custom_emoji_id dari stiker/emoji pack 3D\n"
         "• /broadcast <code>[PESAN]</code> — Kirim siaran pesan ke semua pengguna\n"
         "• /ban <code>[USER_ID]</code> — Blokir pengguna dari bot\n"
         "• /unban <code>[USER_ID]</code> — Buka blokir pengguna\n"
     )
     await update.message.reply_text(admin_text, parse_mode="HTML")
+
+
+async def syncpack_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Otomatisasi: Sinkronisasi satu set emoji pack Telegram ke bot secara instan.
+    Format: /syncpack [NAMA_PACK_ATAU_URL]
+    Contoh: /syncpack Crypto3DEmoji
+            /syncpack https://t.me/addemoji/Crypto3DEmoji
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    msg = update.effective_message
+    if not msg:
+        return
+
+    args = context.args or []
+    if not args:
+        await msg.reply_text(
+            "⚡️ <b>OTOMASI SINKRONISASI EMOJI PACK</b>\n\n"
+            "Kirimkan tautan atau nama paket emoji Telegram Anda:\n\n"
+            "<b>Format:</b> <code>/syncpack [NAMA_PACK_ATAU_URL]</code>\n"
+            "<b>Contoh:</b>\n"
+            "• <code>/syncpack Crypto3DAnimated</code>\n"
+            "• <code>/syncpack https://t.me/addemoji/Crypto3DAnimated</code>\n\n"
+            "<i>Bot akan otomatis menarik seluruh custom_emoji_id dari pack tersebut dan langsung mengaktifkannya di bot tanpa perlu restart!</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    pack_input = args[0].strip()
+    pack_name = pack_input.split("/")[-1].replace("t.me/addemoji/", "").strip()
+
+    status_msg = await msg.reply_text(f"⏳ Sedang membaca emoji pack Telegram: <code>{pack_name}</code>...", parse_mode="HTML")
+
+    try:
+        sticker_set = await context.bot.get_sticker_set(name=pack_name)
+        if not sticker_set or not sticker_set.stickers:
+            await status_msg.edit_text(f"❌ Emoji pack <code>{pack_name}</code> tidak ditemukan atau kosong.", parse_mode="HTML")
+            return
+
+        synced = sync_from_stickers(sticker_set.stickers)
+        if not synced:
+            await status_msg.edit_text(
+                f"⚠️ Berhasil membaca pack <b>{sticker_set.title}</b> ({len(sticker_set.stickers)} item), "
+                "namun tidak ada Custom Emoji ID yang valid ditemukan.",
+                parse_mode="HTML"
+            )
+            return
+
+        lines = [
+            f"🎉 <b>BERHASIL SINKRONISASI EMOJI PACK!</b>",
+            f"📦 <b>Pack:</b> {sticker_set.title} (<code>{pack_name}</code>)",
+            f"✨ <b>Total Disinkronkan:</b> {len(synced)} emoji\n",
+            "<b>Daftar Emoji yang Diperbarui:</b>"
+        ]
+
+        for key, (cid, alt) in synced.items():
+            preview = tg_emoji(key, alt)
+            lines.append(f"• <b>{key}:</b> {preview} (ID: <code>{cid}</code>)")
+
+        lines.append("\n✅ <i>Semua menu bot kini otomatis menggunakan emoji dari pack baru Anda!</i>")
+        await status_msg.edit_text("\n".join(lines), parse_mode="HTML")
+
+    except Exception as exc:
+        logger.error("Error in syncpack_handler: %s", exc, exc_info=True)
+        await status_msg.edit_text(f"❌ Gagal menyinkronkan emoji pack: <code>{str(exc)}</code>", parse_mode="HTML")
+
+
+async def setemoji_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Otomatisasi: Daftarkan atau ganti satu custom emoji secara instan.
+    Format: /setemoji [KEY] [EMOJI_CUSTOM]
+    Contoh: /setemoji BOT 🤖
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    msg = update.effective_message
+    if not msg:
+        return
+
+    args = context.args or []
+    if not args or len(args) < 1:
+        await msg.reply_text(
+            "⚡️ <b>SET SINGLE CUSTOM EMOJI</b>\n\n"
+            "<b>Format:</b> <code>/setemoji [KEY] [EMOJI_PREMIUM]</code>\n\n"
+            "<b>Contoh:</b> <code>/setemoji BOT 🤖</code>\n\n"
+            "<b>Daftar KEY yang Tersedia:</b>\n"
+            "<code>BOT, USER, CROWN, VERIFIED, CHART, MONEY_BAG, DOLLAR, CARD, COIN, CART, BOX, SWAP, CHECK, CROSS, WARNING, PHONE, CHAT, HISTORY, FIRE, ROCKET, DIAMOND, SPARKLES, STAR, PARTY, CALENDAR, WAVE</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    key = args[0].upper().strip()
+    entities = msg.entities or []
+    custom_emojis = [e for e in entities if getattr(e, "type", None) == "custom_emoji" or str(getattr(e, "type", "")) == "MessageEntityType.CUSTOM_EMOJI"]
+
+    if not custom_emojis:
+        await msg.reply_text(
+            f"❌ Tidak ada custom emoji premium yang terdeteksi di pesan.\n\n"
+            f"Pastikan Anda mengirim emoji dari custom emoji pack Telegram: <code>/setemoji {key} [EMOJI]</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    target_entity = custom_emojis[0]
+    emoji_id = getattr(target_entity, "custom_emoji_id", "")
+    offset = getattr(target_entity, "offset", 0)
+    length = getattr(target_entity, "length", 1)
+    emoji_char = msg.text[offset:offset+length] if msg.text else "✨"
+
+    set_custom_emoji(key, emoji_id, emoji_char)
+    preview = tg_emoji(key, emoji_char)
+
+    await msg.reply_text(
+        f"✅ <b>CUSTOM EMOJI BERHASIL DIPERBARUI!</b>\n\n"
+        f"• <b>Key:</b> <code>{key}</code>\n"
+        f"• <b>Preview:</b> {preview}\n"
+        f"• <b>ID:</b> <code>{emoji_id}</code>\n"
+        f"• <b>Alt:</b> {emoji_char}\n\n"
+        f"<i>Perubahan langsung aktif di seluruh menu bot!</i>",
+        parse_mode="HTML"
+    )
+
+
+async def listemojis_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Menampilkan daftar seluruh custom emoji yang sedang aktif di bot."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    lines = ["✨ <b>DAFTAR CUSTOM EMOJI AKTIF BOT</b>\n"]
+    for key, cid in sorted(CUSTOM_EMOJI_IDS.items()):
+        alt = CUSTOM_EMOJI_ALTS.get(key, "✨")
+        preview = tg_emoji(key, alt)
+        lines.append(f"• <b>{key}:</b> {preview} — ID: <code>{cid}</code>")
+
+    lines.append("\n💡 <i>Gunakan <code>/setemoji [KEY] [EMOJI]</code> atau <code>/syncpack [PACK]</code> untuk mengubah.</i>")
+    lines.append("🔄 <i>Gunakan <code>/resetemojis</code> untuk mereset ke default bawaan.</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def resetemojis_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mereset seluruh custom emoji kembali ke default bawaan."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    reset_custom_emojis()
+    await update.message.reply_text("🔄 <b>Custom emoji berhasil direset ke konfigurasi default bawaan Telegram!</b>", parse_mode="HTML")
 
 
 async def getemoji_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -86,7 +252,7 @@ async def getemoji_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"<code>&lt;tg-emoji emoji-id=\"{emoji_id}\"&gt;{emoji_char}&lt;/tg-emoji&gt;</code>\n"
         )
     
-    res_lines.append("💡 <i>Salin Custom Emoji ID di atas dan tempelkan ke <code>CUSTOM_EMOJI_IDS</code> di file <code>bot/utils/emojis.py</code>.</i>")
+    res_lines.append("💡 <i>Gunakan perintah <code>/setemoji [KEY] [EMOJI]</code> untuk langsung memasangnya ke bot.</i>")
     await msg.reply_text("\n".join(res_lines), parse_mode="HTML")
 
 

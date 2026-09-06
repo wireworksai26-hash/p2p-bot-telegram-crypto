@@ -4,18 +4,25 @@ bot/utils/emojis.py — Helper & Konfigurasi Telegram Custom Emoji (3D Animated 
 Mendukung format Telegram Bot API Custom Emoji:
 <tg-emoji emoji-id="1234567890">👋</tg-emoji>
 
-Menggunakan ID dari Telegram's built-in animated emoji packs (Forum Topic Icons,
-RestrictedEmoji, NewsEmoji, HandEmoji, dll.) yang bersifat universal dan ANIMATED.
-
-Jika custom_emoji_id kosong, fungsi tg_emoji() otomatis melakukan fallback ke Unicode Emoji.
+Mendukung:
+1. ID bawaan (Built-in Animated Forum & Premium Packs Telegram)
+2. Custom ID dinamis dari /syncpack atau /setemoji yang disimpan otomatis ke data/custom_emojis.json
+3. Fallback graceful ke Unicode Emoji jika ID tidak tersedia
 """
 
+import json
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+CUSTOM_EMOJIS_FILE = os.path.join(DATA_DIR, "custom_emojis.json")
+
 # ============================================================================
-# Pemetaan ID Custom Emoji Telegram — Animated 3D dari built-in packs Telegram
-# Semua ID di bawah sudah diverifikasi ANIMATED via getForumTopicIconStickers
-# dan getCustomEmojiStickers Bot API.
+# Pemetaan Default ID Custom Emoji Telegram (Animated 3D Built-in Packs)
 # ============================================================================
-CUSTOM_EMOJI_IDS = {
+DEFAULT_EMOJI_IDS = {
     # --- Greeting & Status ---
     "WAVE":       "5368324170671202286",  # 👍 (HandEmoji — animated wave/thumbs)
     "CALENDAR":   "5433614043006903194",  # 📆 (Forum — animated calendar)
@@ -58,19 +65,195 @@ CUSTOM_EMOJI_IDS = {
     "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
 }
 
+DEFAULT_EMOJI_ALTS = {
+    "WAVE": "👍",
+    "CALENDAR": "📆",
+    "BOT": "🤖",
+    "USER": "👑",
+    "CROWN": "👑",
+    "VERIFIED": "✅",
+    "CHART": "📈",
+    "CHART_UP": "📈",
+    "MONEY_BAG": "💰",
+    "DOLLAR": "💸",
+    "CARD": "💼",
+    "COIN": "🪙",
+    "CART": "🛒",
+    "BOX": "🛍",
+    "SWAP": "💱",
+    "CHECK": "✅",
+    "CROSS": "🚫",
+    "WARNING": "⚠️",
+    "PHONE": "📱",
+    "CHAT": "💬",
+    "HISTORY": "📝",
+    "FIRE": "🔥",
+    "ROCKET": "⚡️",
+    "DIAMOND": "💎",
+    "SPARKLES": "✨",
+    "STAR": "⭐️",
+    "PARTY": "🎉",
+}
 
-def tg_emoji(key: str, fallback: str) -> str:
+# In-memory working copies
+CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
+CUSTOM_EMOJI_ALTS = dict(DEFAULT_EMOJI_ALTS)
+
+
+def load_custom_emojis() -> None:
+    """Memuat custom emoji kustom yang tersimpan dari data/custom_emojis.json."""
+    global CUSTOM_EMOJI_IDS, CUSTOM_EMOJI_ALTS
+    try:
+        if os.path.exists(CUSTOM_EMOJIS_FILE):
+            with open(CUSTOM_EMOJIS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    ids = data.get("ids", {})
+                    alts = data.get("alts", {})
+                    CUSTOM_EMOJI_IDS.update(ids)
+                    CUSTOM_EMOJI_ALTS.update(alts)
+                    logger.info("Berhasil memuat %d custom emoji kustom.", len(ids))
+    except Exception as exc:
+        logger.warning("Gagal memuat custom_emojis.json: %s", exc)
+
+
+def save_custom_emojis() -> bool:
+    """Menyimpan custom emoji aktif ke file data/custom_emojis.json."""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CUSTOM_EMOJIS_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "ids": CUSTOM_EMOJI_IDS,
+                "alts": CUSTOM_EMOJI_ALTS
+            }, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as exc:
+        logger.error("Gagal menyimpan custom_emojis.json: %s", exc)
+        return False
+
+
+def set_custom_emoji(key: str, emoji_id: str, alt_char: str = "") -> bool:
+    """Mengubah atau mendaftarkan satu custom emoji spesifik."""
+    key = key.upper().strip()
+    CUSTOM_EMOJI_IDS[key] = str(emoji_id).strip()
+    if alt_char:
+        CUSTOM_EMOJI_ALTS[key] = str(alt_char).strip()
+    return save_custom_emojis()
+
+
+def reset_custom_emojis() -> bool:
+    """Mereset semua custom emoji kembali ke default."""
+    global CUSTOM_EMOJI_IDS, CUSTOM_EMOJI_ALTS
+    CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
+    CUSTOM_EMOJI_ALTS = dict(DEFAULT_EMOJI_ALTS)
+    if os.path.exists(CUSTOM_EMOJIS_FILE):
+        try:
+            os.remove(CUSTOM_EMOJIS_FILE)
+        except Exception:
+            pass
+    return True
+
+
+# Peta pencocokan otomatis emoji karakter bawaan -> Key sistem
+CHAR_TO_KEY_MAP = {
+    "👋": "WAVE",
+    "👍": "WAVE",
+    "🤖": "BOT",
+    "👑": "CROWN",
+    "👤": "USER",
+    "📈": "CHART",
+    "📊": "CHART",
+    "💰": "MONEY_BAG",
+    "💸": "DOLLAR",
+    "💵": "DOLLAR",
+    "💼": "CARD",
+    "💳": "CARD",
+    "🪙": "COIN",
+    "🛒": "CART",
+    "🛍": "BOX",
+    "📦": "BOX",
+    "💱": "SWAP",
+    "🔄": "SWAP",
+    "✅": "CHECK",
+    "🛡": "VERIFIED",
+    "🛡️": "VERIFIED",
+    "🚫": "CROSS",
+    "❌": "CROSS",
+    "⚠️": "WARNING",
+    "❗️": "WARNING",
+    "📱": "PHONE",
+    "☎️": "PHONE",
+    "💬": "CHAT",
+    "🗣": "CHAT",
+    "📝": "HISTORY",
+    "📜": "HISTORY",
+    "🔥": "FIRE",
+    "⚡️": "ROCKET",
+    "⚡": "ROCKET",
+    "🚀": "ROCKET",
+    "💎": "DIAMOND",
+    "✨": "SPARKLES",
+    "⭐️": "STAR",
+    "⭐": "STAR",
+    "🎉": "PARTY",
+    "📆": "CALENDAR",
+    "🗓": "CALENDAR",
+    "🗓️": "CALENDAR",
+}
+
+
+def sync_from_stickers(stickers: list) -> dict:
     """
-    Menghasilkan tag <tg-emoji emoji-id="...">fallback</tg-emoji> jika custom_emoji_id terdaftar,
+    Menyinkronkan list sticker dari Telegram StickerSet (Custom Emoji Pack)
+    ke konfigurasi emoji bot secara otomatis.
+    """
+    synced = {}
+    for st in stickers:
+        custom_id = getattr(st, "custom_emoji_id", None) or getattr(st, "file_unique_id", None)
+        alt_emoji = getattr(st, "emoji", "") or "✨"
+        
+        # Cek apakah custom_id valid (string angka panjang)
+        if not custom_id or not str(custom_id).isdigit():
+            continue
+            
+        custom_id = str(custom_id)
+        # Cari key yang cocok berdasarkan karakter emoji fallback
+        matched_keys = [k for char, k in CHAR_TO_KEY_MAP.items() if char in alt_emoji or alt_emoji in char]
+        
+        if matched_keys:
+            for key in matched_keys:
+                CUSTOM_EMOJI_IDS[key] = custom_id
+                CUSTOM_EMOJI_ALTS[key] = alt_emoji
+                synced[key] = (custom_id, alt_emoji)
+        else:
+            # Jika tidak ada di map standar, simpan dengan nama key representatif
+            key_name = f"CUSTOM_{len(synced)+1}"
+            CUSTOM_EMOJI_IDS[key_name] = custom_id
+            CUSTOM_EMOJI_ALTS[key_name] = alt_emoji
+            synced[key_name] = (custom_id, alt_emoji)
+
+    if synced:
+        save_custom_emojis()
+    return synced
+
+
+# Muat data tersimpan saat module diimpor
+load_custom_emojis()
+
+
+def tg_emoji(key: str, fallback: str = "") -> str:
+    """
+    Menghasilkan tag <tg-emoji emoji-id="...">alt</tg-emoji> jika custom_emoji_id terdaftar,
     atau fallback unicode emoji jika belum ada ID.
     """
     emoji_id = CUSTOM_EMOJI_IDS.get(key, "").strip()
+    alt_char = CUSTOM_EMOJI_ALTS.get(key, "").strip() or fallback or "✨"
     if emoji_id:
-        return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
-    return fallback
+        return f'<tg-emoji emoji-id="{emoji_id}">{alt_char}</tg-emoji>'
+    return fallback or alt_char
 
 
-# Shortcut siap pakai untuk tampilan pesan (disesuaikan dengan alt emoji ID masing-masing)
+# Shortcut siap pakai untuk tampilan pesan
 E_WAVE = lambda: tg_emoji("WAVE", "👍")
 E_CALENDAR = lambda: tg_emoji("CALENDAR", "📆")
 E_BOT = lambda: tg_emoji("BOT", "🤖")
