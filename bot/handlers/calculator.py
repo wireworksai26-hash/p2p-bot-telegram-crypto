@@ -20,6 +20,15 @@ from services.fee_service import calculate_fee_idr
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr
 from bot.utils.formatter import format_idr
+from bot.utils.emojis import (
+    E_CHART,
+    E_MONEY,
+    E_DOLLAR,
+    E_COIN,
+    E_SWAP,
+    E_WARN,
+    E_CROSS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +50,10 @@ async def start_calculator_callback(update: Update, context: ContextTypes.DEFAUL
     
     await query.edit_message_text(
         text=(
-            "🧮 <b>KALKULATOR SIMULASI FEE</b>\n\n"
+            f"{E_CHART()} <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
             "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
-            "⚠️ Minimal nominal simulasi adalah <b>Rp 5.000</b>."
+            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b>."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -63,10 +72,10 @@ async def start_calculator_command(update: Update, context: ContextTypes.DEFAULT
     
     await update.message.reply_text(
         text=(
-            "🧮 <b>KALKULATOR SIMULASI FEE</b>\n\n"
+            f"{E_CHART()} <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
             "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
-            "⚠️ Minimal nominal simulasi adalah <b>Rp 5.000</b>."
+            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b>."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -90,7 +99,7 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ]
         await update.message.reply_text(
             text=(
-                "❌ <b>Nominal Tidak Valid!</b>\n\n"
+                f"{E_CROSS()} <b>Nominal Tidak Valid!</b>\n\n"
                 "Format input salah atau nominal kurang dari batas minimal Rp 5.000.\n"
                 "Silakan masukkan nominal kembali (contoh: <code>50000</code>):"
             ),
@@ -119,13 +128,13 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return "N/A (di atas batas)" if v == "N/A" else format_idr(v)
 
     breakdown_text = (
-        f"📊 <b>RINCIAN SIMULASI BIAYA (FEE)</b>\n\n"
-        f"💰 <b>Nominal Aset:</b> {format_idr(nominal_idr)}\n"
+        f"{E_CHART()} <b>RINCIAN SIMULASI BIAYA (FEE)</b>\n\n"
+        f"{E_MONEY()} <b>Nominal Aset:</b> {format_idr(nominal_idr)}\n"
         f"⚙️ <b>Skema Layanan:</b> Tiered Fee\n"
         f"────────────────────\n"
-        f"🟢 <b>USD Tier (USDT/USDC):</b> {fmt_fee(fee_usd)}\n"
-        f"🟣 <b>Altcoin Tier:</b> {fmt_fee(fee_alt)}\n"
-        f"🔄 <b>Convert Tier:</b> {fmt_fee(fee_conv)}\n"
+        f"{E_DOLLAR()} <b>USD Tier (USDT/USDC):</b> {fmt_fee(fee_usd)}\n"
+        f"{E_COIN()} <b>Altcoin Tier:</b> {fmt_fee(fee_alt)}\n"
+        f"{E_SWAP()} <b>Convert Tier:</b> {fmt_fee(fee_conv)}\n"
         f"────────────────────\n"
         f"<i>Catatan: Nominal transaksi di atas batas list resmi silakan hubungi admin.</i>"
     )

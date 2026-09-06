@@ -36,6 +36,15 @@ from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_idr
 from bot.utils.validator import validate_amount_idr
 from config.assets import QRIS_STATIC_IMAGE
+from bot.utils.emojis import (
+    E_MONEY,
+    E_USER,
+    E_CARD,
+    E_DOLLAR,
+    E_CHECK,
+    E_SPARKLES,
+    E_WARN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +63,12 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.close()
 
     text = (
-        f"💰 <b>CEK SALDO & PROFIL USER</b>\n\n"
-        f"👤 <b>Nama</b>    : {user.full_name or 'N/A'}\n"
+        f"{E_MONEY()} <b>CEK SALDO & PROFIL USER</b>\n\n"
+        f"{E_USER()} <b>Nama</b>    : {user.full_name or 'N/A'}\n"
         f"🏷️ <b>Username</b>: @{user.username or 'N/A'}\n"
         f"🆔 <b>ID User</b> : <code>{user.id}</code>\n"
-        f"💳 <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n\n"
-        f"💡 <i>Saldo IDR dapat digunakan untuk membeli koin crypto secara instan (1-Tap) tanpa perlu transfer bank!</i>"
+        f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n\n"
+        f"{E_SPARKLES()} <i>Saldo IDR dapat digunakan untuk membeli koin crypto secara instan (1-Tap) tanpa perlu transfer bank!</i>"
     )
 
     keyboard = [
@@ -83,7 +92,7 @@ async def start_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     text = (
-        "💰 <b>TOPUP SALDO BOT (QRIS)</b>\n\n"
+        f"{E_MONEY()} <b>TOPUP SALDO BOT (QRIS)</b>\n\n"
         "Silakan pilih nominal deposit saldo di bawah ini:\n"
         "<i>Semua pembayaran QRIS via GoPay, OVO, Dana, ShopeePay, BCA, Mandiri, dll.</i>"
     )
