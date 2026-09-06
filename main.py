@@ -105,62 +105,68 @@ def init_database():
 
 def _migrate_orders_schema():
     """
-    Migrasi tabel orders & topup_orders (SQLite): tambah kolom payment_method & unique_code
-    jika belum ada.
+    Migrasi tabel orders & topup_orders: tambah kolom payment_method & unique_code
+    jika belum ada (kompatibel SQLite & PostgreSQL).
     """
+    from sqlalchemy import inspect
     from database.connection import engine
     try:
-        with engine.begin() as conn:
-            existing_orders = {
-                r[1] for r in conn.exec_driver_sql("PRAGMA table_info('orders')").fetchall()
-            }
+        inspector = inspect(engine)
+        table_names = inspector.get_table_names()
+
+        if "orders" in table_names:
+            existing_orders = {c["name"] for c in inspector.get_columns("orders")}
             new_columns_orders = [
                 ("payment_method", "VARCHAR(30)"),
                 ("unique_code", "INTEGER DEFAULT 0"),
             ]
-            for col, dtype in new_columns_orders:
-                if col not in existing_orders:
-                    conn.exec_driver_sql(f"ALTER TABLE orders ADD COLUMN {col} {dtype}")
-                    logger.info("Migrasi orders: kolom %s ditambahkan.", col)
+            with engine.begin() as conn:
+                for col, dtype in new_columns_orders:
+                    if col not in existing_orders:
+                        conn.exec_driver_sql(f"ALTER TABLE orders ADD COLUMN {col} {dtype}")
+                        logger.info("Migrasi orders: kolom %s ditambahkan.", col)
 
-            existing_topups = {
-                r[1] for r in conn.exec_driver_sql("PRAGMA table_info('topup_orders')").fetchall()
-            }
+        if "topup_orders" in table_names:
+            existing_topups = {c["name"] for c in inspector.get_columns("topup_orders")}
             if "unique_code" not in existing_topups:
-                conn.exec_driver_sql("ALTER TABLE topup_orders ADD COLUMN unique_code INTEGER DEFAULT 0")
-                logger.info("Migrasi topup_orders: kolom unique_code ditambahkan.")
+                with engine.begin() as conn:
+                    conn.exec_driver_sql("ALTER TABLE topup_orders ADD COLUMN unique_code INTEGER DEFAULT 0")
+                    logger.info("Migrasi topup_orders: kolom unique_code ditambahkan.")
     except Exception as exc:
         logger.error("Migrasi orders gagal: %s", exc, exc_info=True)
 
 
 def _migrate_inventory_schema():
-    """Tambah kolom reservation pada wallet_balances database lama."""
+    """Tambah kolom reservation pada wallet_balances jika belum ada."""
+    from sqlalchemy import inspect
+    from database.connection import engine
     try:
-        with engine.begin() as conn:
-            columns = {
-                row[1]
-                for row in conn.exec_driver_sql("PRAGMA table_info('wallet_balances')").fetchall()
-            }
+        inspector = inspect(engine)
+        if "wallet_balances" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("wallet_balances")}
             if "reserved_balance" not in columns:
+                with engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE wallet_balances ADD COLUMN reserved_balance NUMERIC(36, 18) DEFAULT 0"
+                    )
+                    logger.info("Migrasi wallet_balances: kolom reserved_balance ditambahkan.")
+            with engine.begin() as conn:
                 conn.exec_driver_sql(
-                    "ALTER TABLE wallet_balances ADD COLUMN reserved_balance NUMERIC(36, 18) DEFAULT 0"
+                    "UPDATE wallet_balances SET reserved_balance = 0 WHERE reserved_balance IS NULL"
                 )
-                logger.info("Migrasi wallet_balances: kolom reserved_balance ditambahkan.")
-            conn.exec_driver_sql(
-                "UPDATE wallet_balances SET reserved_balance = 0 WHERE reserved_balance IS NULL"
-            )
     except Exception as exc:
         logger.error("Migrasi inventory gagal: %s", exc, exc_info=True)
 
 
-
 def _migrate_wallet_balance_schema():
     """
-    Migrasi tabel wallet_balances (khusus SQLite) agar unik per pasangan
+    Migrasi tabel wallet_balances (khusus SQLite legacy) agar unik per pasangan
     (network, symbol), bukan per network saja.
-    Jika tabel sudah sesuai, fungsi ini menjadi no-op.
+    Jika bukan SQLite atau sudah sesuai, fungsi ini menjadi no-op.
     """
     from database.connection import engine
+    if engine.dialect.name != "sqlite":
+        return
     try:
         with engine.begin() as conn:
             index_rows = conn.exec_driver_sql(
