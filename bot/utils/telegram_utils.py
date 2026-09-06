@@ -47,27 +47,55 @@ async def safe_edit_message(query, text: str, reply_markup=None, parse_mode="HTM
             )
 
 
-async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", reply_markup=None) -> None:
+async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", reply_markup=None) -> bool:
     """
-    Kirim pesan Telegram dengan aman.
+    Kirim pesan Telegram dengan aman dan fallback otomatis jika parse HTML gagal.
+    Returns True jika berhasil, False jika gagal.
     """
     try:
         from services.bot_runtime import bot_app
         bot_obj = None
-        if sender and hasattr(sender, "send_message") and type(sender).__name__ in ["Bot", "ExtBot"]:
-            bot_obj = sender
-        elif sender and hasattr(sender, "bot") and type(getattr(sender, "bot")).__name__ in ["Bot", "ExtBot"]:
-            bot_obj = getattr(sender, "bot")
         
-        if not bot_obj and bot_app and bot_app.bot:
-            bot_obj = bot_app.bot
+        # 1. Direct send_message callable on sender (e.g. context.bot, Bot, ExtBot)
+        if sender and hasattr(sender, "send_message") and callable(getattr(sender, "send_message")):
+            bot_obj = sender
+        # 2. Context or Application wrapper (e.g. context.bot, app.bot)
+        elif sender and hasattr(sender, "bot") and hasattr(sender.bot, "send_message") and callable(getattr(sender.bot, "send_message")):
+            bot_obj = sender.bot
+        
+        # 3. Fallback to global bot_app
+        if not bot_obj and bot_app:
+            if hasattr(bot_app, "bot") and bot_app.bot:
+                bot_obj = bot_app.bot
+            elif hasattr(bot_app, "send_message") and callable(getattr(bot_app, "send_message")):
+                bot_obj = bot_app
 
-        if bot_obj:
-            await bot_obj.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
-        else:
+        if not bot_obj:
             logger.warning("Gagal kirim pesan ke %s: bot_obj tidak ditemukan", chat_id)
+            return False
+
+        try:
+            await bot_obj.send_message(
+                chat_id=int(chat_id),
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
+            return True
+        except Exception as send_err:
+            if parse_mode:
+                logger.warning("Retry kirim pesan ke %s tanpa parse_mode karena: %s", chat_id, send_err)
+                await bot_obj.send_message(
+                    chat_id=int(chat_id),
+                    text=text,
+                    parse_mode=None,
+                    reply_markup=reply_markup
+                )
+                return True
+            raise send_err
     except Exception as exc:
         logger.warning("Gagal kirim pesan ke %s: %s", chat_id, exc)
+        return False
 
 
 async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None) -> None:

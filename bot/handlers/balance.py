@@ -287,14 +287,15 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
             keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]
             await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
-            # Pembayaran belum terdeteksi — beri instruksi kirim bukti foto
+            # Pembayaran belum terdeteksi saat tombol diklik (karena delay sync 10-30s)
             not_found_text = (
-                f"⏳ <b>Pembayaran belum terdeteksi otomatis</b>\n\n"
+                f"⏳ <b>Sedang Memeriksa Mutasi Otomatis...</b>\n\n"
                 f"🎫 ID Topup: <code>{topup_id}</code>\n"
-                f"💵 Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
-                f"Jika Anda sudah transfer, silakan <b>kirim foto bukti transfer</b> langsung ke chat ini.\n"
-                f"Admin akan memverifikasi dan menambahkan saldo secara manual.\n\n"
-                f"<i>⚠️ Pastikan nominal transfer sesuai dengan yang tertera pada invoice.</i>"
+                f"💵 Total Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
+                f"⚡ <b>Sistem Topup bekerja 100% OTOMATIS.</b>\n"
+                f"Mutasi QRIS biasanya membutuhkan waktu sekitar 10–30 detik untuk tersinkronisasi dari bank/e-wallet Anda ke sistem.\n\n"
+                f"👉 Saldo Anda akan otomatis bertambah ke akun tanpa perlu konfirmasi manual. Anda juga dapat menekan tombol <b>🔄 Cek Ulang</b> di bawah.\n\n"
+                f"<i>(Opsi bantuan: Jika nominal transfer berbeda atau butuh bantuan darurat, Anda bisa kirim foto bukti transfer ke chat ini).</i>"
             )
             keyboard = [
                 [InlineKeyboardButton("🔄 Cek Ulang", callback_data=f"check_topup_{topup_id}")],
@@ -328,13 +329,13 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
             photo_file_id = photo.file_id
             file = await photo.get_file()
             os.makedirs("proofs", exist_ok=True)
-            await file.download_to_drive(f"proofs/{topup.topup_id}.jpg")
+            await file.download_to_drive(f"proofs/topup_{topup.topup_id}.jpg")
         except Exception as exc:
-            logger.warning("Gagal simpan bukti topup %s: %s", topup.topup_id, exc)
+            pass
 
         # 1. Forward foto bukti topup ke Admin
         admin_caption = (
-            f"📸 <b>BUKTI TRANSFER DITERIMA (TOPUP IDR)</b>\n\n"
+            f"📸 <b>BUKTI TRANSFER DITERIMA (TOPUP)</b>\n\n"
             f"ID Topup: <code>{topup.topup_id}</code>\n"
             f"User: {update.effective_user.name} (ID: <code>{user_id}</code>)\n"
             f"Total Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
@@ -361,33 +362,29 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
 
         # 2. Pesan ke User bahwa bukti diterima
         await update.message.reply_text(
-            "⏳ <b>Bukti transfer top-up telah diterima & sedang diverifikasi.</b>\n"
-            "Saldo IDR Anda akan otomatis bertambah setelah verifikasi selesai.",
+            "⏳ <b>Bukti transfer telah diterima!</b>\n\n"
+            "Admin telah menerima bukti transfer Anda dan sedang memverifikasinya. "
+            "Saldo IDR akan otomatis bertambah ke akun Anda.",
             parse_mode="HTML"
         )
 
-        # 3. Cek otomatis via API GoPay
-        pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
-        if pay_res.get("paid"):
-            if not claim_topup_success(db, topup.topup_id):
-                return
-            new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
-            menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
-            await update.message.reply_text(
-                f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
-                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
-                f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
-                f"<i>Anda dapat langsung menggunakan saldo ini untuk membeli koin crypto secara instan.</i>",
-                reply_markup=menu_keyboard,
-                parse_mode="HTML"
-            )
-        else:
-            await update.message.reply_text(
-                "⚠️ <b>Pembayaran belum terdeteksi sesuai nominal tagihan.</b>\n\n"
-                "Jika nominal atau kode unik berbeda, silakan hubungi admin untuk "
-                "verifikasi manual.",
-                parse_mode="HTML",
-            )
+        # 3. Cek otomatis via API GoPay di background
+        try:
+            pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
+            if pay_res and pay_res.get("paid"):
+                if claim_topup_success(db, topup.topup_id):
+                    new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+                    menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+                    await update.message.reply_text(
+                        f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
+                        f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
+                        f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
+                        f"<i>Anda dapat langsung menggunakan saldo ini untuk membeli koin crypto secara instan.</i>",
+                        reply_markup=menu_keyboard,
+                        parse_mode="HTML"
+                    )
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Error handle_topup_transfer_proof user {user_id}: {e}", exc_info=True)
     finally:

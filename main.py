@@ -52,6 +52,7 @@ from bot.handlers.admin import (
     unban_handler,
     stats_handler,
     refreshwallet_handler,
+    getemoji_handler,
 )
 
 # FastAPI app & webhook bridge
@@ -264,6 +265,7 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("unban", unban_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
     application.add_handler(CommandHandler("refreshwallet", refreshwallet_handler))
+    application.add_handler(CommandHandler("getemoji", getemoji_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands

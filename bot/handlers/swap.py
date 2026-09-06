@@ -16,6 +16,7 @@ Alur Transaksi Convert/Swap (FULL OTOMATIS — tanpa verifikasi admin):
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
@@ -151,6 +152,73 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_TGT_NET
 
 
+def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float) -> tuple[float, int, str]:
+    """
+    Parse input nominal convert dari user:
+    - USD ($10, 10$, 10 usd, 10 usdt, usd 25)
+    - IDR (50000, 50.000, Rp 50.000, 50k, 50rb, 1.5jt)
+    - Crypto Amount (0.05, 1.5, 4.2, 10)
+    """
+    text = raw_text.strip()
+
+    # 1. USD pattern: $10, 10$, 10 usd, 10 usdt, usd 10, $ 10.5
+    usd_pattern = r'^(?:\$\s*([0-9]+(?:[\.,][0-9]+)?)|([0-9]+(?:[\.,][0-9]+)?)\s*(?:\$|usd|usdt)|(?:usd|usdt)\s*([0-9]+(?:[\.,][0-9]+)?))$'
+    m_usd = re.match(usd_pattern, text, re.IGNORECASE)
+    if m_usd:
+        num_str = (m_usd.group(1) or m_usd.group(2) or m_usd.group(3)).replace(',', '.')
+        usd_val = float(num_str)
+        if usd_val <= 0:
+            raise ValueError("Nominal USD harus lebih besar dari 0")
+        nominal_idr = int(usd_val * usdt_idr_rate)
+        src_amount = nominal_idr / src_idr_price
+        return src_amount, nominal_idr, "USD"
+
+    # 2. IDR suffixes: 50k, 50rb, 1jt, 1m, 1.5jt
+    clean = re.sub(r'^(?:rp|idr)\.?\s*', '', text, flags=re.IGNORECASE).strip()
+    m_suffix = re.match(r'^([0-9]+(?:[\.,][0-9]+)?)\s*(k|rb|ribu|jt|juta|m)$', clean, re.IGNORECASE)
+    if m_suffix:
+        num = float(m_suffix.group(1).replace(',', '.'))
+        suf = m_suffix.group(2).lower()
+        multiplier = 1000 if suf in ['k', 'rb', 'ribu'] else 1000000
+        nominal_idr = int(num * multiplier)
+        if nominal_idr <= 0:
+            raise ValueError("Nominal Rupiah harus lebih besar dari 0")
+        src_amount = nominal_idr / src_idr_price
+        return src_amount, nominal_idr, "IDR"
+
+    # 3. IDR thousand dot notation: 50.000, 1.000.000 (starts with 1-9)
+    if re.match(r'^[1-9]\d{0,2}(?:\.\d{3})+$', clean):
+        nominal_idr = int(clean.replace('.', ''))
+        if nominal_idr <= 0:
+            raise ValueError("Nominal Rupiah harus lebih besar dari 0")
+        src_amount = nominal_idr / src_idr_price
+        return src_amount, nominal_idr, "IDR"
+
+    # 4. Explicit Rp / IDR prefix: Rp 50000, IDR 10000
+    if re.match(r'^(?:rp|idr)\.?\s*[0-9]+', text, re.IGNORECASE):
+        num_str = re.sub(r'[^0-9]', '', text)
+        if num_str:
+            nominal_idr = int(num_str)
+            if nominal_idr <= 0:
+                raise ValueError("Nominal Rupiah harus lebih besar dari 0")
+            src_amount = nominal_idr / src_idr_price
+            return src_amount, nominal_idr, "IDR"
+
+    # 5. General number: crypto amount or raw IDR (if >= 1000)
+    num_str = text.replace(',', '.')
+    val = float(num_str)
+    if val <= 0:
+        raise ValueError("Nominal harus lebih besar dari 0")
+    if val >= 1000:
+        nominal_idr = int(val)
+        src_amount = nominal_idr / src_idr_price
+        return src_amount, nominal_idr, "IDR"
+    else:
+        src_amount = val
+        nominal_idr = int(src_amount * src_idr_price)
+        return src_amount, nominal_idr, "CRYPTO"
+
+
 async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -163,6 +231,17 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tgt_sym = context.user_data["swap_tgt_symbol"]
     tgt_net = net
 
+    rate_info = ""
+    try:
+        src_price_info = await price_service.get_price(src_sym)
+        if src_price_info:
+            price_idr = src_price_info.get("sell_price_idr") or src_price_info.get("market_price_idr") or 0
+            usdt_rate = src_price_info.get("usdt_idr_rate") or 16000
+            price_usd = price_idr / usdt_rate if usdt_rate else 1.0
+            rate_info = f"• <b>Estimasi Kurs:</b> <code>1 {src_sym} ≈ Rp {int(price_idr):,} (~${price_usd:.2f})</code>\n"
+    except Exception:
+        pass
+
     keyboard = [
         [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
         [get_owner_button()]
@@ -170,9 +249,17 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"🔄 <b>Konfigurasi Convert:</b>\n"
-        f"<b>Dari:</b> {src_sym} ({src_net})\n"
-        f"<b>Ke:</b> {tgt_sym} ({tgt_net})\n\n"
-        f"Silakan masukkan <b>jumlah koin asal</b> yang ingin kamu kirim (atau masukkan estimasi nilai IDR, misal 50000):",
+        f"• <b>Dari:</b> <code>{src_sym} ({src_net})</code>\n"
+        f"• <b>Ke:</b> <code>{tgt_sym} ({tgt_net})</code>\n"
+        f"{rate_info}\n"
+        f"💡 <b>Pilihan Format Input:</b>\n"
+        f"1️⃣ <b>Jumlah Koin / Altcoin:</b>\n"
+        f"   Ketik jumlah koin asal yang ingin ditukar (misal: <code>0.5</code>, <code>2.5</code>, <code>10</code>)\n"
+        f"2️⃣ <b>Nominal Rupiah (IDR):</b>\n"
+        f"   Ketik nominal rupiah yang ingin dikonversi (misal: <code>50000</code>, <code>100.000</code>, <code>50k</code>)\n"
+        f"3️⃣ <b>Nominal USD ($ / USDT):</b>\n"
+        f"   Ketik nominal dalam dollar (misal: <code>$10</code>, <code>25 USD</code>, <code>10.5$</code>)\n\n"
+        f"Silakan ketikkan nominal yang ingin Anda convert ke chat:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -180,22 +267,7 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_input = update.message.text.strip().replace(",", ".")
-    try:
-        val = float(text_input)
-        if val <= 0:
-            raise ValueError
-    except ValueError:
-        keyboard = [
-            [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
-            [get_owner_button()]
-        ]
-        await update.message.reply_text(
-            "❌ Masukkan angka positif yang valid. Contoh: 0.0025 atau 50000",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return INPUT_AMOUNT
-
+    text_input = update.message.text.strip()
     src_sym = context.user_data["swap_src_symbol"]
     src_net = context.user_data["swap_src_network"]
     tgt_sym = context.user_data["swap_tgt_symbol"]
@@ -211,14 +283,25 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     src_idr_price = src_price_info["sell_price_idr"]
     tgt_idr_price = tgt_price_info["buy_price_idr"]
+    usdt_idr_rate = src_price_info.get("usdt_idr_rate", 16000.0)
 
-    # Jika input berupa nominal IDR (misal >= 1000)
-    if val >= 1000:
-        nominal_idr = int(val)
-        src_amount = nominal_idr / src_idr_price
-    else:
-        src_amount = val
-        nominal_idr = int(src_amount * src_idr_price)
+    try:
+        src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_idr_price, usdt_idr_rate)
+    except (ValueError, Exception):
+        keyboard = [
+            [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+            [get_owner_button()]
+        ]
+        await update.message.reply_text(
+            "❌ <b>Format input tidak valid!</b>\n\n"
+            "Silakan masukkan salah satu format berikut:\n"
+            "• <b>Jumlah Koin:</b> contoh <code>0.5</code> atau <code>10</code>\n"
+            "• <b>Nominal Rupiah:</b> contoh <code>50000</code>, <code>100.000</code>, atau <code>50k</code>\n"
+            "• <b>Nominal USD:</b> contoh <code>$10</code> atau <code>25 USD</code>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return INPUT_AMOUNT
 
     # Hitung Fee Convert Tier (Min Rp 6.000, Max Rp 600.000)
     try:

@@ -7,7 +7,7 @@ Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfi
 
 import logging
 from datetime import datetime, timezone
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from config.settings import settings
@@ -43,11 +43,51 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• /confirm <code>[ORDER_ID]</code> — Konfirmasi penyelesaian order manual\n\n"
         "⚙️ <b>Sistem & Pengguna:</b>\n"
         "• /setspread <code>[SYMBOL] [PERCENT]</code> — Set spread koin (e.g. <code>/setspread USDT 1.2</code>)\n"
+        "• /getemoji <code>[EMOJI]</code> — Dapatkan custom_emoji_id dari stiker/emoji pack 3D\n"
         "• /broadcast <code>[PESAN]</code> — Kirim siaran pesan ke semua pengguna\n"
         "• /ban <code>[USER_ID]</code> — Blokir pengguna dari bot\n"
         "• /unban <code>[USER_ID]</code> — Buka blokir pengguna\n"
     )
     await update.message.reply_text(admin_text, parse_mode="HTML")
+
+
+async def getemoji_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Mendeteksi custom_emoji_id dari pesan untuk dimasukkan ke bot/utils/emojis.py.
+    Cara pakai: Kirim custom emoji 3D premium ke bot dengan command /getemoji [EMOJI]
+    """
+    msg = update.effective_message
+    if not msg:
+        return
+    
+    entities = msg.entities or []
+    custom_emojis = [e for e in entities if getattr(e, "type", None) == "custom_emoji" or str(getattr(e, "type", "")) == "MessageEntityType.CUSTOM_EMOJI"]
+    
+    if not custom_emojis:
+        await msg.reply_text(
+            "💡 <b>CARA MENDAPATKAN ID EMOJI 3D PREMIUM:</b>\n\n"
+            "Ketik <code>/getemoji</code> lalu sertakan emoji premium 3D dari sticker/emoji pack Telegram Anda.\n\n"
+            "<i>Contoh:</i> Kirim pesan <code>/getemoji [EMOJI_PREMIUM]</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    res_lines = ["✨ <b>CUSTOM EMOJI 3D TERDETEKSI:</b>\n"]
+    for i, e in enumerate(custom_emojis, 1):
+        emoji_id = getattr(e, "custom_emoji_id", "")
+        offset = getattr(e, "offset", 0)
+        length = getattr(e, "length", 1)
+        emoji_char = msg.text[offset:offset+length] if msg.text else "✨"
+        
+        res_lines.append(
+            f"<b>{i}. Emoji:</b> {emoji_char}\n"
+            f"• <b>Custom Emoji ID:</b> <code>{emoji_id}</code>\n"
+            f"• <b>Format HTML:</b>\n"
+            f"<code>&lt;tg-emoji emoji-id=\"{emoji_id}\"&gt;{emoji_char}&lt;/tg-emoji&gt;</code>\n"
+        )
+    
+    res_lines.append("💡 <i>Salin Custom Emoji ID di atas dan tempelkan ke <code>CUSTOM_EMOJI_IDS</code> di file <code>bot/utils/emojis.py</code>.</i>")
+    await msg.reply_text("\n".join(res_lines), parse_mode="HTML")
 
 
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -186,45 +226,44 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(f"❌ Order <code>{order_id}</code> tidak ditemukan.", parse_mode="HTML")
             return
 
-        if order.status == "completed":
-            await update.message.reply_text(f"ℹ️ Order <code>{order_id}</code> sudah berstatus COMPLETED sebelumnya.", parse_mode="HTML")
-            return
+        was_already_completed = (order.status == "completed")
 
-        # Update status order ke completed
-        crud.update_order_status(
-            db, 
-            order_id, 
-            new_status="completed", 
-            completed_at=datetime.utcnow()
-        )
-        crud.release_order_inventory(db, order_id)
+        if not was_already_completed:
+            # Update status order ke completed jika belum completed
+            crud.update_order_status(
+                db, 
+                order_id, 
+                new_status="completed", 
+                completed_at=datetime.utcnow()
+            )
+            crud.release_order_inventory(db, order_id)
         
         # Kirim notifikasi sukses ke user
         from bot.utils.telegram_utils import safe_send_message
+        from bot.utils.messages import build_sell_completion_message, build_buy_completion_message
+        
         if order.order_type == "sell":
-            user_msg = (
-                f"💸 <b>PEMBAYARAN RUPIAH TELAH DITRANSFER!</b>\n\n"
-                f"ID Order: <code>{order.order_id}</code>\n"
-                f"🪙 Koin Dijual: <b>{format_crypto(float(order.crypto_amount), order.crypto_symbol)}</b> ({order.network})\n"
-                f"💰 Total Rupiah: <b>{format_idr(order.total_idr)}</b>\n"
-                f"🏦 Rekening Tujuan: <code>{order.buyer_wallet}</code>\n"
-                f"Status: <b>SELESAI / COMPLETED</b> ✅\n\n"
-                f"Dana Rupiah telah berhasil ditransfer oleh seller/admin ke rekening / e-Wallet Anda.\n"
-                f"Silakan periksa mutasi saldo rekening Anda. Terima kasih sudah bertransaksi! 🙏"
+            user_msg = build_sell_completion_message(order)
+        else:
+            user_msg = build_buy_completion_message(order)
+            
+        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+        sent = await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
+
+        if was_already_completed:
+            status_text = "sudah berstatus COMPLETED sebelumnya"
+            notif_text = "Notifikasi berhasil dikirim ulang ke user" if sent else "Gagal mengirim notifikasi ke user"
+            await update.message.reply_text(
+                f"ℹ️ Order <code>{order_id}</code> {status_text}.\n"
+                f"📬 <b>{notif_text}</b> (User ID: <code>{order.telegram_id}</code>).",
+                parse_mode="HTML"
             )
         else:
-            user_msg = (
-                f"✅ <b>Pesanan Selesai!</b>\n\n"
-                f"Pesanan <code>{order.order_id}</code> telah selesai diproses oleh admin.\n"
-                f"• Koin: <b>{format_crypto(float(order.crypto_amount), order.crypto_symbol)}</b> ({order.network})\n"
-                f"• Nominal: <b>{format_idr(order.total_idr)}</b>\n"
-                f"Status: <b>SELESAI / COMPLETED</b> ✅\n\n"
-                f"Transaksi Anda sudah berhasil diselesaikan. Terima kasih! 🙏"
+            notif_text = "notifikasi sukses telah dikirim ke user" if sent else "namun pengiriman notifikasi ke user gagal"
+            await update.message.reply_text(
+                f"✅ Order <code>{order_id}</code> berhasil dikonfirmasi sebagai <b>COMPLETED</b> dan {notif_text} (User ID: <code>{order.telegram_id}</code>).",
+                parse_mode="HTML"
             )
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
-        await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
-
-        await update.message.reply_text(f"✅ Order <code>{order_id}</code> berhasil dikonfirmasi sebagai COMPLETED.", parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error confirm_handler: {e}", exc_info=True)
@@ -249,46 +288,43 @@ async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("❌ Order tidak ditemukan.", show_alert=True)
             return
 
-        if order.status == "completed":
-            await query.answer("ℹ️ Order ini sudah COMPLETED.", show_alert=True)
-            return
+        was_already_completed = (order.status == "completed")
 
-        # Update status order ke completed
-        crud.update_order_status(
-            db, 
-            order_id, 
-            new_status="completed", 
-            completed_at=datetime.utcnow()
-        )
-        crud.release_order_inventory(db, order_id)
+        if not was_already_completed:
+            # Update status order ke completed
+            crud.update_order_status(
+                db, 
+                order_id, 
+                new_status="completed", 
+                completed_at=datetime.utcnow()
+            )
+            crud.release_order_inventory(db, order_id)
 
         # Kirim notifikasi sukses ke user
-        user_msg = (
-            f"💸 <b>PEMBAYARAN RUPIAH TELAH DITRANSFER!</b>\n\n"
-            f"ID Order: <code>{order.order_id}</code>\n"
-            f"🪙 Koin Dijual: <b>{format_crypto(float(order.crypto_amount), order.crypto_symbol)}</b> ({order.network})\n"
-            f"💰 Total Rupiah: <b>{format_idr(order.total_idr)}</b>\n"
-            f"🏦 Rekening Tujuan: <code>{order.buyer_wallet}</code>\n"
-            f"Status: <b>SELESAI / COMPLETED</b> ✅\n\n"
-            f"Dana Rupiah telah berhasil ditransfer oleh seller/admin ke rekening / e-Wallet Anda.\n"
-            f"Silakan periksa mutasi saldo rekening Anda. Terima kasih sudah bertransaksi! 🙏"
-        )
         from bot.utils.telegram_utils import safe_send_message
+        from bot.utils.messages import build_sell_completion_message
+        user_msg = build_sell_completion_message(order)
+        
         menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
-        await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
+        sent = await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
 
-        await query.answer("✅ Order berhasil dikonfirmasi sebagai COMPLETED!")
+        alert_text = "✅ Berhasil konfirmasi & notifikasi terkirim ke user!" if sent else "⚠️ Order COMPLETED namun gagal mengirim notifikasi ke user."
+        if was_already_completed:
+            alert_text = "ℹ️ Order sudah COMPLETED. Notifikasi dikirim ulang ke user." if sent else "ℹ️ Order sudah COMPLETED."
+        await query.answer(alert_text, show_alert=True)
+
         msg = query.message
-        if msg.caption:
+        completion_tag = "\n\n✅ <b>RUPIAH SUDAH DITRANSFER OLEH ADMIN (COMPLETED)</b>"
+        if msg.caption and completion_tag not in msg.caption:
             caption_now = msg.caption or ""
             await query.edit_message_caption(
-                caption=f"{caption_now}\n\n✅ <b>RUPIAH SUDAH DITRANSFER OLEH ADMIN (COMPLETED)</b>",
+                caption=f"{caption_now}{completion_tag}",
                 parse_mode="HTML"
             )
-        elif msg.text:
+        elif msg.text and completion_tag not in msg.text:
             text_now = msg.text or ""
             await query.edit_message_text(
-                text=f"{text_now}\n\n✅ <b>RUPIAH SUDAH DITRANSFER OLEH ADMIN (COMPLETED)</b>",
+                text=f"{text_now}{completion_tag}",
                 parse_mode="HTML"
             )
     except Exception as e:
