@@ -248,14 +248,13 @@ class PriceService:
         """
         symbol = symbol.upper()
         try:
-            # Step 1: Ambil USDT/IDR rate (base rate untuk semua konversi)
-            usdt_idr = await self.get_binance_price("USDTBIDR")
-            if usdt_idr is None:
-                logger.error("Gagal ambil USDT/IDR rate dari Binance!")
-                return None
+            # Step 1: Ambil USDT/IDR rate realtime (Indodax -> CoinGecko -> ER-API)
+            usdt_idr = await self.get_realtime_usdt_idr_fallback()
+            if usdt_idr is None or usdt_idr < 10000:
+                usdt_idr = 16000.0
 
             # Step 2: Tentukan market price IDR berdasarkan symbol
-            if symbol == "USDT":
+            if symbol in ("USDT", "USDC"):
                 market_price_idr = usdt_idr
             elif symbol == "BASE":
                 eth_usdt = await self.get_binance_price("ETHUSDT")

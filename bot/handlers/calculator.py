@@ -105,12 +105,12 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         fee_usd = "N/A"
         
     try:
-        fee_alt = calculate_fee_idr(nominal_idr, "ALTCOIN") if nominal_idr <= 600000 else "N/A"
+        fee_alt = calculate_fee_idr(nominal_idr, "ALTCOIN") if nominal_idr <= 1010000 else "N/A"
     except Exception:
         fee_alt = "N/A"
 
     try:
-        fee_conv = calculate_fee_idr(nominal_idr, "CONVERT") if nominal_idr <= 600000 else "N/A"
+        fee_conv = calculate_fee_idr(nominal_idr, "CONVERT") if nominal_idr <= 1010000 else "N/A"
     except Exception:
         fee_conv = "N/A"
 

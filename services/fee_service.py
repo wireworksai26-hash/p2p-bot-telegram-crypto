@@ -3,8 +3,8 @@ services/fee_service.py — Triple-Tier Fee Engine (USD, Altcoin, & Convert)
 ==========================================================================
 Menghitung biaya transaksi IDR fixed sesuai dengan aturan tier resmi dari client:
 1. USD Fee Tier (USDT & USDC): Min Rp 5.000, Max Rp 1.015.000
-2. Altcoin Fee Tier (ETH, SOL, SUI, TRX, BNB, MATIC, ARB, AVAX, KAIA, BERA, APT, TON, HYPE): Min Rp 5.000, Max Rp 600.000
-3. Convert Fee Tier (Tukar koin antar jaringan): Min Rp 6.000, Max Rp 600.000
+2. Altcoin Fee Tier (ETH, SOL, SUI, TRX, BNB, MATIC, ARB, AVAX, KAIA, BERA, APT, TON, HYPE): Min Rp 5.000, Max Rp 1.010.000
+3. Convert Fee Tier (Tukar koin antar jaringan): Min Rp 6.000, Max Rp 1.010.000
 """
 
 import logging
@@ -13,28 +13,30 @@ import math
 logger = logging.getLogger(__name__)
 
 USD_FEE_TIERS = [
-    (5000, 35000, 3000),
-    (35001, 55000, 3500),
-    (55001, 70000, 4000),
-    (70001, 110000, 4500),
-    (110001, 170000, 5000),
-    (170001, 200000, 5500),
-    (200001, 250000, 6500),
-    (250001, 330000, 7000),
+    (5000, 34000, 3000),
+    (34001, 41000, 3500),
+    (41001, 67000, 4000),
+    (67001, 100000, 4500),
+    (100001, 140000, 5000),
+    (140001, 180000, 5500),
+    (180001, 200000, 6000),
+    (200001, 245000, 6500),
+    (245001, 330000, 7000),
     (330001, 400000, 7500),
-    (400001, 450000, 8000),
-    (450001, 550000, 8500),
-    (550001, 800000, 9000),
-    (800001, 900000, 11000),
-    (900001, 950000, 13000),
+    (400001, 420000, 8000),
+    (420001, 550000, 8500),
+    (550001, 680000, 9000),
+    (680001, 875000, 11000),
+    (875001, 950000, 13000),
     (950001, 1015000, 14500),
 ]
 
 ALTCOIN_FEE_TIERS = [
     (5000, 10000, 3000),
     (10001, 15000, 3500),
-    (15001, 48000, 4000),
-    (48001, 93000, 5000),
+    (15001, 44000, 4000),
+    (44001, 49000, 4400),
+    (49001, 93000, 5000),
     (93001, 105000, 5500),
     (105001, 110000, 6000),
     (110001, 119000, 6500),
@@ -48,6 +50,12 @@ ALTCOIN_FEE_TIERS = [
     (420001, 460000, 10500),
     (460001, 500000, 11000),
     (500001, 600000, 11500),
+    (600001, 690000, 12000),
+    (690001, 770000, 12500),
+    (770001, 840000, 13500),
+    (840001, 890000, 14000),
+    (890001, 940000, 17000),
+    (940001, 1010000, 19000),
 ]
 
 CONVERT_FEE_TIERS = [
@@ -66,6 +74,12 @@ CONVERT_FEE_TIERS = [
     (390001, 425000, 10500),
     (425001, 475000, 11000),
     (475001, 600000, 11500),
+    (600001, 680000, 12000),
+    (680001, 760000, 12500),
+    (760001, 830000, 13500),
+    (830001, 880000, 14000),
+    (880001, 940000, 16000),
+    (940001, 1010000, 18000),
 ]
 
 
@@ -100,7 +114,7 @@ def calculate_fee_idr(
                                       False jika buyer mengirim koin ke bot (Jual / Convert Source).
 
     Returns:
-        int: Fee fixed dalam Rupiah (termasuk surcharge Rp 2.000 jika is_outgoing=True dan koin/jaringan ETH/TRX).
+        int: Fee fixed dalam Rupiah.
     """
     category_upper = category.upper()
 
@@ -109,13 +123,13 @@ def calculate_fee_idr(
             raise ValueError("Pembelian atau Penjualan Nominal USD di atas Rp 1.015.000 silakan tanya admin dahulu.")
         base_fee = _tier_fee(nominal_idr, USD_FEE_TIERS, "USD (USDT/USDC)", 5000, 1015000)
     elif category_upper == "CONVERT":
-        if nominal_idr > 600_000:
-            raise ValueError("Transaksi Convert di atas Rp 600.000 silakan tanya admin dahulu.")
-        base_fee = _tier_fee(nominal_idr, CONVERT_FEE_TIERS, "Convert", 6000, 600000)
+        if nominal_idr > 1_010_000:
+            raise ValueError("Transaksi Convert di atas Rp 1.010.000 silakan tanya admin dahulu.")
+        base_fee = _tier_fee(nominal_idr, CONVERT_FEE_TIERS, "Convert", 6000, 1010000)
     else:  # Default: ALTCOIN
-        if nominal_idr > 600_000:
-            raise ValueError("Pembelian atau Penjualan Nominal Altcoin di atas Rp 600.000 silakan tanya admin dahulu.")
-        base_fee = _tier_fee(nominal_idr, ALTCOIN_FEE_TIERS, "Altcoin", 5000, 600000)
+        if nominal_idr > 1_010_000:
+            raise ValueError("Pembelian atau Penjualan Nominal Altcoin di atas Rp 1.010.000 silakan tanya admin dahulu.")
+        base_fee = _tier_fee(nominal_idr, ALTCOIN_FEE_TIERS, "Altcoin", 5000, 1010000)
 
     return base_fee
 
