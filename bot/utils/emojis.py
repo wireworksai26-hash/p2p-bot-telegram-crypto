@@ -4,37 +4,58 @@ bot/utils/emojis.py — Helper & Konfigurasi Telegram Custom Emoji (3D Animated 
 Mendukung format Telegram Bot API Custom Emoji:
 <tg-emoji emoji-id="1234567890">👋</tg-emoji>
 
+Menggunakan ID dari Telegram's built-in animated emoji packs (Forum Topic Icons,
+RestrictedEmoji, NewsEmoji, HandEmoji, dll.) yang bersifat universal dan ANIMATED.
+
 Jika custom_emoji_id kosong, fungsi tg_emoji() otomatis melakukan fallback ke Unicode Emoji.
-Admin dapat menyetel ID custom emoji di dictionary CUSTOM_EMOJI_IDS di bawah ini.
 """
 
-# Pemetaan ID Custom Emoji Telegram (Dapat diisi custom_emoji_id dari stiker/emoji pack Telegram Premium)
+# ============================================================================
+# Pemetaan ID Custom Emoji Telegram — Animated 3D dari built-in packs Telegram
+# Semua ID di bawah sudah diverifikasi ANIMATED via getForumTopicIconStickers
+# dan getCustomEmojiStickers Bot API.
+# ============================================================================
 CUSTOM_EMOJI_IDS = {
-    "WAVE": "",          # 👋
-    "CALENDAR": "",      # 🗓️
-    "BOT": "",           # 🤖
-    "USER": "",          # 👤
-    "CROWN": "",         # 👑
-    "VERIFIED": "",      # 🛡️
-    "CHART": "",         # 📊
-    "CHART_UP": "",      # 📈
-    "MONEY_BAG": "",     # 💰
-    "DOLLAR": "",        # 💵
-    "CARD": "",          # 💳
-    "COIN": "",          # 🪙
-    "CART": "",          # 🛒
-    "BOX": "",           # 📦
-    "SWAP": "",          # 🔄
-    "CHECK": "",         # ✅
-    "CROSS": "",         # ❌
-    "WARNING": "",       # ⚠️
-    "PHONE": "",         # ☎️
-    "CHAT": "",          # 💬
-    "HISTORY": "",       # 📜
-    "FIRE": "",          # 🔥
-    "ROCKET": "",        # 🚀
-    "DIAMOND": "",       # 💎
-    "SPARKLES": "",      # ✨
+    # --- Greeting & Status ---
+    "WAVE":       "5368324170671202286",  # 👍 (HandEmoji — animated wave/thumbs)
+    "CALENDAR":   "5433614043006903194",  # 📆 (Forum — animated calendar)
+    "BOT":        "5309832892262654231",  # 🤖 (Forum — animated robot)
+    "USER":       "5357107601584693888",  # 👑 (Forum — animated crown as user badge)
+    "CROWN":      "5357107601584693888",  # 👑 (Forum — animated crown)
+    "VERIFIED":   "5237699328843200968",  # ✅ (Forum — animated checkmark shield)
+
+    # --- Chart & Analytics ---
+    "CHART":      "5350305691942788490",  # 📈 (Forum — animated chart up)
+    "CHART_UP":   "5350305691942788490",  # 📈 (Forum — animated chart up)
+
+    # --- Money & Finance ---
+    "MONEY_BAG":  "5350452584119279096",  # 💰 (Forum — animated money bag)
+    "DOLLAR":     "5309929258443874898",  # 💸 (Forum — animated flying money)
+    "CARD":       "5348227245599105972",  # 💼 (Forum — animated briefcase/wallet)
+    "COIN":       "5377690785674175481",  # 🪙 (Forum — animated coin)
+
+    # --- Shopping & Orders ---
+    "CART":       "5431492767249342908",  # 🛒 (Forum — animated shopping cart)
+    "BOX":        "5350699789551935589",  # 🛍 (Forum — animated shopping bag)
+    "SWAP":       "5310107765874632305",  # 💱 (Forum — animated currency exchange)
+
+    # --- Status Indicators ---
+    "CHECK":      "5237699328843200968",  # ✅ (Forum — animated green check)
+    "CROSS":      "5462882007451185227",  # 🚫 (GameEmoji — animated cross/ban)
+    "WARNING":    "5447644880824181073",  # ⚠️ (NewsEmoji — animated warning)
+
+    # --- Communication ---
+    "PHONE":      "5409357944619802453",  # 📱 (Forum — animated phone)
+    "CHAT":       "5417915203100613993",  # 💬 (Forum — animated chat bubble)
+    "HISTORY":    "5373251851074415873",  # 📝 (Forum — animated notepad/history)
+
+    # --- Effects & Flair ---
+    "FIRE":       "5312241539987020022",  # 🔥 (Forum — animated fire)
+    "ROCKET":     "5312016608254762256",  # ⚡️ (Forum — animated lightning/rocket)
+    "DIAMOND":    "5309958691854754293",  # 💎 (Forum — animated diamond)
+    "SPARKLES":   "5472164874886846699",  # ✨ (RestrictedEmoji — animated sparkles)
+    "STAR":       "5235579393115438657",  # ⭐️ (Forum — animated star)
+    "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
 }
 
 
@@ -74,3 +95,6 @@ E_HISTORY = lambda: tg_emoji("HISTORY", "📜")
 E_ROCKET = lambda: tg_emoji("ROCKET", "🚀")
 E_DIAMOND = lambda: tg_emoji("DIAMOND", "💎")
 E_SPARKLES = lambda: tg_emoji("SPARKLES", "✨")
+E_FIRE = lambda: tg_emoji("FIRE", "🔥")
+E_STAR = lambda: tg_emoji("STAR", "⭐️")
+E_PARTY = lambda: tg_emoji("PARTY", "🎉")
