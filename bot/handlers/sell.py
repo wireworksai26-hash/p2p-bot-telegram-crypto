@@ -82,7 +82,9 @@ async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         query,
         text=(
             "📈 <b>JUAL CRYPTOCURRENCY</b>\n\n"
-            "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:"
+            "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
+            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
+            "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
         parse_mode="HTML"
@@ -95,7 +97,9 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(
         text=(
             "📈 <b>JUAL CRYPTOCURRENCY</b>\n\n"
-            "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:"
+            "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
+            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
+            "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
         parse_mode="HTML"
@@ -378,9 +382,11 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             f"Harap kirimkan tepat <b>{format_crypto(crypto_amount, symbol)}</b> ke alamat Hot Wallet kami di bawah ini:\n\n"
             f"Network: <b>{network}</b>\n"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
-            f"⏳ *Batas Waktu:* 15 Menit\n\n"
-            f"Sistem akan memantau transfer masuk secara otomatis. Jika Anda telah mengirim, Anda juga dapat mengirimkan "
-            f"<b>TX Hash / Transaction ID</b> transaksi tersebut agar proses verifikasi lebih cepat."
+            f"⏳ <b>Batas Waktu:</b> 15 Menit\n\n"
+            f"⏰ <b>Catatan Layanan:</b>\n"
+            f"• Pengecekan koin masuk <b>otomatis 24 jam</b>.\n"
+            f"• Pencairan dana ke rekening/e-wallet Anda dilayani <b>08.00 - 22.00 WIB</b> (diproses manual saat admin online).\n\n"
+            f"<i>Setelah kirim, Anda dapat menekan tombol masukkan TX Hash untuk mempercepat verifikasi.</i>"
         )
         
         keyboard = [

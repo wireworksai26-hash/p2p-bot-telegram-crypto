@@ -47,10 +47,12 @@ ORDER_SUMMARY_SELL = (
     "────────────────────\n"
     "💰 <b>Nominal Bersih (IDR):</b> <b>{nominal_idr_str}</b>\n"
     "🔌 <b>Fee Layanan:</b> {fee_idr_str}\n\n"
-    "🏦 <b>Rekening Penerima Anda:</b>\n"
-    "• Bank: {bank_name}\n"
+    "🏦 <b>Rekening / E-Wallet Penerima Anda:</b>\n"
+    "• Bank / E-Wallet: {bank_name}\n"
     "• No Rekening: <code>{bank_acc}</code>\n"
     "• Atas Nama: {bank_holder}\n\n"
+    "⏰ <b>Jam Layanan:</b> 08.00 - 22.00 WIB\n"
+    "<i>(Cek koin otomatis 24 jam. Pencairan rupiah diproses manual pada jam layanan atau saat admin online).</i>\n\n"
     "Silakan klik konfirmasi di bawah untuk memproses penjualan."
 )
 
