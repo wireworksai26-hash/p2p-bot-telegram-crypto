@@ -50,8 +50,8 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
 
     greeting, time_str = get_wib_datetime_info()
     user_name = html.escape(user.first_name or "Kak")
-    user_bal = int(db_user.balance) if db_user and db_user.balance else 0
-    user_orders = int(db_user.total_orders) if db_user and db_user.total_orders else 0
+    user_bal = int(getattr(db_user, "balance_idr", 0) or 0) if db_user else 0
+    user_orders = int(getattr(db_user, "total_orders", 0) or 0) if db_user else 0
 
     return (
         f"{E_WAVE()} <b>Selamat {greeting}, {user_name}!</b>\n"

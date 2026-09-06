@@ -19,6 +19,11 @@ class User(Base):
     orders = relationship("Order", back_populates="user")
     topups = relationship("TopupOrder", back_populates="user")
 
+    @property
+    def balance(self):
+        """Property alias for balance_idr."""
+        return float(self.balance_idr or 0.0)
+
 
 class TopupOrder(Base):
     __tablename__ = 'topup_orders'
