@@ -5,6 +5,18 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 const sessionManager = require('./sessionManager');
+const dbSession = require('./dbSession');
+
+// Inisialisasi sinkronisasi sesi database PostgreSQL
+(async () => {
+    try {
+        await dbSession.init();
+        await dbSession.syncOnStartup();
+        dbSession.startAutoSync();
+    } catch (err) {
+        console.warn('[DB_SESSION] Gagal sinkronisasi sesi database:', err.message);
+    }
+})();
 
 process.on('uncaughtException', (err) => {
     console.error(`[UNCAUGHT_EXCEPTION] ${err.stack || err.message}`);

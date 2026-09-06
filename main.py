@@ -91,6 +91,8 @@ def init_database():
     db = SessionLocal()
     try:
         _seed_price_configs(db)
+        from database.crud import sync_gopay_session_file
+        sync_gopay_session_file()
         db.commit()
         logger.info("Database initialisation complete")
     except Exception as exc:
@@ -540,6 +542,10 @@ async def _job_sync_wallet_balances():
                 )
         prune_wallet_balances(db, STOCK_ASSETS)
         logger.debug("Wallet balances synced")
+
+        # Sync sesi GoPay dari file ke DB berkala
+        from database.crud import sync_gopay_session_file
+        sync_gopay_session_file()
     finally:
         db.close()
 

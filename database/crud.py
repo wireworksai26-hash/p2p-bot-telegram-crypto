@@ -22,6 +22,7 @@ from database.models import (
     PriceConfig,
     TopupOrder,
     MonthlyReport,
+    GopaySession,
 )
 
 logger = logging.getLogger(__name__)
@@ -917,3 +918,93 @@ def get_pending_gopay_order_for_user(db: Session, telegram_id: int) -> Optional[
         .order_by(Order.created_at.desc())
         .first()
     )
+
+
+# ============================================================
+# GOPAY SESSION CRUD (PostgreSQL & Multi-Deploy Persistence)
+# ============================================================
+
+def get_gopay_session(db: Session, key: str = "active_session") -> Optional[dict]:
+    """Mengambil session data GoPay dari database."""
+    import json
+    try:
+        row = db.query(GopaySession).filter(GopaySession.key == key).first()
+        if row and row.session_data:
+            return json.loads(row.session_data)
+        return None
+    except Exception as e:
+        logger.warning(f"Gagal get_gopay_session dari DB: {e}")
+        return None
+
+
+def save_gopay_session(db: Session, session_data: dict, key: str = "active_session") -> bool:
+    """Menyimpan atau memperbarui session data GoPay di database."""
+    import json
+    try:
+        data_str = json.dumps(session_data)
+        row = db.query(GopaySession).filter(GopaySession.key == key).first()
+        if not row:
+            row = GopaySession(key=key, session_data=data_str)
+            db.add(row)
+        else:
+            row.session_data = data_str
+            row.updated_at = datetime.utcnow()
+        db.commit()
+        logger.info(f"Sesi GoPay berhasil disimpan ke database (key={key}).")
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Gagal save_gopay_session ke DB: {e}")
+        return False
+
+
+def sync_gopay_session_file(session_file_path: str = None) -> bool:
+    """
+    Sinkronisasi dua arah file sesi .GOPAY_SESI_JANGAN_DIHAPUS.json dengan database:
+    1. Jika file lokal tidak ada / kosong, muat dari database PostgreSQL dan tulis file.
+    2. Jika file lokal ada dan valid, pastikan database selalu ter-update dengan isi file tersebut.
+    """
+    import os
+    import json
+    from database.connection import SessionLocal
+
+    if not session_file_path:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        session_file_path = os.path.join(base_dir, "gopay-gateway", ".GOPAY_SESI_JANGAN_DIHAPUS.json")
+
+    db = SessionLocal()
+    try:
+        file_exists = os.path.exists(session_file_path)
+        file_session = None
+        if file_exists:
+            try:
+                with open(session_file_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        file_session = json.loads(content)
+            except Exception as fe:
+                logger.warning(f"Error membaca file sesi lokal: {fe}")
+
+        db_session = get_gopay_session(db)
+
+        if not file_session and db_session:
+            # File kosong / hilang setelah redeploy container -> Pulihkan dari DB!
+            os.makedirs(os.path.dirname(session_file_path), exist_ok=True)
+            with open(session_file_path, "w", encoding="utf-8") as f:
+                json.dump(db_session, f, indent=2)
+            logger.info("🔑 [GOPAY] Berhasil memulihkan sesi GoPay dari database PostgreSQL ke file lokal.")
+            return True
+
+        elif file_session:
+            # File lokal ada -> Pastikan DB selalu sinkron
+            if not db_session or (file_session.get("updated_at") != db_session.get("updated_at")):
+                save_gopay_session(db, file_session)
+                logger.info("💾 [GOPAY] Sesi lokal tersimpan & tersinkronisasi ke database PostgreSQL.")
+            return True
+
+        return False
+    except Exception as exc:
+        logger.error(f"Gagal sync_gopay_session_file: {exc}")
+        return False
+    finally:
+        db.close()

@@ -158,3 +158,11 @@ class MonthlyReport(Base):
     topup_idr = Column(BigInteger, default=0)
     total_idr = Column(BigInteger, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GopaySession(Base):
+    __tablename__ = 'gopay_sessions'
+
+    key = Column(String(100), primary_key=True, default='active_session')
+    session_data = Column(String, nullable=False)  # JSON payload string
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
