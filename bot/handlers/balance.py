@@ -195,16 +195,16 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["active_topup_id"] = topup_id
 
     caption_text = (
-        f"💰 <b>INVOICE TOPUP SALDO BOT (QRIS)</b>\n\n"
+        f"{E_MONEY()} <b>INVOICE TOPUP SALDO BOT (QRIS)</b>\n\n"
         f"🎫 <b>ID Topup</b>: <code>{topup_id}</code>\n"
-        f"💵 <b>Nominal IDR</b>: <code>{final_amount}</code> ({format_idr(final_amount)})\n"
+        f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_amount)}</b>\n"
         f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
         f"📌 <b>Cara Bayar:</b>\n"
-        f"1. Scan QRIS di atas dengan GoPay, OVO, Dana, ShopeePay, atau Mobile Banking.\n"
-        f"2. Ketik/input nominal <b>{format_idr(final_amount)}</b> secara manual.\n"
-        f"3. Setelah transfer, <b>kirim foto bukti transfer</b> ke chat ini.\n"
-        f"4. Saldo IDR bot Anda otomatis bertambah setelah pembayaran terverifikasi.\n\n"
-        f"ℹ️ <i><b>Catatan Nominal:</b> Transfer <b>PAS SESUAI NOMINAL PRESISI</b> dan kode unik. Jika nominal berbeda, pembayaran tidak terverifikasi otomatis dan perlu bantuan admin.</i>"
+        f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
+        f"2. Nominal <b>{format_idr(final_amount)}</b> akan muncul otomatis (QRIS Dinamis).\n"
+        f"3. Selesaikan pembayaran di aplikasi e-wallet / bank Anda.\n"
+        f"4. Saldo akun bot Anda akan <b>otomatis bertambah</b> seketika setelah pembayaran terdeteksi!\n\n"
+        f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_amount)}) agar saldo masuk otomatis tanpa delay.</i>"
     )
 
     keyboard = [

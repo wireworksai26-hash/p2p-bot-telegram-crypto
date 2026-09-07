@@ -52,8 +52,15 @@ from bot.keyboards.crypto_select import (
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr, validate_wallet_address
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
-from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
+from bot.utils.emojis import (
+    E_CARD,
+    E_DOLLAR,
+    E_MONEY,
+    E_CHECK,
+    E_CART,
+    E_SPARKLES,
+)
 from config.assets import QRIS_STATIC_IMAGE
 from config.settings import settings
 
@@ -551,21 +558,21 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             }
             create_order(db, order_data)
 
-            # Kirim QRIS statis + instruksi pembayaran manual dengan kode unik & disclaimer
+            # Kirim QRIS dinamis + instruksi pembayaran otomatis
             received_idr = context.user_data["buy_received_idr"]
             caption = (
-                "💳 <b>BAYAR VIA QRIS</b>\n\n"
+                f"{E_CARD()} <b>BAYAR VIA QRIS DINAMIS</b>\n\n"
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
-                f"💵 <b>Total Bayar</b>: <code>{final_total_idr}</code> ({format_idr(final_total_idr)})\n"
+                f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>\n"
                 f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}\n"
-                f"💰 <b>Nilai Koin Diterima</b>: {format_idr(received_idr)}\n"
+                f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
                 f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
                 f"📌 <b>Cara Bayar:</b>\n"
-                f"1. Scan QRIS di atas dengan GoPay, OVO, Dana, ShopeePay, atau Mobile Banking.\n"
-                f"2. Ketik/input nominal <b>{format_idr(final_total_idr)}</b> secara manual.\n"
-                f"3. Setelah transfer, <b>kirim foto bukti transfer</b> ke chat ini.\n"
-                f"4. Koin otomatis dikirim ke wallet Anda setelah transfer terverifikasi.\n\n"
-                f"ℹ️ <i><b>Catatan Nominal:</b> Transfer <b>PAS SESUAI NOMINAL PRESISI</b> dan kode unik. Jika nominal berbeda, pembayaran tidak terverifikasi otomatis dan perlu bantuan admin.</i>"
+                f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
+                f"2. Nominal <b>{format_idr(final_total_idr)}</b> akan muncul otomatis (QRIS Dinamis).\n"
+                f"3. Selesaikan pembayaran di aplikasi e-wallet / bank Anda.\n"
+                f"4. Koin crypto akan <b>otomatis terkirim</b> ke wallet Anda seketika setelah pembayaran terdeteksi!\n\n"
+                f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>"
             )
             keyboard = [
                 [InlineKeyboardButton("✅ Saya Sudah Transfer", callback_data=f"check_buy_payment_{order_id}")],
