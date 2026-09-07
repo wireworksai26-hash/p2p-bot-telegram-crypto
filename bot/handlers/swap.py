@@ -39,9 +39,11 @@ from bot.utils.emojis import (
     E_COIN,
     E_DOLLAR,
     E_MONEY,
+    CUSTOM_EMOJI_IDS,
     get_coin_emoji_id,
     get_network_emoji_id,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,7 @@ async def start_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
+    keyboard.append([InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
 
     text = f"{E_SWAP()} <b>[TUKAR ANTAR JARINGAN / OTC CONVERT]</b>\n\nSilakan pilih <b>Koin Asal</b> yang ingin kamu kirim:"
     
@@ -120,7 +122,7 @@ async def select_src_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         for net in networks
     ]
-    keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
+    keyboard.append([InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
 
     await query.edit_message_text(
         f"Koin Asal: <b>{symbol}</b>\n\nSilakan pilih <b>Jaringan Koin Asal</b>:",
@@ -154,7 +156,7 @@ async def select_src_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
+    keyboard.append([InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
 
     await query.edit_message_text(
         f"Koin Asal: <b>{context.user_data['swap_src_symbol']} ({net})</b>\n\nSilakan pilih <b>Koin Tujuan (Target)</b>:",
@@ -182,7 +184,7 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         for net in networks
     ]
-    keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
+    keyboard.append([InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
 
     await query.edit_message_text(
         f"Koin Asal: <b>{context.user_data['swap_src_symbol']} ({context.user_data['swap_src_network']})</b>\n"
@@ -284,7 +286,7 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+        [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -330,7 +332,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_idr_price, usdt_idr_rate)
     except (ValueError, Exception):
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+            [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -355,7 +357,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except ValueError as fee_err:
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+            [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -374,7 +376,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_tgt_amount"] = tgt_amount
 
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+        [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -399,7 +401,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = CryptoSenderFactory.get_sender(tgt_net)
     if not sender.validate_address(target_addr):
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal Transaksi", callback_data="cancel_swap")],
+            [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -425,8 +427,8 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_seller_deposit_wallet"] = seller_deposit_wallet
 
     keyboard = [
-        [InlineKeyboardButton("✅ Ya, Konfirmasi & Dapatkan Alamat Setor", callback_data="confirm_swap_order")],
-        [InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")]
+        [InlineKeyboardButton("Ya, Konfirmasi & Dapatkan Alamat Setor", callback_data="confirm_swap_order", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
+        [InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]
     ]
 
     await update.message.reply_text(
@@ -525,8 +527,8 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["active_swap_order_id"] = order_id
 
     keyboard = [
-        [InlineKeyboardButton("🔗 Masukkan TX Hash / Bukti Setor", callback_data=f"input_swap_tx_{order_id}")],
-        [InlineKeyboardButton("❌ Batal Order", callback_data=f"cancel_swap_order_{order_id}")]
+        [InlineKeyboardButton("Masukkan TX Hash / Bukti Setor", callback_data=f"input_swap_tx_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
+        [InlineKeyboardButton("Batal Order", callback_data=f"cancel_swap_order_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]
     ]
 
     await query.edit_message_text(
@@ -550,7 +552,7 @@ async def prompt_input_tx_hash(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["active_swap_order_id"] = order_id
 
     keyboard = [
-        [InlineKeyboardButton("❌ Batal Order", callback_data=f"cancel_swap_order_{order_id}")],
+        [InlineKeyboardButton("Batal Order", callback_data=f"cancel_swap_order_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -604,7 +606,7 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 expected_amount=float(order.crypto_amount),
             )
 
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         if verified_result and verified_result.get("verified"):
             # Konfirmasi + eksekusi payout otomatis (kirim koin tujuan)
             # Pesan status verifikasi dan hasil convert dikirimkan oleh deposit_detector._confirm_order
@@ -650,8 +652,8 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
         )
         admin_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("⚡ Approve & Eksekusi Payout", callback_data=f"admin_approve_swap_{order.order_id}"),
-                InlineKeyboardButton("❌ Tolak", callback_data=f"admin_reject_swap_{order.order_id}")
+                InlineKeyboardButton("Approve & Eksekusi Payout", callback_data=f"admin_approve_swap_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+                InlineKeyboardButton("Tolak", callback_data=f"admin_reject_swap_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CROSS", "5462882007451185227"))
             ]
         ])
         if photo_file_id:
@@ -694,7 +696,7 @@ async def cancel_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             text="❌ Sesi convert dibatalkan.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     return ConversationHandler.END

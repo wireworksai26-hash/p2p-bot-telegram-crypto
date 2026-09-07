@@ -15,6 +15,7 @@ from database.crud import create_user, get_user_count, get_user, get_completed_o
 from bot.keyboards.main_menu import get_main_menu_keyboard
 from bot.keyboards.crypto_select import get_owner_button
 from bot.utils.messages import WELCOME_MESSAGE, SNK_TEXT
+from bot.utils.emojis import CUSTOM_EMOJI_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         # Tampilkan Syarat & Ketentuan
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         keyboard = [
-            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await query.edit_message_text(

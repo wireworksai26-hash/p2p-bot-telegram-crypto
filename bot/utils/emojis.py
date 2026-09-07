@@ -51,10 +51,14 @@ DEFAULT_EMOJI_IDS = {
     "CROSS":      "5462882007451185227",  # 🚫 (GameEmoji — animated cross/ban)
     "WARNING":    "5447644880824181073",  # ⚠️ (NewsEmoji — animated warning)
 
-    # --- Communication ---
+    # --- Communication & Identity ---
     "PHONE":      "5409357944619802453",  # 📱 (Forum — animated phone)
     "CHAT":       "5417915203100613993",  # 💬 (Forum — animated chat bubble)
     "HISTORY":    "5373251851074415873",  # 📝 (Forum — animated notepad/history)
+    "TAG":        "5298877105000439431",  # 🏷️ (TonEmoji — animated tag / username)
+    "ID_BADGE":   "5237699328843200968",  # 🆔 (Forum — animated shield / ID badge)
+    "BACK":       "5202123071053381850",  # 🔙 (Emoji666D — animated back / cancel)
+    "PLUS":       "5204256218100547827",  # ➕ (Emoji666D — animated plus)
 
     # --- Effects & Flair ---
     "FIRE":       "5312241539987020022",  # 🔥 (Forum — animated fire)
@@ -125,6 +129,10 @@ DEFAULT_EMOJI_ALTS = {
     "PHONE": "📱",
     "CHAT": "💬",
     "HISTORY": "📝",
+    "TAG": "🏷️",
+    "ID_BADGE": "🆔",
+    "BACK": "🔙",
+    "PLUS": "➕",
     "FIRE": "🔥",
     "ROCKET": "🚀",
     "DIAMOND": "💎",
@@ -357,6 +365,10 @@ E_SPARKLES = lambda: tg_emoji("SPARKLES", "✨")
 E_FIRE = lambda: tg_emoji("FIRE", "🔥")
 E_STAR = lambda: tg_emoji("STAR", "⭐️")
 E_PARTY = lambda: tg_emoji("PARTY", "🎉")
+E_TAG = lambda: tg_emoji("TAG", "🏷️")
+E_ID = lambda: tg_emoji("ID_BADGE", "🆔")
+E_BACK = lambda: tg_emoji("BACK", "🔙")
+E_PLUS = lambda: tg_emoji("PLUS", "➕")
 
 # Shortcut per koin crypto
 E_COIN_USDT = lambda: tg_emoji("COIN_USDT", "🟢")
@@ -385,6 +397,15 @@ def get_coin_emoji(symbol: str) -> str:
     return tg_emoji("COIN", "🪙")
 
 
+def get_network_emoji(network: str) -> str:
+    """Mengembalikan tag custom animated emoji untuk jaringan crypto tertentu."""
+    net = network.upper().strip()
+    key = f"NET_{net}"
+    if key in CUSTOM_EMOJI_IDS:
+        return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "•"))
+    return "•"
+
+
 def get_coin_emoji_id(symbol: str) -> str | None:
     """Mengembalikan custom_emoji_id string untuk tombol Telegram."""
     sym = symbol.upper().strip()
@@ -397,4 +418,5 @@ def get_network_emoji_id(network: str) -> str | None:
     net = network.upper().strip()
     key = f"NET_{net}"
     return CUSTOM_EMOJI_IDS.get(key)
+
 

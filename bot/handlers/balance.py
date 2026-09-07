@@ -44,6 +44,11 @@ from bot.utils.emojis import (
     E_CHECK,
     E_SPARKLES,
     E_WARN,
+    E_TAG,
+    E_ID,
+    E_BACK,
+    E_PLUS,
+    CUSTOM_EMOJI_IDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,15 +70,15 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"{E_MONEY()} <b>CEK SALDO & PROFIL USER</b>\n\n"
         f"{E_USER()} <b>Nama</b>    : {user.full_name or 'N/A'}\n"
-        f"🏷️ <b>Username</b>: @{user.username or 'N/A'}\n"
-        f"🆔 <b>ID User</b> : <code>{user.id}</code>\n"
+        f"{E_TAG()} <b>Username</b>: @{user.username or 'N/A'}\n"
+        f"{E_ID()} <b>ID User</b> : <code>{user.id}</code>\n"
         f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n\n"
         f"{E_SPARKLES()} <i>Saldo IDR dapat digunakan untuk membeli koin crypto secara instan (1-Tap) tanpa perlu transfer bank!</i>"
     )
 
     keyboard = [
-        [InlineKeyboardButton("➕ Topup Saldo (QRIS)", callback_data="start_topup_qris")],
-        [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+        [InlineKeyboardButton("Topup Saldo (QRIS)", callback_data="start_topup_qris", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PLUS", "5204256218100547827"))],
+        [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -99,18 +104,18 @@ async def start_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     keyboard = [
         [
-            InlineKeyboardButton("Rp 5.000", callback_data="topup_nom_5000"),
-            InlineKeyboardButton("Rp 10.000", callback_data="topup_nom_10000"),
+            InlineKeyboardButton("Rp 5.000", callback_data="topup_nom_5000", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096")),
+            InlineKeyboardButton("Rp 10.000", callback_data="topup_nom_10000", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096")),
         ],
         [
-            InlineKeyboardButton("Rp 25.000", callback_data="topup_nom_25000"),
-            InlineKeyboardButton("Rp 50.000", callback_data="topup_nom_50000"),
+            InlineKeyboardButton("Rp 25.000", callback_data="topup_nom_25000", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096")),
+            InlineKeyboardButton("Rp 50.000", callback_data="topup_nom_50000", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096")),
         ],
         [
-            InlineKeyboardButton("Rp 100.000", callback_data="topup_nom_100000"),
-            InlineKeyboardButton("✏️ Custom Nominal", callback_data="topup_nom_custom"),
+            InlineKeyboardButton("Rp 100.000", callback_data="topup_nom_100000", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096")),
+            InlineKeyboardButton("Custom Nominal", callback_data="topup_nom_custom", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873")),
         ],
-        [InlineKeyboardButton("🔙 Batal", callback_data="cancel_topup")],
+        [InlineKeyboardButton("Batal", callback_data="cancel_topup", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -129,7 +134,7 @@ async def handle_preset_nominal(update: Update, context: ContextTypes.DEFAULT_TY
             "✏️ <b>Ketik Nominal Topup Custom:</b>\n\n"
             "Ketik angka nominal Rupiah yang ingin Anda deposit (minimal Rp 5.000, contoh: <code>15000</code>):",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Batal", callback_data="cancel_topup")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Batal", callback_data="cancel_topup", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         )
         return WAITING_CUSTOM_NOMINAL
 
@@ -208,8 +213,8 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     keyboard = [
-        [InlineKeyboardButton("✅ Saya Sudah Transfer", callback_data=f"check_topup_{topup_id}")],
-        [InlineKeyboardButton("❌ Batalkan Topup", callback_data=f"cancel_topup_{topup_id}")],
+        [InlineKeyboardButton("Saya Sudah Transfer", callback_data=f"check_topup_{topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
+        [InlineKeyboardButton("Batalkan Topup", callback_data=f"cancel_topup_{topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -293,7 +298,7 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
                 f"<i>Terima kasih! Anda dapat langsung menggunakan saldo ini untuk membeli crypto secara instan.</i>"
             )
-            keyboard = [[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]
+            keyboard = [[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]
             await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
             # Pembayaran belum terdeteksi saat tombol diklik (karena delay sync 10-30s)
@@ -307,8 +312,8 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 f"<i>(Opsi bantuan: Jika nominal transfer berbeda atau butuh bantuan darurat, Anda bisa kirim foto bukti transfer ke chat ini).</i>"
             )
             keyboard = [
-                [InlineKeyboardButton("🔄 Cek Ulang", callback_data=f"check_topup_{topup_id}")],
-                [InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")],
+                [InlineKeyboardButton("Cek Ulang", callback_data=f"check_topup_{topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305"))],
+                [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             ]
             await query.message.reply_text(
                 not_found_text,
@@ -352,8 +357,8 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
         )
         admin_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Approve Topup Saldo", callback_data=f"admin_approve_topup_{topup.topup_id}"),
-                InlineKeyboardButton("❌ Tolak", callback_data=f"admin_reject_topup_{topup.topup_id}")
+                InlineKeyboardButton("Approve Topup Saldo", callback_data=f"admin_approve_topup_{topup.topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+                InlineKeyboardButton("Tolak", callback_data=f"admin_reject_topup_{topup.topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CROSS", "5462882007451185227"))
             ]
         ])
         if photo_file_id:
@@ -383,7 +388,7 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
             if pay_res and pay_res.get("paid"):
                 if claim_topup_success(db, topup.topup_id):
                     new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
-                    menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+                    menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
                     await update.message.reply_text(
                         f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
                         f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
@@ -400,7 +405,6 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
         db.close()
 
 
-
 async def cancel_topup_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Membatalkan invoice topup."""
     query = update.callback_query
@@ -415,7 +419,7 @@ async def cancel_topup_manual(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.edit_message_caption(
         caption=f"❌ <b>Invoice Topup {topup_id} telah dibatalkan.</b>",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
         parse_mode="HTML"
     )
 

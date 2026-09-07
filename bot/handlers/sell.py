@@ -35,7 +35,7 @@ from bot.utils.validator import validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_SELL
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
-from bot.utils.emojis import E_CHART, E_COIN, E_DOLLAR, E_MONEY, E_CHECK, E_WARN
+from bot.utils.emojis import E_CHART, E_COIN, E_DOLLAR, E_MONEY, E_CHECK, E_WARN, CUSTOM_EMOJI_IDS
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["sell_network"] = network
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
     
@@ -165,7 +165,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_valid, crypto_amount = validate_crypto_amount(text_input)
     if not is_valid:
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -209,7 +209,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Cek minimal transaksi Rp 5.000 bersih
         if net_nominal_idr < 5000:
             keyboard = [
-                [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+                [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
                 [get_owner_button()]
             ]
             await update.message.reply_text(
@@ -245,7 +245,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         db.close()
 
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -274,7 +274,7 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Validasi input sederhana (pastikan tidak kosong dan punya pemisah koma / spasi)
     if len(bank_info) < 8:
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -324,8 +324,8 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ Konfirmasi Jual", callback_data="sell_confirm"),
-            InlineKeyboardButton("❌ Batal", callback_data="sell_cancel")
+            InlineKeyboardButton("Konfirmasi Jual", callback_data="sell_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+            InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
         ],
         [get_owner_button()]
     ]
@@ -391,8 +391,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         )
         
         keyboard = [
-            [InlineKeyboardButton("✍️ Masukkan TX Hash Manual", callback_data="sell_input_tx")],
-            [InlineKeyboardButton("❌ Batal Jual", callback_data="sell_cancel")],
+            [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
+            [InlineKeyboardButton("Batal Jual", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         
@@ -451,7 +451,7 @@ async def prompt_tx_hash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
     await safe_edit_message(
@@ -487,7 +487,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
     # Validasi format TX Hash sederhana (biasanya hex, minimal 10 karakter)
     if len(tx_hash) < 10:
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal", callback_data="sell_cancel")],
+            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -520,7 +520,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")],
+            [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         
@@ -565,7 +565,7 @@ async def cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text(
             text="❌ Sesi penjualan dibatalkan.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     return ConversationHandler.END

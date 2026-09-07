@@ -60,6 +60,7 @@ from bot.utils.emojis import (
     E_CHECK,
     E_CART,
     E_SPARKLES,
+    CUSTOM_EMOJI_IDS,
 )
 from config.assets import QRIS_STATIC_IMAGE
 from config.settings import settings
@@ -152,7 +153,7 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["buy_network"] = network
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
     
@@ -176,7 +177,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     text_input = (update.message.text or "").strip()
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -271,7 +272,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["buy_crypto_amount"] = crypto_amount
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -303,7 +304,7 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Validasi alamat wallet per network
     if not validate_wallet_address(wallet_address, network):
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+            [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -338,7 +339,7 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"Stok tersedia: <code>{available_text}</code>\n"
                 "Silakan hubungi admin untuk proses manual.",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                    InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
                 ]]),
                 parse_mode="HTML",
             )
@@ -349,12 +350,12 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard = []
     if user_balance >= total_idr:
         keyboard.append([
-            InlineKeyboardButton(f"⚡ 💰 Saldo Bot ({format_idr(int(user_balance))}) — Instan", callback_data="paymethod_BOT_BALANCE")
+            InlineKeyboardButton(f"Saldo Bot ({format_idr(int(user_balance))}) — Instan", callback_data="paymethod_BOT_BALANCE", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096"))
         ])
 
     keyboard.extend([
-        [InlineKeyboardButton("📱 QRIS GoPay (All E-Wallet & Bank)", callback_data="paymethod_GOPAY_QRIS")],
-        [InlineKeyboardButton("🔙 Batal", callback_data="buy_cancel")],
+        [InlineKeyboardButton("QRIS GoPay (All E-Wallet & Bank)", callback_data="paymethod_GOPAY_QRIS", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PHONE", "5409357944619802453"))],
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ])
     
@@ -418,8 +419,8 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ Konfirmasi & Bayar", callback_data="buy_confirm"),
-            InlineKeyboardButton("❌ Batal", callback_data="buy_cancel")
+            InlineKeyboardButton("Konfirmasi & Bayar", callback_data="buy_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+            InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
         ],
         [get_owner_button()]
     ]
@@ -462,7 +463,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                     "Silakan tunggu beberapa saat atau hubungi owner untuk bantuan."
                 ),
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")
+                    InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
                 ]]),
                 parse_mode="HTML"
             )
@@ -487,7 +488,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             if not deduct_success:
                 await query.edit_message_text(
                     text="❌ <b>Saldo Bot Tidak Mencukupi!</b>\n\nSilakan topup saldo bot Anda terlebih dahulu.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
                     parse_mode="HTML"
                 )
                 return ConversationHandler.END
@@ -528,7 +529,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             )
             await query.edit_message_text(
                 text=success_msg,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
                 parse_mode="HTML"
             )
             asyncio.create_task(_run_finalize_background(order.order_id, context.bot))
@@ -575,8 +576,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>"
             )
             keyboard = [
-                [InlineKeyboardButton("✅ Saya Sudah Transfer", callback_data=f"check_buy_payment_{order_id}")],
-                [InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")],
+                [InlineKeyboardButton("Saya Sudah Transfer", callback_data=f"check_buy_payment_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
+                [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
                 [get_owner_button()]
             ]
             from services.qris_generator import get_qris_image_stream
@@ -626,7 +627,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "Silakan mulai ulang alur pembelian."
             ),
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
         return ConversationHandler.END
@@ -658,7 +659,7 @@ async def cancel_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(
             text="❌ Sesi pembelian dibatalkan.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     return ConversationHandler.END
@@ -761,7 +762,7 @@ async def finalize_gopay_buy_payment(
             if result.get("explorer_url"):
                 user_msg += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
             user_msg += "\n\nTerima kasih! 🙏"
-            menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+            menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
             await safe_send_message(bot or bot_app, order.telegram_id, user_msg, reply_markup=menu_keyboard)
         else:
             update_order_status(
@@ -861,8 +862,8 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"👉 Silakan klik tombol <b>🔄 Cek Ulang</b> dalam beberapa saat, atau langsung <b>kirim screenshot/foto bukti transfer</b> ke chat ini untuk diproses manual oleh Admin."
         )
         keyboard = [
-            [InlineKeyboardButton("🔄 Cek Ulang", callback_data=f"check_buy_payment_{order.order_id}")],
-            [InlineKeyboardButton("💬 Hubungi Admin", url=f"https://t.me/{settings.OWNER_USERNAME.lstrip('@')}" if settings.OWNER_USERNAME else "https://t.me")]
+            [InlineKeyboardButton("Cek Ulang", callback_data=f"check_buy_payment_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305"))],
+            [get_owner_button()]
         ]
         await query.message.reply_text(
             not_detected_text,
@@ -914,8 +915,8 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
         )
         admin_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Approve & Kirim Crypto", callback_data=f"admin_approve_buy_{order.order_id}"),
-                InlineKeyboardButton("❌ Tolak", callback_data=f"admin_reject_buy_{order.order_id}")
+                InlineKeyboardButton("Approve & Kirim Crypto", callback_data=f"admin_approve_buy_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+                InlineKeyboardButton("Tolak", callback_data=f"admin_reject_buy_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CROSS", "5462882007451185227"))
             ]
         ])
         if photo_file_id:

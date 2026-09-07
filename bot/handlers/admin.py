@@ -413,7 +413,7 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             user_msg = build_buy_completion_message(order)
             
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         sent = await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
 
         if was_already_completed:
@@ -471,7 +471,7 @@ async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFA
         from bot.utils.messages import build_sell_completion_message
         user_msg = build_sell_completion_message(order)
         
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         sent = await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
 
         alert_text = "✅ Berhasil konfirmasi & notifikasi terkirim ke user!" if sent else "⚠️ Order COMPLETED namun gagal mengirim notifikasi ke user."
@@ -759,7 +759,7 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
         new_bal = crud.credit_user_balance(db, topup.telegram_id, topup.amount_idr)
 
         from bot.utils.telegram_utils import safe_send_message
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")]])
+        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         await safe_send_message(
             context.bot, topup.telegram_id,
             f"✅ <b>PEMBAYARAN TOPUP TERVERIFIKASI ADMIN!</b>\n\n"

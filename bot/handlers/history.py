@@ -22,6 +22,7 @@ from bot.utils.emojis import (
     E_CROSS,
     E_WARN,
     E_CALENDAR,
+    CUSTOM_EMOJI_IDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         message_text = "\n".join(text_lines)
         
         keyboard = [
-            [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         
@@ -96,8 +97,9 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.message.reply_text(
             text="⚠️ Gagal memuat riwayat transaksi Anda. Silakan coba sesaat lagi.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     finally:
         db.close()
+

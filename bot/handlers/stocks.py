@@ -16,7 +16,16 @@ from database.crud import get_all_wallet_balances
 from services.price_service import price_service
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_datetime
-from bot.utils.emojis import E_BOX, get_coin_emoji
+from bot.utils.emojis import (
+    E_BOX,
+    E_MONEY,
+    E_CALENDAR,
+    E_SPARKLES,
+    CUSTOM_EMOJI_IDS,
+    get_coin_emoji,
+    get_network_emoji,
+)
+
 
 
 logger = logging.getLogger(__name__)
@@ -199,7 +208,7 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 text_lines.append(f"{header_emoji} <b>{full_name}</b>")
                 for w in wallets:
                     net_upper = w.network.upper()
-                    net_emoji = NETWORK_EMOJIS.get(net_upper, "•")
+                    net_emoji = get_network_emoji(net_upper)
                     net_label = NETWORK_LABELS.get(net_upper, w.network)
                     bal_val = float(w.balance or 0.0)
                     bal_usd = bal_val * usd_price
@@ -218,20 +227,20 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     total_bal_str = format_crypto_qty(total_bal, sym)
                     if usd_price > 0:
                         text_lines.append("  ────────────────────")
-                        text_lines.append(f"  💰 <b>Total {sym}:</b> <code>{total_bal_str}</code> <b>(~${total_usd:,.2f})</b>\n")
+                        text_lines.append(f"  {E_MONEY()} <b>Total {sym}:</b> <code>{total_bal_str}</code> <b>(~${total_usd:,.2f})</b>\n")
                     else:
                         text_lines.append("  ────────────────────")
-                        text_lines.append(f"  💰 <b>Total {sym}:</b> <code>{total_bal_str}</code>\n")
+                        text_lines.append(f"  {E_MONEY()} <b>Total {sym}:</b> <code>{total_bal_str}</code>\n")
                 else:
                     text_lines.append("")
 
-        text_lines.append(f"⏱️ <i>Update: {format_datetime(datetime.now(timezone.utc))}</i>")
-        text_lines.append("💡 <i>Seluruh stok koin aktif 24/7 dan disinkronisasi dengan blockchain secara realtime.</i>")
+        text_lines.append(f"{E_CALENDAR()} <i>Update: {format_datetime(datetime.now(timezone.utc))}</i>")
+        text_lines.append(f"{E_SPARKLES()} <i>Seluruh stok koin aktif 24/7 dan disinkronisasi dengan blockchain secara realtime.</i>")
 
         message_text = "\n".join(text_lines)
 
         keyboard = [
-            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
 
@@ -246,7 +255,7 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.message.reply_text(
             text="⚠️ Gagal mengambil data stok saldo wallet. Silakan hubungi admin.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")
+                InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     finally:

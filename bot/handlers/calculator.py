@@ -28,6 +28,7 @@ from bot.utils.emojis import (
     E_SWAP,
     E_WARN,
     E_CROSS,
+    CUSTOM_EMOJI_IDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ async def start_calculator_callback(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal & Kembali", callback_data="calc_cancel")],
+        [InlineKeyboardButton("Batal & Kembali", callback_data="calc_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
     
@@ -66,7 +67,7 @@ async def start_calculator_command(update: Update, context: ContextTypes.DEFAULT
     Entry point kalkulator melalui command /calculator di chat.
     """
     keyboard = [
-        [InlineKeyboardButton("🔙 Batal & Kembali", callback_data="calc_cancel")],
+        [InlineKeyboardButton("Batal & Kembali", callback_data="calc_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
     
@@ -94,7 +95,7 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     if not is_valid:
         keyboard = [
-            [InlineKeyboardButton("🔙 Batal & Kembali", callback_data="calc_cancel")],
+            [InlineKeyboardButton("Batal & Kembali", callback_data="calc_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
@@ -140,8 +141,8 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     keyboard = [
-        [InlineKeyboardButton("🔄 Hitung Nominal Lain", callback_data="calc_again")],
-        [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
+        [InlineKeyboardButton("Hitung Nominal Lain", callback_data="calc_again", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305"))],
+        [InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
@@ -169,7 +170,7 @@ async def cancel_calculator(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(
             text="❌ Sesi kalkulator dibatalkan.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
             ]])
         )
     return ConversationHandler.END

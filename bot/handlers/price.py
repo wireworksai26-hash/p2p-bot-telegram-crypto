@@ -164,7 +164,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         keyboard = [
             [InlineKeyboardButton("Price List Fee Lengkap", callback_data="price_fee_list", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
-            [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
 
@@ -184,7 +184,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"Error di show_prices: {e}", exc_info=True)
         fallback_msg = "⚠️ Terjadi kesalahan saat mengambil harga crypto saat ini. Silakan coba sesaat lagi."
         keyboard = [
-            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         if query:
@@ -204,8 +204,8 @@ async def show_fee_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("💵 Cek Harga Crypto Terupdate", callback_data="menu_price")],
-        [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
+        [InlineKeyboardButton("Cek Harga Crypto Terupdate", callback_data="menu_price", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("DOLLAR", "5309929258443874898"))],
+        [InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
 
