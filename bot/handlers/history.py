@@ -12,6 +12,17 @@ from database.connection import SessionLocal
 from database.crud import get_orders_by_user
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_idr, format_crypto, format_datetime
+from bot.utils.emojis import (
+    E_HISTORY,
+    E_CART,
+    E_DOLLAR,
+    E_COIN,
+    E_CARD,
+    E_CHECK,
+    E_CROSS,
+    E_WARN,
+    E_CALENDAR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +53,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         orders = get_orders_by_user(db, telegram_id=user_id, limit=10)
         
         text_lines = [
-            "📜 <b>RIWAYAT TRANSAKSI ANDA</b>\n",
+            f"{E_HISTORY()} <b>RIWAYAT TRANSAKSI ANDA</b>\n",
             "<i>Menampilkan maksimal 10 transaksi terakhir:</i>\n",
         ]
         
@@ -50,7 +61,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text_lines.append("<i>Anda belum pernah melakukan transaksi di bot ini.</i>")
         else:
             for idx, order in enumerate(orders, 1):
-                order_type_str = "🛒 BELI" if order.order_type == "buy" else "💵 JUAL"
+                order_type_str = f"{E_CART()} BELI" if order.order_type == "buy" else f"{E_DOLLAR()} JUAL"
                 status_str = STATUS_EMOJIS.get(order.status.lower(), order.status.upper())
                 
                 # Format crypto amount
@@ -61,10 +72,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 
                 text_lines.append(
                     f"{idx}. <b>{order_type_str} | {order.order_id}</b>\n"
-                    f"   🪙 Aset: <code>{crypto_str} ({order.network})</code>\n"
-                    f"   💳 Total: <code>{format_idr(order.total_idr)}</code>\n"
+                    f"   {E_COIN()} Aset: <code>{crypto_str} ({order.network})</code>\n"
+                    f"   {E_CARD()} Total: <code>{format_idr(order.total_idr)}</code>\n"
                     f"   🚦 Status: <b>{status_str}</b>\n"
-                    f"   📅 Waktu: <i>{date_str}</i>\n"
+                    f"   {E_CALENDAR()} Waktu: <i>{date_str}</i>\n"
                 )
                 
         message_text = "\n".join(text_lines)

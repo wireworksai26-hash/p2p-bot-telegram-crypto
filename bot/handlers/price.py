@@ -26,6 +26,8 @@ from bot.utils.emojis import (
     E_WARN,
     E_CALENDAR,
     E_SPARKLES,
+    CUSTOM_EMOJI_IDS,
+    get_coin_emoji,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,7 +151,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 sell_price = "-"
 
             text_lines.append(
-                f"{emoji} <b>{display_label}</b>\n"
+                f"{get_coin_emoji(symbol)} <b>{display_label}</b>\n"
                 f"{E_CART()} Beli: <code>{buy_price}</code>\n"
                 f"{E_DOLLAR()} Jual: <code>{sell_price}</code>\n"
             )
@@ -161,7 +163,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         message_text = "\n".join(text_lines)
 
         keyboard = [
-            [InlineKeyboardButton("📋 Price List Fee Lengkap", callback_data="price_fee_list")],
+            [InlineKeyboardButton("Price List Fee Lengkap", callback_data="price_fee_list", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
             [InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="menu_back")],
             [get_owner_button()]
         ]

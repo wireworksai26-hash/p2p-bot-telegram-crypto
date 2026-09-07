@@ -16,6 +16,8 @@ from database.crud import get_all_wallet_balances
 from services.price_service import price_service
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_datetime
+from bot.utils.emojis import E_BOX, get_coin_emoji
+
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +169,7 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 logger.warning(f"On-demand stock sync error: {sync_err}")
 
         text_lines = [
-            "📦 <b>STOK CRYPTO TERSEDIA</b>\n",
+            f"{E_BOX()} <b>STOK CRYPTO TERSEDIA</b>\n",
             "<i>Saldo koin di hot wallet kami yang siap dikirim secara instan:</i>\n",
         ]
 
@@ -187,7 +189,7 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
             for sym in all_symbols:
                 wallets = grouped[sym]
-                header_emoji = COIN_HEADER_EMOJIS.get(sym, "🪙")
+                header_emoji = get_coin_emoji(sym)
                 full_name = COIN_FULL_NAMES.get(sym, sym)
                 usd_price = usd_prices.get(sym, 0.0)
 

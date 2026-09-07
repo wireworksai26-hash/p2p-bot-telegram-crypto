@@ -6,6 +6,7 @@ Menyediakan inline keyboard untuk memilih aset cryptocurrency.
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.keyboards.main_menu import get_owner_button
+from bot.utils.emojis import get_coin_emoji_id, get_network_emoji_id
 
 # Mapping simbol ke daftar network yang tersedia untuk Beli/Jual Crypto
 BUY_NETWORKS_BY_SYMBOL = {
@@ -26,21 +27,20 @@ BUY_NETWORKS_BY_SYMBOL = {
     "HYPE": ["HYPEREVM"],
 }
 
-SYMBOL_EMOJIS = {
-    "USDT": "🟢", "USDC": "🔵", "ETH": "🔷", "SOL": "🟣",
-    "TRX": "❤️", "BNB": "🟡", "SUI": "💧", "TON": "💎",
-    "POL": "🟪", "ARB": "💎", "AVAX": "🔴", "KAIA": "🌱",
-    "BERA": "🐻", "APT": "⚡", "HYPE": "🚀"
-}
-
 
 def _get_symbol_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     """Keyboard pilih simbol untuk alur beli (buy_sym_*) atau jual (sell_sym_*)."""
     keyboard = []
     row = []
     for sym in BUY_NETWORKS_BY_SYMBOL:
-        emoji = SYMBOL_EMOJIS.get(sym, "🪙")
-        row.append(InlineKeyboardButton(f"{emoji} {sym}", callback_data=f"{prefix}_sym_{sym}"))
+        emoji_id = get_coin_emoji_id(sym)
+        row.append(
+            InlineKeyboardButton(
+                text=sym,
+                callback_data=f"{prefix}_sym_{sym}",
+                icon_custom_emoji_id=emoji_id
+            )
+        )
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -57,10 +57,20 @@ def _get_network_keyboard(symbol: str, prefix: str, back_callback: str) -> Inlin
     symbol = symbol.upper()
     networks = BUY_NETWORKS_BY_SYMBOL.get(symbol, ["BSC"])
 
-    keyboard = [[InlineKeyboardButton(f"🌐 {net}", callback_data=f"{prefix}_net_{symbol}_{net}")] for net in networks]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=net,
+                callback_data=f"{prefix}_net_{symbol}_{net}",
+                icon_custom_emoji_id=get_network_emoji_id(net)
+            )
+        ]
+        for net in networks
+    ]
     keyboard.append([InlineKeyboardButton("🔙 Kembali (Pilih Koin)", callback_data=back_callback)])
     keyboard.append([get_owner_button()])
     return InlineKeyboardMarkup(keyboard)
+
 
 
 def get_buy_symbol_keyboard() -> InlineKeyboardMarkup:

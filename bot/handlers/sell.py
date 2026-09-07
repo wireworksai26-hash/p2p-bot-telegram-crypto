@@ -35,6 +35,7 @@ from bot.utils.validator import validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_SELL
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
+from bot.utils.emojis import E_CHART, E_COIN, E_DOLLAR, E_MONEY, E_CHECK, E_WARN
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await safe_edit_message(
         query,
         text=(
-            "📈 <b>JUAL CRYPTOCURRENCY</b>\n\n"
+            f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
             "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
             "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
@@ -96,7 +97,7 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Entry point alur Jual dari ketik command /sell."""
     await update.message.reply_text(
         text=(
-            "📈 <b>JUAL CRYPTOCURRENCY</b>\n\n"
+            f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
             "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
             "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
@@ -118,7 +119,7 @@ async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_
     await safe_edit_message(
         query,
         text=(
-            f"📈 Anda memilih menjual koin: <b>{symbol}</b>\n\n"
+            f"{E_CHART()} Anda memilih menjual koin: <b>{symbol}</b>\n\n"
             f"Silakan pilih jaringan (network) asal koin yang ingin Anda jual:"
         ),
         reply_markup=get_sell_network_keyboard(symbol),

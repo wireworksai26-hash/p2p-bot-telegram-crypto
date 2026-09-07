@@ -90,7 +90,7 @@ async def start_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(
         text=(
-            "🛒 <b>BELI CRYPTOCURRENCY</b>\n\n"
+            f"{E_CART()} <b>BELI CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih aset koin crypto yang ingin Anda beli di bawah ini:"
         ),
         reply_markup=get_buy_symbol_keyboard(),
@@ -105,7 +105,7 @@ async def start_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     await update.message.reply_text(
         text=(
-            "🛒 <b>BELI CRYPTOCURRENCY</b>\n\n"
+            f"{E_CART()} <b>BELI CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih aset koin crypto yang ingin Anda beli di bawah ini:"
         ),
         reply_markup=get_buy_symbol_keyboard(),
@@ -127,7 +127,7 @@ async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_
     
     await query.edit_message_text(
         text=(
-            f"🛒 Anda memilih koin: <b>{symbol}</b>\n\n"
+            f"{E_CART()} Anda memilih koin: <b>{symbol}</b>\n\n"
             f"Silakan pilih jaringan (network) yang ingin Anda gunakan:"
         ),
         reply_markup=get_buy_network_keyboard(symbol),

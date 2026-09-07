@@ -58,11 +58,49 @@ DEFAULT_EMOJI_IDS = {
 
     # --- Effects & Flair ---
     "FIRE":       "5312241539987020022",  # 🔥 (Forum — animated fire)
-    "ROCKET":     "5312016608254762256",  # ⚡️ (Forum — animated lightning/rocket)
+    "ROCKET":     "5203966320692969547",  # 🚀 (Emoji666D — animated rocket)
     "DIAMOND":    "5309958691854754293",  # 💎 (Forum — animated diamond)
     "SPARKLES":   "5472164874886846699",  # ✨ (RestrictedEmoji — animated sparkles)
     "STAR":       "5235579393115438657",  # ⭐️ (Forum — animated star)
     "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
+
+    # --- Crypto Coins (3D Animated Custom Emojis) ---
+    "COIN_USDT":  "5978561005351865286",  # 🟢 3D Green Sphere
+    "COIN_USDC":  "5341683880103527632",  # 🔵 3D Blue Sphere
+    "COIN_ETH":   "5309958691854754293",  # 🔷 3D Diamond / Ethereum
+    "COIN_SOL":   "5341580002024503875",  # 🟣 3D Purple Sphere
+    "COIN_TRX":   "5967750804596067258",  # ❤️ 3D Red Heart
+    "COIN_BNB":   "5976277053413003198",  # 🟡 3D Gold Sphere
+    "COIN_SUI":   "5979034860503698472",  # 💧 3D Aqua Crystal
+    "COIN_TON":   "5462902520215002477",  # 💎 3D Ton Diamond
+    "COIN_POL":   "5204196780048137722",  # 🟪 3D Purple Cube
+    "COIN_MATIC": "5204196780048137722",  # 🟪 3D Purple Cube
+    "COIN_ARB":   "5309958691854754293",  # 💎 3D Crystal
+    "COIN_AVAX":  "5204321862380698787",  # 🔴 3D Red Sphere
+    "COIN_KAIA":  "5474417568053745249",  # 🌱 3D Sprout
+    "COIN_BERA":  "5379815450160943570",  # 🐻 3D Animated Bear
+    "COIN_APT":   "5312016608254762256",  # ⚡ 3D Lightning
+    "COIN_HYPE":  "5203966320692969547",  # 🚀 3D Rocket
+    "COIN_G":     "5979034860503698472",  # 🌌 3D Crystal
+    "COIN_BASE":  "5341683880103527632",  # 🔵 3D Blue Sphere
+
+    # --- Network Identifiers (3D Animated) ---
+    "NET_BSC":        "5976277053413003198",
+    "NET_POLYGON":    "5204196780048137722",
+    "NET_ARB":        "5309958691854754293",
+    "NET_TON":        "5462902520215002477",
+    "NET_SOLANA":     "5341580002024503875",
+    "NET_ETH":        "5309958691854754293",
+    "NET_BASE":       "5341683880103527632",
+    "NET_OPTIMISM":   "5204321862380698787",
+    "NET_ROBINHOOD":  "5978561005351865286",
+    "NET_TRON":       "5967750804596067258",
+    "NET_SUI":        "5979034860503698472",
+    "NET_AVAX":       "5204321862380698787",
+    "NET_KAIA":       "5474417568053745249",
+    "NET_BERA":       "5379815450160943570",
+    "NET_APTOS":      "5312016608254762256",
+    "NET_HYPEREVM":   "5203966320692969547",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -88,11 +126,49 @@ DEFAULT_EMOJI_ALTS = {
     "CHAT": "💬",
     "HISTORY": "📝",
     "FIRE": "🔥",
-    "ROCKET": "⚡️",
+    "ROCKET": "🚀",
     "DIAMOND": "💎",
     "SPARKLES": "✨",
     "STAR": "⭐️",
     "PARTY": "🎉",
+
+    # Coins
+    "COIN_USDT": "🟢",
+    "COIN_USDC": "🔵",
+    "COIN_ETH":  "🔷",
+    "COIN_SOL":  "🟣",
+    "COIN_TRX":  "❤️",
+    "COIN_BNB":  "🟡",
+    "COIN_SUI":  "💧",
+    "COIN_TON":  "💎",
+    "COIN_POL":  "🟪",
+    "COIN_MATIC": "🟪",
+    "COIN_ARB":  "💎",
+    "COIN_AVAX": "🔴",
+    "COIN_KAIA": "🌱",
+    "COIN_BERA": "🐻",
+    "COIN_APT":  "⚡",
+    "COIN_HYPE": "🚀",
+    "COIN_G":    "🌌",
+    "COIN_BASE": "🔵",
+
+    # Networks
+    "NET_BSC":        "🟡",
+    "NET_POLYGON":    "🟪",
+    "NET_ARB":        "💎",
+    "NET_TON":        "💎",
+    "NET_SOLANA":     "🟣",
+    "NET_ETH":        "🔷",
+    "NET_BASE":       "🔵",
+    "NET_OPTIMISM":   "🔴",
+    "NET_ROBINHOOD":  "🟢",
+    "NET_TRON":       "❤️",
+    "NET_SUI":        "💧",
+    "NET_AVAX":       "🔴",
+    "NET_KAIA":       "🌱",
+    "NET_BERA":       "🐻",
+    "NET_APTOS":      "⚡",
+    "NET_HYPEREVM":   "🚀",
 }
 
 # In-memory working copies
@@ -275,9 +351,50 @@ E_WARN = lambda: tg_emoji("WARNING", "⚠️")
 E_PHONE = lambda: tg_emoji("PHONE", "📱")
 E_CHAT = lambda: tg_emoji("CHAT", "💬")
 E_HISTORY = lambda: tg_emoji("HISTORY", "📝")
-E_ROCKET = lambda: tg_emoji("ROCKET", "⚡️")
+E_ROCKET = lambda: tg_emoji("ROCKET", "🚀")
 E_DIAMOND = lambda: tg_emoji("DIAMOND", "💎")
 E_SPARKLES = lambda: tg_emoji("SPARKLES", "✨")
 E_FIRE = lambda: tg_emoji("FIRE", "🔥")
 E_STAR = lambda: tg_emoji("STAR", "⭐️")
 E_PARTY = lambda: tg_emoji("PARTY", "🎉")
+
+# Shortcut per koin crypto
+E_COIN_USDT = lambda: tg_emoji("COIN_USDT", "🟢")
+E_COIN_USDC = lambda: tg_emoji("COIN_USDC", "🔵")
+E_COIN_ETH  = lambda: tg_emoji("COIN_ETH", "🔷")
+E_COIN_SOL  = lambda: tg_emoji("COIN_SOL", "🟣")
+E_COIN_TRX  = lambda: tg_emoji("COIN_TRX", "❤️")
+E_COIN_BNB  = lambda: tg_emoji("COIN_BNB", "🟡")
+E_COIN_SUI  = lambda: tg_emoji("COIN_SUI", "💧")
+E_COIN_TON  = lambda: tg_emoji("COIN_TON", "💎")
+E_COIN_POL  = lambda: tg_emoji("COIN_POL", "🟪")
+E_COIN_ARB  = lambda: tg_emoji("COIN_ARB", "💎")
+E_COIN_AVAX = lambda: tg_emoji("COIN_AVAX", "🔴")
+E_COIN_KAIA = lambda: tg_emoji("COIN_KAIA", "🌱")
+E_COIN_BERA = lambda: tg_emoji("COIN_BERA", "🐻")
+E_COIN_APT  = lambda: tg_emoji("COIN_APT", "⚡")
+E_COIN_HYPE = lambda: tg_emoji("COIN_HYPE", "🚀")
+
+
+def get_coin_emoji(symbol: str) -> str:
+    """Mengembalikan tag custom emoji untuk koin crypto tertentu."""
+    sym = symbol.upper().strip()
+    key = f"COIN_{sym}"
+    if key in CUSTOM_EMOJI_IDS:
+        return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "🪙"))
+    return tg_emoji("COIN", "🪙")
+
+
+def get_coin_emoji_id(symbol: str) -> str | None:
+    """Mengembalikan custom_emoji_id string untuk tombol Telegram."""
+    sym = symbol.upper().strip()
+    key = f"COIN_{sym}"
+    return CUSTOM_EMOJI_IDS.get(key)
+
+
+def get_network_emoji_id(network: str) -> str | None:
+    """Mengembalikan custom_emoji_id string untuk tombol network Telegram."""
+    net = network.upper().strip()
+    key = f"NET_{net}"
+    return CUSTOM_EMOJI_IDS.get(key)
+

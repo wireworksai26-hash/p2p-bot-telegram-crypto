@@ -31,6 +31,17 @@ from services.detector import deposit_detector
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto
 from bot.utils.telegram_utils import notify_admins
+from bot.utils.emojis import (
+    E_SWAP,
+    E_CHECK,
+    E_CROSS,
+    E_WARN,
+    E_COIN,
+    E_DOLLAR,
+    E_MONEY,
+    get_coin_emoji_id,
+    get_network_emoji_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +53,7 @@ SUPPORTED_ASSETS = ["USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "SUI", "TON", "M
 NETWORKS_BY_SYMBOL = {
     "USDT": ["BSC", "POLYGON", "ARB", "TON", "SOLANA", "ETH"],
     "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON"],
-    "ETH": ["BASE", "ARB", "OPTIMISM", "ETH", "ROBINHOOD"],
+    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH"],
     "SOL": ["SOLANA"],
     "BNB": ["BSC"],
     "TRX": ["TRON"],
@@ -67,7 +78,13 @@ async def start_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     row = []
     for i, symbol in enumerate(SUPPORTED_ASSETS, 1):
-        row.append(InlineKeyboardButton(f"🪙 {symbol}", callback_data=f"swap_src_sym_{symbol}"))
+        row.append(
+            InlineKeyboardButton(
+                text=symbol,
+                callback_data=f"swap_src_sym_{symbol}",
+                icon_custom_emoji_id=get_coin_emoji_id(symbol)
+            )
+        )
         if i % 3 == 0:
             keyboard.append(row)
             row = []
@@ -75,7 +92,7 @@ async def start_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
 
-    text = "🔄 <b>[TUKAR ANTAR JARINGAN / OTC CONVERT]</b>\n\nSilakan pilih <b>Koin Asal</b> yang ingin kamu kirim:"
+    text = f"{E_SWAP()} <b>[TUKAR ANTAR JARINGAN / OTC CONVERT]</b>\n\nSilakan pilih <b>Koin Asal</b> yang ingin kamu kirim:"
     
     if query:
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -93,7 +110,16 @@ async def select_src_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_src_symbol"] = symbol
 
     networks = NETWORKS_BY_SYMBOL.get(symbol, ["BSC"])
-    keyboard = [[InlineKeyboardButton(f"🌐 {net}", callback_data=f"swap_src_net_{net}")] for net in networks]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=net,
+                callback_data=f"swap_src_net_{net}",
+                icon_custom_emoji_id=get_network_emoji_id(net)
+            )
+        ]
+        for net in networks
+    ]
     keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
 
     await query.edit_message_text(
@@ -116,7 +142,13 @@ async def select_src_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, symbol in enumerate(SUPPORTED_ASSETS, 1):
         if symbol == context.user_data.get("swap_src_symbol"):
             continue # Bisa koin sama beda jaringan atau koin beda
-        row.append(InlineKeyboardButton(f"🎯 {symbol}", callback_data=f"swap_tgt_sym_{symbol}"))
+        row.append(
+            InlineKeyboardButton(
+                text=symbol,
+                callback_data=f"swap_tgt_sym_{symbol}",
+                icon_custom_emoji_id=get_coin_emoji_id(symbol)
+            )
+        )
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -140,7 +172,16 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_tgt_symbol"] = symbol
 
     networks = NETWORKS_BY_SYMBOL.get(symbol, ["BSC"])
-    keyboard = [[InlineKeyboardButton(f"🌐 {net}", callback_data=f"swap_tgt_net_{net}")] for net in networks]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=net,
+                callback_data=f"swap_tgt_net_{net}",
+                icon_custom_emoji_id=get_network_emoji_id(net)
+            )
+        ]
+        for net in networks
+    ]
     keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="cancel_swap")])
 
     await query.edit_message_text(
