@@ -1,21 +1,40 @@
 """
 bot/utils/messages.py — Template Pesan untuk P2P Crypto Bot.
 ============================================================
-Definisi teks pesan dalam Bahasa Indonesia dengan formatting HTML.
+Definisi teks pesan dalam Bahasa Indonesia dengan formatting HTML dan Custom Animated Emojis.
 """
 
+from bot.utils.emojis import (
+    E_WAVE,
+    E_ROCKET,
+    E_ID,
+    E_CROWN,
+    E_USER,
+    E_CHECK,
+    E_WARN,
+    E_CART,
+    E_HISTORY,
+    E_COIN,
+    E_CHART,
+    E_CARD,
+    E_MONEY,
+    E_DOLLAR,
+    E_CALENDAR,
+    E_SPARKLES,
+)
+
 WELCOME_MESSAGE = (
-    "👋 <b>Halo {name}!</b>\n\n"
-    "Selamat datang di <b>HSN STORE bot</b> — P2P Crypto Trading Automation. 🚀\n\n"
-    "🆔 <b>ID Telegram:</b> <code>{chat_id}</code>\n"
-    "🏆 <b>Member Ke:</b> #{user_num}\n"
-    "👥 <b>Total Pengguna:</b> {total_users} member\n"
-    "✅ <b>Total Transaksi Berhasil:</b> {total_success}\n\n"
-    "Silakan pilih menu di bawah ini untuk memulai transaksi:"
+    f"{E_WAVE()} <b>Halo {{name}}!</b>\n\n"
+    f"Selamat datang di <b>HSN STORE bot</b> — P2P Crypto Trading Automation. {E_ROCKET()}\n\n"
+    f"{E_ID()} <b>ID Telegram:</b> <code>{{chat_id}}</code>\n"
+    f"{E_CROWN()} <b>Member Ke:</b> #{{user_num}}\n"
+    f"{E_USER()} <b>Total Pengguna:</b> {{total_users}} member\n"
+    f"{E_CHECK()} <b>Total Transaksi Berhasil:</b> {{total_success}}\n\n"
+    f"Silakan pilih menu di bawah ini untuk memulai transaksi:"
 )
 
 SNK_TEXT = (
-    "⚠️ <b>SYARAT & KETENTUAN (S&K)</b>\n\n"
+    f"{E_WARN()} <b>SYARAT & KETENTUAN (S&K)</b>\n\n"
     "1. Bot ini beroperasi secara otomatis 24/7 untuk transaksi instan.\n"
     "2. Minimal pembelian/penjualan adalah <b>Rp 5.000</b>.\n"
     "3. Biaya transaksi (fee) dihitung secara fixed tier transparan sesuai nominal transaksi.\n"
@@ -27,25 +46,25 @@ SNK_TEXT = (
 )
 
 ORDER_SUMMARY_BUY = (
-    "🛒 <b>RINGKASAN ORDER PEMBELIAN</b>\n\n"
-    "📝 <b>ID Order:</b> <code>{order_id}</code>\n"
-    "🪙 <b>Aset:</b> {crypto_amount_str}\n"
-    "📈 <b>Kurs:</b> {price_per_unit_str} / unit\n"
+    f"{E_CART()} <b>RINGKASAN ORDER PEMBELIAN</b>\n\n"
+    f"{E_HISTORY()} <b>ID Order:</b> <code>{{order_id}}</code>\n"
+    f"{E_COIN()} <b>Aset:</b> {{crypto_amount_str}}\n"
+    f"{E_CHART()} <b>Kurs:</b> {{price_per_unit_str}} / unit\n"
     "────────────────────\n"
-    "💳 <b>Nominal Bayar:</b> {nominal_idr_str}\n"
+    f"{E_CARD()} <b>Nominal Bayar:</b> {{nominal_idr_str}}\n"
     "🔌 <b>Fee Layanan (dipotong):</b> -{fee_idr_str}\n"
-    "💰 <b>Nilai Koin Diterima:</b> <b>{received_idr_str}</b>\n\n"
+    f"{E_MONEY()} <b>Nilai Koin Diterima:</b> <b>{{received_idr_str}}</b>\n\n"
     "📍 <b>Wallet Penerima:</b>\n<code>{buyer_wallet}</code>\n\n"
     "Silakan klik tombol konfirmasi di bawah jika data sudah benar."
 )
 
 ORDER_SUMMARY_SELL = (
-    "📈 <b>RINGKASAN ORDER PENJUALAN</b>\n\n"
-    "📝 <b>ID Order:</b> <code>{order_id}</code>\n"
-    "🪙 <b>Kirim Aset:</b> {crypto_amount_str}\n"
-    "📈 <b>Kurs:</b> {price_per_unit_str} / unit\n"
+    f"{E_CHART()} <b>RINGKASAN ORDER PENJUALAN</b>\n\n"
+    f"{E_HISTORY()} <b>ID Order:</b> <code>{{order_id}}</code>\n"
+    f"{E_COIN()} <b>Kirim Aset:</b> {{crypto_amount_str}}\n"
+    f"{E_CHART()} <b>Kurs:</b> {{price_per_unit_str}} / unit\n"
     "────────────────────\n"
-    "💰 <b>Nominal Bersih (IDR):</b> <b>{nominal_idr_str}</b>\n"
+    f"{E_MONEY()} <b>Nominal Bersih (IDR):</b> <b>{{nominal_idr_str}}</b>\n"
     "🔌 <b>Fee Layanan:</b> {fee_idr_str}\n\n"
     "🏦 <b>Rekening / E-Wallet Penerima Anda:</b>\n"
     "• Bank / E-Wallet: {bank_name}\n"
@@ -96,15 +115,15 @@ def build_sell_completion_message(order) -> str:
     network = html.escape(str(order.network or ""))
 
     return (
-        f"💸 <b>TRANSFER RUPIAH TELAH BERHASIL!</b>\n\n"
+        f"{E_DOLLAR()} <b>TRANSFER RUPIAH TELAH BERHASIL!</b>\n\n"
         f"Halo! Uang pembayaran hasil penjualan crypto Anda telah berhasil dikirimkan ke rekening tujuan:\n\n"
-        f"📝 <b>Detail Pesanan:</b>\n"
+        f"{E_HISTORY()} <b>Detail Pesanan:</b>\n"
         f"• <b>ID Order:</b> <code>{order_id}</code>\n"
         f"• <b>Koin Terjual:</b> <b>{crypto_str}</b> ({network})\n"
         f"• <b>Total Uang Diterima:</b> <b>{nominal_str}</b>\n\n"
         f"🏦 <b>Rekening Tujuan:</b>\n"
         f"{bank_info_str}\n\n"
-        f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
+        f"{E_CHECK()} <b>Status: SELESAI / COMPLETED</b>\n\n"
         f"<i>Uang telah berhasil ditransfer ke rekeningmu. Silakan periksa saldo atau mutasi rekening Anda. Terima kasih telah bertransaksi!</i> 🙏"
     )
 
@@ -122,12 +141,13 @@ def build_buy_completion_message(order) -> str:
     wallet = html.escape(str(order.buyer_wallet or ""))
 
     return (
-        f"✅ <b>PENGIRIMAN CRYPTO BERHASIL!</b>\n\n"
+        f"{E_CHECK()} <b>PENGIRIMAN CRYPTO BERHASIL!</b>\n\n"
         f"Pesanan <code>{order_id}</code> telah selesai diproses oleh admin.\n\n"
-        f"📝 <b>Detail Pesanan:</b>\n"
+        f"{E_HISTORY()} <b>Detail Pesanan:</b>\n"
         f"• <b>Koin Dikirim:</b> <b>{crypto_str}</b> ({network})\n"
         f"• <b>Nominal:</b> <b>{nominal_str}</b>\n"
         f"• <b>Alamat Wallet:</b> <code>{wallet}</code>\n\n"
-        f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
+        f"{E_CHECK()} <b>Status: SELESAI / COMPLETED</b>\n\n"
         f"<i>Koin crypto telah berhasil dikirimkan ke wallet Anda. Terima kasih telah bertransaksi!</i> 🙏"
     )
+

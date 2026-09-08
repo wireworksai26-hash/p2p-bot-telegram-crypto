@@ -52,6 +52,7 @@ from bot.keyboards.crypto_select import (
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr, validate_wallet_address
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
+from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
 from bot.utils.emojis import (
     E_CARD,
