@@ -35,12 +35,22 @@ logger = logging.getLogger(__name__)
 def create_user(db: Session, telegram_id: int, username: str = None, full_name: str = None) -> User:
     """
     Buat user baru atau return user yang sudah ada.
-    Kalau user dengan telegram_id sudah exist, langsung return yang existing.
+    Kalau user dengan telegram_id sudah exist, update profilnya jika ada perubahan dan return existing.
     """
     try:
         # Cek apakah user sudah ada
         existing = db.query(User).filter(User.telegram_id == telegram_id).first()
         if existing:
+            updated = False
+            if username and existing.username != username:
+                existing.username = username
+                updated = True
+            if full_name and existing.full_name != full_name:
+                existing.full_name = full_name
+                updated = True
+            if updated:
+                db.commit()
+                db.refresh(existing)
             logger.info(f"User {telegram_id} sudah terdaftar, return existing.")
             return existing
 
@@ -60,6 +70,7 @@ def create_user(db: Session, telegram_id: int, username: str = None, full_name: 
         db.rollback()
         logger.error(f"Gagal create user {telegram_id}: {e}")
         raise
+
 
 
 def get_user(db: Session, telegram_id: int) -> Optional[User]:

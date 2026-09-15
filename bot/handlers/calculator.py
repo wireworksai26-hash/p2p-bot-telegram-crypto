@@ -187,10 +187,16 @@ calculator_conversation_handler = ConversationHandler(
         WAITING_NOMINAL: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, process_nominal),
             CallbackQueryHandler(cancel_calculator, pattern="^calc_cancel$"),
+            CallbackQueryHandler(cancel_calculator, pattern="^menu_back$"),
         ]
     },
     fallbacks=[
         CallbackQueryHandler(cancel_calculator, pattern="^calc_cancel$"),
-        CommandHandler("cancel", cancel_calculator) # Support fallback manual command /cancel
-    ]
+        CallbackQueryHandler(cancel_calculator, pattern="^menu_back$"),
+        CallbackQueryHandler(cancel_calculator, pattern="^(menu_buy|menu_sell|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
+        CommandHandler("cancel", cancel_calculator),
+        CommandHandler("start", cancel_calculator),
+    ],
+    allow_reentry=True
 )
+

@@ -88,7 +88,8 @@ def init_database():
     logger.info("Creating database tables (if not exist)...")
     Base.metadata.create_all(bind=engine)
 
-    # Migrasi schema (SQLite): wallet_balances & orders
+    # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders
+    _migrate_users_schema()
     _migrate_wallet_balance_schema()
     _migrate_inventory_schema()
     _migrate_orders_schema()
@@ -107,12 +108,40 @@ def init_database():
         db.close()
 
 
+def _migrate_users_schema():
+    """
+    Migrasi tabel users: tambah kolom is_banned, total_orders, total_spent_idr,
+    dan balance_idr jika belum ada (kompatibel SQLite & PostgreSQL).
+    """
+    from sqlalchemy import inspect
+    from database.connection import engine
+    try:
+        inspector = inspect(engine)
+        table_names = inspector.get_table_names()
+        if "users" in table_names:
+            existing_cols = {c["name"] for c in inspector.get_columns("users")}
+            new_cols = [
+                ("is_banned", "BOOLEAN DEFAULT FALSE"),
+                ("total_orders", "INTEGER DEFAULT 0"),
+                ("total_spent_idr", "BIGINT DEFAULT 0"),
+                ("balance_idr", "NUMERIC(15, 2) DEFAULT 0.0"),
+            ]
+            with engine.begin() as conn:
+                for col, dtype in new_cols:
+                    if col not in existing_cols:
+                        conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
+                        logger.info("Migrasi users: kolom %s ditambahkan.", col)
+    except Exception as exc:
+        logger.error("Migrasi users gagal: %s", exc, exc_info=True)
+
+
 def _migrate_orders_schema():
     """
     Migrasi tabel orders & topup_orders: tambah kolom payment_method & unique_code
     jika belum ada (kompatibel SQLite & PostgreSQL).
     """
     from sqlalchemy import inspect
+
     from database.connection import engine
     try:
         inspector = inspect(engine)

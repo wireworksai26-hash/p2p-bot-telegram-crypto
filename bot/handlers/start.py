@@ -121,15 +121,56 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
+def reset_user_conversations(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bersihkan state percakapan aktif user di semua ConversationHandler & user_data."""
+    if context and hasattr(context, "user_data") and context.user_data is not None:
+        context.user_data.clear()
+
+    user = update.effective_user if update else None
+    chat = update.effective_chat if update else None
+    if not user:
+        return
+
+    try:
+        from bot.handlers.buy import buy_conversation_handler
+        from bot.handlers.sell import sell_conversation_handler
+        from bot.handlers.swap import swap_conv_handler
+        from bot.handlers.balance import topup_conversation_handler
+        from bot.handlers.calculator import calculator_conversation_handler
+
+        handlers = [
+            buy_conversation_handler,
+            sell_conversation_handler,
+            swap_conv_handler,
+            topup_conversation_handler,
+            calculator_conversation_handler,
+        ]
+
+        u_id = user.id
+        c_id = chat.id if chat else u_id
+        keys_to_remove = [(c_id, u_id), (u_id,), (u_id, u_id), (c_id,)]
+
+        for handler in handlers:
+            if hasattr(handler, "_conversations") and isinstance(handler._conversations, dict):
+                for k in keys_to_remove:
+                    handler._conversations.pop(k, None)
+    except Exception as exc:
+        logger.debug("Debug reset conversations: %s", exc)
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handler untuk command /start.
-    Mendaftarkan user ke database jika baru, kemudian mengirim welcome message.
+    Mendaftarkan user ke database jika baru, mereset state percakapan lama,
+    kemudian mengirim welcome message & dashboard menu.
     """
     try:
         user = update.effective_user
         
-        # Daftarkan user terlebih dahulu
+        # Reset state percakapan lama jika user pernah stuck di flow sebelumnya
+        reset_user_conversations(update, context)
+
+        # Daftarkan / update profil user ke database
         db = SessionLocal()
         try:
             create_user(
@@ -176,13 +217,34 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML"
         )
         
-    elif data in ["menu_back", "buy_cancel", "sell_cancel", "calc_cancel"]:
+    elif data in ["menu_back", "buy_cancel", "sell_cancel", "calc_cancel", "cancel_swap", "cancel_topup"]:
+        reset_user_conversations(update, context)
         await send_main_menu(update, context)
         
     elif data in ["menu_balance", "show_balance"]:
         from bot.handlers.balance import show_balance_menu
         await show_balance_menu(update, context)
         
+    elif data == "menu_buy":
+        from bot.handlers.buy import start_buy_callback
+        await start_buy_callback(update, context)
+
+    elif data == "menu_sell":
+        from bot.handlers.sell import start_sell_callback
+        await start_sell_callback(update, context)
+
+    elif data in ["start_swap", "menu_swap"]:
+        from bot.handlers.swap import start_swap
+        await start_swap(update, context)
+
+    elif data == "start_topup_qris":
+        from bot.handlers.balance import start_topup_callback
+        await start_topup_callback(update, context)
+
+    elif data in ["menu_calc", "calc_again"]:
+        from bot.handlers.calculator import start_calculator_callback
+        await start_calculator_callback(update, context)
+
     elif data.startswith("check_topup_"):
         from bot.handlers.balance import check_topup_payment_manual
         await check_topup_payment_manual(update, context)
@@ -234,7 +296,6 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "show_live_market":
         from bot.handlers.price import show_live_market
         await show_live_market(update, context)
-
         
     elif data == "menu_stocks":
         from bot.handlers.stocks import show_stocks
@@ -246,3 +307,4 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         
     else:
         logger.warning(f"Unhandled callback query: {data}")
+

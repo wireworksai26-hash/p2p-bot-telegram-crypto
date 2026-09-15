@@ -580,36 +580,48 @@ sell_conversation_handler = ConversationHandler(
     states={
         SELECT_SYMBOL: [
             CallbackQueryHandler(handle_symbol_selection, pattern="^sell_sym_[A-Z0-9]+$"),
-            CallbackQueryHandler(cancel_sell, pattern="^menu_back$")
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
         ],
         SELECT_NETWORK: [
             CallbackQueryHandler(handle_network_selection, pattern="^sell_net_[A-Z0-9]+_[A-Z0-9]+$"),
             CallbackQueryHandler(start_sell_callback, pattern="^sell_back_symbols$"),
-            CallbackQueryHandler(cancel_sell, pattern="^menu_back$")
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
         ],
         INPUT_AMOUNT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input),
-            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$")
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],
         INPUT_BANK: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bank_input),
-            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$")
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],
         CONFIRM_ORDER: [
             CallbackQueryHandler(handle_order_confirmation, pattern="^sell_confirm$"),
-            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$")
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],
         WAITING_TX: [
             CallbackQueryHandler(prompt_tx_hash, pattern="^sell_input_tx$"),
-            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$")
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],
         INPUT_TX_HASH: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tx_hash_input),
-            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$")
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ]
     },
     fallbacks=[
         CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
-        CommandHandler("cancel", cancel_sell)
-    ]
+        CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
+        CallbackQueryHandler(cancel_sell, pattern="^(menu_buy|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
+        CommandHandler("cancel", cancel_sell),
+        CommandHandler("start", cancel_sell),
+    ],
+    allow_reentry=True
 )
+

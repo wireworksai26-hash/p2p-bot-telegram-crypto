@@ -965,32 +965,43 @@ buy_conversation_handler = ConversationHandler(
     states={
         SELECT_SYMBOL: [
             CallbackQueryHandler(handle_symbol_selection, pattern="^buy_sym_[A-Z0-9]+$"),
-            CallbackQueryHandler(cancel_buy, pattern="^menu_back$")
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
         ],
         SELECT_NETWORK: [
             CallbackQueryHandler(handle_network_selection, pattern="^buy_net_[A-Z0-9]+_[A-Z0-9]+$"),
             CallbackQueryHandler(start_buy_callback, pattern="^buy_back_symbols$"),
-            CallbackQueryHandler(cancel_buy, pattern="^menu_back$")
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
         ],
         INPUT_AMOUNT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input),
-            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$")
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ],
         INPUT_WALLET: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_input),
-            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$")
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ],
         SELECT_PAYMENT: [
             CallbackQueryHandler(handle_payment_selection, pattern="^paymethod_[A-Z0-9_]+$"),
-            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$")
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ],
         CONFIRM_ORDER: [
             CallbackQueryHandler(handle_order_confirmation, pattern="^buy_confirm$"),
-            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$")
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ]
     },
     fallbacks=[
         CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
-        CommandHandler("cancel", cancel_buy)
-    ]
+        CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
+        CallbackQueryHandler(cancel_buy, pattern="^(menu_sell|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
+        CommandHandler("cancel", cancel_buy),
+        CommandHandler("start", cancel_buy),
+    ],
+    allow_reentry=True
 )
+

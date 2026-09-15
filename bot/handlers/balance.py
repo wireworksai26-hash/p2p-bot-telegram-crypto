@@ -437,18 +437,28 @@ async def cancel_topup_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 topup_conversation_handler = ConversationHandler(
     entry_points=[
-        CallbackQueryHandler(start_topup_callback, pattern="^start_topup_qris$")
+        CallbackQueryHandler(start_topup_callback, pattern="^start_topup_qris$"),
+        CommandHandler("topup", start_topup_callback),
     ],
     states={
         SELECT_TOPUP_NOMINAL: [
-            CallbackQueryHandler(handle_preset_nominal, pattern="^topup_nom_")
+            CallbackQueryHandler(handle_preset_nominal, pattern="^topup_nom_"),
+            CallbackQueryHandler(cancel_topup_flow, pattern="^cancel_topup$"),
+            CallbackQueryHandler(cancel_topup_flow, pattern="^menu_back$"),
         ],
         WAITING_CUSTOM_NOMINAL: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_nominal_input)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_nominal_input),
+            CallbackQueryHandler(cancel_topup_flow, pattern="^cancel_topup$"),
+            CallbackQueryHandler(cancel_topup_flow, pattern="^menu_back$"),
         ]
     },
     fallbacks=[
         CallbackQueryHandler(cancel_topup_flow, pattern="^cancel_topup$"),
-        CommandHandler("cancel", cancel_topup_flow)
-    ]
+        CallbackQueryHandler(cancel_topup_flow, pattern="^menu_back$"),
+        CallbackQueryHandler(cancel_topup_flow, pattern="^(menu_buy|menu_sell|start_swap|menu_price|menu_stocks|menu_history|menu_snk)$"),
+        CommandHandler("cancel", cancel_topup_flow),
+        CommandHandler("start", cancel_topup_flow),
+    ],
+    allow_reentry=True
 )
+

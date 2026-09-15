@@ -19,7 +19,14 @@ import logging
 import re
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import (
+    ContextTypes,
+    ConversationHandler,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
 from config.settings import settings
 from database.connection import SessionLocal
 from database.models import User, Order, AuditLog
@@ -702,22 +709,63 @@ async def cancel_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 swap_conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_swap, pattern="^start_swap$")],
+    entry_points=[
+        CallbackQueryHandler(start_swap, pattern="^start_swap$"),
+        CommandHandler("swap", start_swap),
+        CommandHandler("convert", start_swap),
+    ],
     states={
-        SELECT_SRC_SYMBOL: [CallbackQueryHandler(select_src_symbol, pattern="^swap_src_sym_")],
-        SELECT_SRC_NET: [CallbackQueryHandler(select_src_net, pattern="^swap_src_net_")],
-        SELECT_TGT_SYMBOL: [CallbackQueryHandler(select_tgt_symbol, pattern="^swap_tgt_sym_")],
-        SELECT_TGT_NET: [CallbackQueryHandler(select_tgt_net, pattern="^swap_tgt_net_")],
-        INPUT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_amount)],
-        INPUT_TARGET_ADDR: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_target_addr)],
-        CONFIRM_SWAP: [CallbackQueryHandler(confirm_swap_order, pattern="^confirm_swap_order$")],
+        SELECT_SRC_SYMBOL: [
+            CallbackQueryHandler(select_src_symbol, pattern="^swap_src_sym_"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        SELECT_SRC_NET: [
+            CallbackQueryHandler(select_src_net, pattern="^swap_src_net_"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        SELECT_TGT_SYMBOL: [
+            CallbackQueryHandler(select_tgt_symbol, pattern="^swap_tgt_sym_"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        SELECT_TGT_NET: [
+            CallbackQueryHandler(select_tgt_net, pattern="^swap_tgt_net_"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        INPUT_AMOUNT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, input_amount),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        INPUT_TARGET_ADDR: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, input_target_addr),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        CONFIRM_SWAP: [
+            CallbackQueryHandler(confirm_swap_order, pattern="^confirm_swap_order$"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
         WAITING_DEPOSIT_HASH: [
             CallbackQueryHandler(prompt_input_tx_hash, pattern="^input_swap_tx_"),
-            MessageHandler(filters.TEXT | filters.PHOTO & ~filters.COMMAND, input_deposit_hash),
+            MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, input_deposit_hash),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap_order_"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
         ],
     },
     fallbacks=[
         CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
-        CallbackQueryHandler(cancel_swap, pattern="^cancel_swap_order_")
-    ]
+        CallbackQueryHandler(cancel_swap, pattern="^cancel_swap_order_"),
+        CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        CallbackQueryHandler(cancel_swap, pattern="^(menu_buy|menu_sell|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
+        CommandHandler("cancel", cancel_swap),
+        CommandHandler("start", cancel_swap),
+    ],
+    allow_reentry=True
 )
+
