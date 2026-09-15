@@ -268,12 +268,13 @@ async def _verify_tron(symbol, tx_hash, expected_wallet, expected_amount):
             return _ok(amount, "")
         return _fail(f"Nominal tidak sesuai: {amount} vs {expected_amount}")
 
-    # Native TRX
+    # Native TRX — buka AsyncClient baru karena client sebelumnya sudah ditutup
     try:
-        tx_res = await client.post(
-            f"{TRONGRID_URL}/wallet/gettransactionbyid", json={"value": tx_hash}
-        )
-        txn = tx_res.json()
+        async with httpx.AsyncClient(timeout=10.0) as trx_client:
+            tx_res = await trx_client.post(
+                f"{TRONGRID_URL}/wallet/gettransactionbyid", json={"value": tx_hash}
+            )
+            txn = tx_res.json()
     except Exception as exc:
         return _fail(f"Gagal query TX TRON native: {exc}")
     for c in (txn.get("raw_data") or {}).get("contract") or []:
@@ -334,14 +335,15 @@ async def _verify_ton(symbol, tx_hash, expected_wallet, expected_amount):
 
 
 # ---------------- SUI / APTOS ----------------
-async def _verify_sui(tx_hash):
+async def _verify_sui(tx_hash, expected_wallet="", expected_amount=0.0):
+    """Verifikasi TX SUI. Cek status sukses + penerima via balance_changes."""
     from config.settings import settings
     rpc = settings.SUI_RPC or "https://fullnode.mainnet.sui.io:443"
     payload = {
         "jsonrpc": "2.0", "id": 1, "method": "sui_getTransactionBlock",
         "params": [tx_hash, {
             "showEffects": True, "showInput": False,
-            "showEvents": False, "showObjectChanges": False,
+            "showEvents": False, "showObjectChanges": True,
         }],
     }
     try:
@@ -356,10 +358,26 @@ async def _verify_sui(tx_hash):
     effects = result.get("effects") or {}
     if (effects.get("status") or {}).get("status") != "success":
         return _fail("TX tidak sukses")
-    return _ok(0.0, "")  # best-effort: sukses, tanpa cek penerima/nominal
+
+    # Validasi penerima via objectChanges (best-effort: tidak semua TX punya ini)
+    if expected_wallet:
+        obj_changes = result.get("objectChanges") or []
+        recipient_found = any(
+            (ch.get("recipient") or "") == expected_wallet
+            or (ch.get("owner") or {}).get("AddressOwner", "") == expected_wallet
+            for ch in obj_changes
+        )
+        if obj_changes and not recipient_found:
+            logger.warning(
+                "SUI TX %s: penerima tidak cocok dengan wallet %s (best-effort)",
+                tx_hash, expected_wallet,
+            )
+            # Tetap lanjut karena SUI object model kompleks — log saja untuk audit
+    return _ok(0.0, "")  # Nominal SUI tidak di-parse (butuh coin type check)
 
 
-async def _verify_aptos(tx_hash):
+async def _verify_aptos(tx_hash, expected_wallet="", expected_amount=0.0):
+    """Verifikasi TX Aptos. Cek status sukses + penerima via payload."""
     from config.settings import settings
     rpc = settings.APTOS_RPC or "https://fullnode.mainnet.aptos.labs.com/v1"
     try:
@@ -372,7 +390,26 @@ async def _verify_aptos(tx_hash):
         return _fail(f"APTOS RPC error: {exc}")
     if data.get("success") is not True:
         return _fail("TX tidak sukses")
-    return _ok(0.0, "")  # best-effort
+
+    # Validasi penerima dari payload function arguments (best-effort)
+    if expected_wallet:
+        payload = data.get("payload") or {}
+        args = payload.get("arguments") or []
+        # Format args: [recipient_address, amount_string, ...]
+        if args and isinstance(args[0], str):
+            if args[0].lower() != expected_wallet.lower():
+                return _fail(f"Penerima TX tidak cocok: {args[0]} vs {expected_wallet}")
+        # Validasi nominal (dalam octa = 1e8 untuk APT)
+        if expected_amount > 0 and len(args) > 1:
+            try:
+                sent_octa = int(args[1])
+                sent_apt = sent_octa / 1e8
+                if not _amount_matches(sent_apt, expected_amount):
+                    return _fail(f"Nominal tidak sesuai: {sent_apt} vs {expected_amount}")
+                return _ok(sent_apt, data.get("sender") or "")
+            except (ValueError, TypeError):
+                pass  # format args tidak dikenal — lanjut best-effort
+    return _ok(0.0, data.get("sender") or "")
 
 
 # ---------------- Public API ----------------
@@ -393,9 +430,9 @@ async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amo
         if net == "TON":
             return await _verify_ton(symbol, tx_hash, expected_wallet, expected_amount)
         if net == "SUI":
-            return await _verify_sui(tx_hash)
+            return await _verify_sui(tx_hash, expected_wallet, expected_amount)
         if net == "APTOS":
-            return await _verify_aptos(tx_hash)
+            return await _verify_aptos(tx_hash, expected_wallet, expected_amount)
         return _fail(f"Network {net} tidak didukung verifikasi on-chain")
     except Exception as exc:
         logger.error("verify_deposit error %s/%s: %s", net, symbol, exc, exc_info=True)

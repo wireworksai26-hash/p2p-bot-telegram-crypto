@@ -443,7 +443,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     
     user_id = update.effective_user.id
     
-    # --- 1. Rate Limiting Check (Max 5 orders per 10 minutes) ---
+    # --- 1. Rate Limiting Check (Max 5 orders aktif per 10 menit) ---
     db = SessionLocal()
     try:
         ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
@@ -451,7 +451,9 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             db.query(Order)
             .filter(
                 Order.telegram_id == user_id,
-                Order.created_at >= ten_minutes_ago
+                Order.created_at >= ten_minutes_ago,
+                # [FIX MEDIUM-3] Hitung hanya order yang aktif, bukan yang dibatalkan/expired
+                Order.status.notin_(["cancelled", "expired", "rejected"]),
             )
             .count()
         )
@@ -484,17 +486,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         
         # --- 2. Handle Payment Method ---
         if method_code == "BOT_BALANCE":
-            # Potong saldo IDR user di DB
-            deduct_success = deduct_user_balance(db, user_id, float(total_idr))
-            if not deduct_success:
-                await query.edit_message_text(
-                    text="❌ <b>Saldo Bot Tidak Mencukupi!</b>\n\nSilakan topup saldo bot Anda terlebih dahulu.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
-                    parse_mode="HTML"
-                )
-                return ConversationHandler.END
-
-            # Buat order langsung sukses bayar IDR
+            # [FIX KRITIS-1] Atomic: Buat order DULU, baru potong saldo.
+            # Jika potongan gagal, order dihapus — tidak ada state inconsistency.
             order_data = {
                 "order_id": order_id,
                 "telegram_id": user_id,
@@ -509,12 +502,32 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "buyer_wallet": buyer_wallet,
                 "payment_method": "BOT_BALANCE",
                 "status": "pending",
-                "paid_at": datetime.utcnow(),
                 "quoted_at": datetime.utcnow(),
                 "quote_expires_at": datetime.utcnow() + timedelta(minutes=30)
             }
-
             order = create_order(db, order_data)
+
+            # Potong saldo setelah order terbuat
+            deduct_success = deduct_user_balance(db, user_id, float(total_idr))
+            if not deduct_success:
+                # Rollback: hapus order yang baru dibuat
+                try:
+                    db.delete(order)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                await query.edit_message_text(
+                    text="❌ <b>Saldo Bot Tidak Mencukupi!</b>\n\nSilakan topup saldo bot Anda terlebih dahulu.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+                    parse_mode="HTML"
+                )
+                return ConversationHandler.END
+
+            # Update status order ke paid setelah saldo berhasil dipotong
+            order.status = "pending"
+            order.paid_at = datetime.utcnow()
+            db.commit()
+            db.refresh(order)
 
             # Kirim notifikasi sukses ke user
             received_idr = context.user_data["buy_received_idr"]
@@ -831,11 +844,21 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
 
     order_id = query.data.replace("check_buy_payment_", "")
+    user_id = update.effective_user.id
     db = SessionLocal()
     try:
         order = get_order_by_id(db, order_id)
         if not order:
             await query.answer("❌ Order tidak ditemukan.", show_alert=True)
+            return
+
+        # [SECURITY] Validasi kepemilikan order — tolak jika bukan pemiliknya
+        if order.telegram_id != user_id:
+            logger.warning(
+                "User %s mencoba akses order %s milik user %s — ditolak.",
+                user_id, order_id, order.telegram_id,
+            )
+            await query.answer("❌ Akses ditolak.", show_alert=True)
             return
 
         if order.status != "pending":

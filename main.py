@@ -71,10 +71,21 @@ logger = logging.getLogger(__name__)
 
 # State fallback auto-detect topup via GET /transactions (anti klaim ganda & rate-limit)
 _topup_last_transactions_fetch = 0.0
-_topup_matched_tx_ids = set()
+# [FIX KRITIS-4] Gunakan dict {tx_id: timestamp} bukan set, agar cleanup berbasis waktu
+_topup_matched_tx_ids: dict = {}  # tx_id -> unix timestamp saat dipakai
 
-# State verifikasi massal order Beli via GET /transactions (anti klaim ganda antar order)
-_buy_matched_tx_ids = set()
+# State verifikasi massal order Beli via GET /transactions
+_buy_matched_tx_ids: dict = {}  # tx_id -> unix timestamp saat dipakai
+
+
+def _cleanup_matched_tx_ids(tx_dict: dict, max_age_seconds: int = 86400) -> None:
+    """Hapus entry tx_id yang sudah lebih dari max_age_seconds (default 24 jam).
+    Lebih aman dari .clear() karena tidak menghapus tx_id yang baru saja diproses.
+    """
+    cutoff = time.time() - max_age_seconds
+    expired_keys = [k for k, ts in tx_dict.items() if ts < cutoff]
+    for k in expired_keys:
+        del tx_dict[k]
 
 
 # =============================================================
@@ -546,7 +557,9 @@ async def _job_expire_orders():
                         int(order.total_idr), order.order_id
                     )
                     if pay_res.get("paid"):
-                        await finalize_gopay_buy_payment(db, order)
+                        # [FIX MEDIUM-1] Pass bot_app agar notifikasi Telegram terkirim
+                        from services.bot_runtime import bot_app as _bot_app
+                        await finalize_gopay_buy_payment(db, order, bot=_bot_app)
                 except Exception as exc:
                     logger.warning("Final check order %s gagal: %s", order.order_id, exc)
 
@@ -720,21 +733,20 @@ async def _job_check_pending_topups():
         results = await asyncio.gather(*(_check(t) for t in pending_topups))
         unmatched = [t for t in results if t]
 
-        if len(_topup_matched_tx_ids) > 2000:
-            _topup_matched_tx_ids.clear()
-
         # Fallback auto-detect via GET /transactions (throttle 60s, anti rate-limit)
         if unmatched and (time.time() - _topup_last_transactions_fetch) >= 60:
             _topup_last_transactions_fetch = time.time()
             txns = await gopay_service.get_recent_transactions(page_size=100)
             for topup in list(unmatched):
                 for txn in txns:
-                    if _match_transaction_for_topup(txn, topup, _topup_matched_tx_ids):
+                    if _match_transaction(txn, int(topup.amount_idr), topup.created_at, set(_topup_matched_tx_ids.keys())):
                         tx_id = str(txn.get("transaction_id") or txn.get("id") or "")
                         if tx_id:
-                            _topup_matched_tx_ids.add(tx_id)
+                            _topup_matched_tx_ids[tx_id] = time.time()
                         await _complete_topup(db, topup)
                         break
+        # [FIX KRITIS-4] Rolling cleanup — hapus entry > 24 jam, bukan .clear() total
+        _cleanup_matched_tx_ids(_topup_matched_tx_ids)
     except Exception as exc:
         logger.error("Topup polling job error: %s", exc, exc_info=True)
     finally:
@@ -762,15 +774,15 @@ async def _job_check_pending_buy_payments():
             txns = await gopay_service.get_recent_transactions(page_size=100)
             for order in orders:
                 for txn in txns:
-                    if _match_transaction(txn, int(order.total_idr), order.created_at, _buy_matched_tx_ids):
+                    if _match_transaction(txn, int(order.total_idr), order.created_at, set(_buy_matched_tx_ids.keys())):
                         tx_id = str(txn.get("transaction_id") or txn.get("id") or "")
                         if tx_id:
-                            _buy_matched_tx_ids.add(tx_id)
+                            _buy_matched_tx_ids[tx_id] = time.time()
                         to_process.append(order.order_id)
                         break
 
-        if len(_buy_matched_tx_ids) > 2000:
-            _buy_matched_tx_ids.clear()
+        # [FIX KRITIS-4] Rolling cleanup — hapus entry > 24 jam, bukan .clear() total
+        _cleanup_matched_tx_ids(_buy_matched_tx_ids)
 
         # Finalize paralel (max 5 payout bersamaan); tiap task pakai session DB sendiri.
         sem = asyncio.Semaphore(5)

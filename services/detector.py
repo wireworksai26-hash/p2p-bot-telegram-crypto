@@ -44,6 +44,7 @@ class DepositDetector:
         """
         Memindai deposit masuk untuk order berstatus WAITING_CRYPTO_DEPOSIT.
         Dilengkapi in-memory locking agar tidak terjadi pemrosesan ganda / notifikasi dobel.
+        Setiap task paralel menggunakan session DB-nya sendiri untuk thread safety.
         """
         db = SessionLocal()
         try:
@@ -60,33 +61,39 @@ class DepositDetector:
                 for o in pending_orders:
                     if o.order_id not in self._processing_orders:
                         self._processing_orders.add(o.order_id)
-                        orders_to_process.append(o)
+                        orders_to_process.append(o.order_id)  # simpan ID, bukan ORM object
 
-            if not orders_to_process:
-                return
-
-            # Proses paralel (max 5) — verifikasi on-chain lambat, jangan antri.
-            sem = asyncio.Semaphore(5)
-
-            async def _proc(order):
-                async with sem:
-                    try:
-                        await self._process_order(db, order, bot_app)
-                    except Exception as order_exc:
-                        logger.error(
-                            "Error memproses deposit order %s: %s",
-                            order.order_id, order_exc,
-                            exc_info=True,
-                        )
-                    finally:
-                        async with self._lock:
-                            self._processing_orders.discard(order.order_id)
-
-            await asyncio.gather(*(_proc(o) for o in orders_to_process))
         except Exception as exc:
-            logger.error("Error running DepositDetector: %s", exc, exc_info=True)
+            logger.error("Error mengambil pending orders: %s", exc, exc_info=True)
+            return
         finally:
-            db.close()
+            db.close()  # tutup session setelah ambil data awal
+
+        if not orders_to_process:
+            return
+
+        # Proses paralel (max 5) — setiap task membuat session DB sendiri
+        sem = asyncio.Semaphore(5)
+
+        async def _proc(order_id):
+            async with sem:
+                task_db = SessionLocal()
+                try:
+                    order = task_db.query(Order).filter(Order.order_id == order_id).first()
+                    if order:
+                        await self._process_order(task_db, order, bot_app)
+                except Exception as order_exc:
+                    logger.error(
+                        "Error memproses deposit order %s: %s",
+                        order_id, order_exc,
+                        exc_info=True,
+                    )
+                finally:
+                    task_db.close()
+                    async with self._lock:
+                        self._processing_orders.discard(order_id)
+
+        await asyncio.gather(*(_proc(oid) for oid in orders_to_process))
 
     # ---------------- Per order ----------------
     async def _process_order(self, db, order, bot_app):
