@@ -121,16 +121,33 @@ class TonSender(BaseCryptoSender):
             return SendResult(success=False, error_message=f"Exception pengiriman TON: {str(e)}")
 
     def _load_wallet(self):
-        """Load wallet TON v4r2 dari mnemonic di settings.TON_PRIVATE_KEY."""
+        """Load wallet TON v4r2 dari mnemonic atau hex private key di settings.TON_PRIVATE_KEY."""
         try:
             from tonsdk.contract.wallet import Wallets, WalletVersionEnum
         except ImportError:
             raise RuntimeError("Library tonsdk tidak terinstall (pip install tonsdk).")
         if not settings.TON_PRIVATE_KEY:
-            raise RuntimeError("TON_PRIVATE_KEY belum di-set di .env (mnemonic wallet TON).")
-        from tonsdk.crypto import mnemonic_to_wallet_key
-        mnemonics = settings.TON_PRIVATE_KEY.strip().split()
-        pub_k, priv_k = mnemonic_to_wallet_key(mnemonics)
+            raise RuntimeError("TON_PRIVATE_KEY belum di-set di .env (mnemonic / hex wallet TON).")
+        
+        raw_key = settings.TON_PRIVATE_KEY.strip()
+        words = raw_key.split()
+        if len(words) in (12, 24):
+            from tonsdk.crypto import mnemonic_to_wallet_key
+            pub_k, priv_k = mnemonic_to_wallet_key(words)
+        else:
+            import nacl.signing
+            clean_hex = raw_key.replace("0x", "")
+            key_bytes = bytes.fromhex(clean_hex)
+            if len(key_bytes) == 32:
+                signing_key = nacl.signing.SigningKey(key_bytes)
+                priv_k = signing_key.encode() + signing_key.verify_key.encode()
+                pub_k = signing_key.verify_key.encode()
+            elif len(key_bytes) == 64:
+                priv_k = key_bytes
+                pub_k = key_bytes[32:]
+            else:
+                raise ValueError(f"Panjang private key TON tidak valid ({len(key_bytes)} bytes).")
+
         return Wallets.ALL[WalletVersionEnum.v4r2](
             public_key=pub_k, private_key=priv_k, wc=0
         )

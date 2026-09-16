@@ -3,9 +3,9 @@ from dotenv import load_dotenv
 
 # Load .env file only if exists without overriding container environment
 if os.path.exists(".env"):
-    load_dotenv(".env", override=False)
+    load_dotenv(".env", override=True)
 elif os.path.exists("../.env"):
-    load_dotenv("../.env", override=False)
+    load_dotenv("../.env", override=True)
 
 class Settings:
     # Telegram settings
