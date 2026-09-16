@@ -48,7 +48,7 @@ def _get_network_send_lock(network: str) -> asyncio.Lock:
 
 
 class EVMSender(BaseCryptoSender):
-    GAS_REVIEW_LIMIT_IDR = 2000
+    GAS_REVIEW_LIMIT_IDR = 15000
     # Konfigurasi tiap chain EVM beserta daftar RPC Fallback
     EVM_CHAINS = {
         "ETH": {

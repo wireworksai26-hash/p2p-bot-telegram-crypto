@@ -131,6 +131,10 @@ def calculate_fee_idr(
             raise ValueError("Pembelian atau Penjualan Nominal Altcoin di atas Rp 1.010.000 silakan tanya admin dahulu.")
         base_fee = _tier_fee(nominal_idr, ALTCOIN_FEE_TIERS, "Altcoin", 5000, 1010000)
 
+    # Tambahan fee jaringan ETH (ERC20 / ETH L1) sebesar Rp 2.000 untuk transaksi pengiriman koin keluar
+    if network and network.upper() == "ETH" and is_outgoing:
+        base_fee += 2000
+
     return base_fee
 
 
