@@ -43,7 +43,7 @@ class Settings:
     GRAVITY_RPC = (os.getenv("GRAVITY_RPC", "https://rpc.gravity.xyz") or "").strip()
 
     # Non-EVM RPCs & Wallets
-    SOL_RPC = (os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com") or "").strip()
+    SOL_RPC = (os.getenv("SOL_RPC", "https://solana-rpc.publicnode.com") or "").strip()
     SOL_PRIVATE_KEY = (os.getenv("SOL_PRIVATE_KEY") or "").strip()
     SOL_WALLET_ADDRESS = (os.getenv("SOL_WALLET_ADDRESS") or "").strip()
 
@@ -51,7 +51,7 @@ class Settings:
     TRX_PRIVATE_KEY = (os.getenv("TRX_PRIVATE_KEY") or "").strip()
     TRX_WALLET_ADDRESS = (os.getenv("TRX_WALLET_ADDRESS") or "").strip()
 
-    SUI_RPC = (os.getenv("SUI_RPC", "https://fullnode.mainnet.sui.io:443") or "").strip()
+    SUI_RPC = (os.getenv("SUI_RPC", "https://sui-rpc.publicnode.com") or "").strip()
     SUI_PRIVATE_KEY = (os.getenv("SUI_PRIVATE_KEY") or "").strip()
     SUI_WALLET_ADDRESS = (os.getenv("SUI_WALLET_ADDRESS") or "").strip()
 

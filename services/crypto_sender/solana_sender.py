@@ -40,7 +40,9 @@ SPL_TOKENS = {
 
 class SolanaSender(BaseCryptoSender):
     def __init__(self):
-        self.rpc_url = "https://api.mainnet-beta.solana.com" # Mainnet public RPC
+        raw_rpcs = [settings.SOL_RPC, "https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com", "https://1rpc.io/solana"]
+        self.rpc_list = [r.strip() for r in raw_rpcs if r and r.strip()]
+        self.rpc_url = self.rpc_list[0]
         self.explorer_base = "https://explorer.solana.com"
         self.wallet_address = settings.SOL_WALLET_ADDRESS
         self.private_key_b58 = settings.SOL_PRIVATE_KEY
@@ -58,6 +60,8 @@ class SolanaSender(BaseCryptoSender):
 
     async def get_balance(self, symbol: str = "") -> float:
         """Mengambil saldo SOL native atau token SPL (USDT/USDC)."""
+        if not self.wallet_address:
+            return 0.0
         sym = symbol.upper() if symbol else ""
         if sym in SPL_TOKENS:
             return await self._get_spl_token_balance(SPL_TOKENS[sym])
@@ -65,56 +69,58 @@ class SolanaSender(BaseCryptoSender):
         if not SOLANA_LIB_AVAILABLE:
             logger.error("Solana library (solana/solders) tidak terinstall.")
             return 0.0
-        try:
-            client = Client(self.rpc_url)
-            pubkey = Pubkey.from_string(self.wallet_address)
-            response = await asyncio.to_thread(client.get_balance, pubkey)
-            
-            # Response format solders: response.value berisi lamports
-            lamports = response.value
-            balance = lamports / 10**9
-            return float(balance)
-        except Exception as e:
-            logger.error(f"Gagal mengambil saldo Solana: {e}", exc_info=True)
-            return 0.0
+        
+        for rpc in self.rpc_list:
+            try:
+                client = Client(rpc)
+                pubkey = Pubkey.from_string(self.wallet_address)
+                response = await asyncio.to_thread(client.get_balance, pubkey)
+                lamports = response.value
+                balance = lamports / 10**9
+                return float(balance)
+            except Exception as e:
+                logger.warning(f"Gagal mengambil saldo Solana via {rpc}: {e}")
+                continue
+        return 0.0
 
     async def _get_spl_token_balance(self, mint_address: str) -> float:
         """
         Mengambil saldo token SPL milik wallet bot via RPC getTokenAccountsByOwner.
         """
-        try:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "getTokenAccountsByOwner",
-                "params": [
-                    self.wallet_address,
-                    {"mint": mint_address},
-                    {"encoding": "jsonParsed"},
-                ],
-            }
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.post(self.rpc_url, json=payload)
-                if res.status_code != 200:
-                    logger.warning(f"getTokenAccountsByOwner HTTP {res.status_code}")
-                    return 0.0
-                data = res.json()
-
-            total = 0.0
-            for item in (data.get("result", {}).get("value") or []):
-                info = (
-                    item.get("account", {})
-                    .get("data", {})
-                    .get("parsed", {})
-                    .get("info", {})
-                )
-                amt = info.get("tokenAmount", {}).get("uiAmount")
-                if amt is not None:
-                    total += float(amt)
-            return total
-        except Exception as e:
-            logger.error(f"Gagal mengambil saldo SPL token: {e}", exc_info=True)
+        if not self.wallet_address:
             return 0.0
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTokenAccountsByOwner",
+            "params": [
+                self.wallet_address,
+                {"mint": mint_address},
+                {"encoding": "jsonParsed"},
+            ],
+        }
+        for rpc in self.rpc_list:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    res = await client.post(rpc, json=payload)
+                    if res.status_code == 200:
+                        data = res.json()
+                        total = 0.0
+                        for item in (data.get("result", {}).get("value") or []):
+                            info = (
+                                item.get("account", {})
+                                .get("data", {})
+                                .get("parsed", {})
+                                .get("info", {})
+                            )
+                            amt = info.get("tokenAmount", {}).get("uiAmount")
+                            if amt is not None:
+                                total += float(amt)
+                        return total
+            except Exception as e:
+                logger.warning(f"Gagal mengambil saldo SPL token via {rpc}: {e}")
+                continue
+        return 0.0
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
         """Mengirim SOL native atau token SPL USDT/USDC."""

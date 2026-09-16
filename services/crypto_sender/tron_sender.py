@@ -44,36 +44,63 @@ class TronSender(BaseCryptoSender):
 
     async def get_balance(self, symbol: str = "") -> float:
         """Mengambil saldo TRX native atau token TRC-20 (USDT)."""
+        if not self.wallet_address:
+            return 0.0
         sym = symbol.upper() if symbol else ""
         if sym in ("USDT",):
             return await self._get_trc20_balance(USDT_TRC20)
 
+        # Coba via TronGrid REST API (lebih cepat & bebas rate-limit 429)
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
+                if res.status_code == 200:
+                    data = res.json().get("data", [])
+                    if data:
+                        balance_sun = data[0].get("balance", 0)
+                        return float(balance_sun / 1e6)
+                    return 0.0
+        except Exception as api_err:
+            logger.warning(f"TronGrid REST API get_balance gagal: {api_err}")
+
         if not TRONPY_AVAILABLE:
-            logger.error("Library tronpy tidak terinstall.")
             return 0.0
         try:
-            # Menggunakan HTTP client tronpy
-            client = Tron() # Default terhubung ke Mainnet
+            client = Tron()
             balance_sun = await asyncio.to_thread(client.get_account_balance, self.wallet_address)
-            # 1 TRX = 1,000,000 SUN
-            balance = float(balance_sun)
-            return balance
+            return float(balance_sun)
         except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", 0)
-            if e.__class__.__name__ == "AddressNotFound":
-                logger.warning("Wallet TRON belum tercatat on-chain: %s", self.wallet_address)
-            elif status in (429, 500, 502, 503):
-                logger.warning("Gagal mengambil saldo TRX (HTTP %s): %s", status, e)
-            else:
-                logger.error(f"Gagal mengambil saldo TRX: {e}", exc_info=True)
+            if e.__class__.__name__ != "AddressNotFound":
+                logger.warning(f"Tronpy get_balance error: {e}")
             return 0.0
 
     async def _get_trc20_balance(self, contract_address: str) -> float:
         """
         Mengambil saldo token TRC-20 (USDT) milik wallet bot.
         """
+        if not self.wallet_address:
+            return 0.0
+
+        # Coba via TronGrid REST API
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
+                if res.status_code == 200:
+                    data = res.json().get("data", [])
+                    if data:
+                        trc20_list = data[0].get("trc20", [])
+                        for item in trc20_list:
+                            if contract_address in item:
+                                raw_val = int(item[contract_address])
+                                return float(raw_val / 1e6)
+                        return 0.0
+                    return 0.0
+        except Exception as api_err:
+            logger.warning(f"TronGrid REST API _get_trc20_balance gagal: {api_err}")
+
         if not TRONPY_AVAILABLE:
-            logger.error("Library tronpy tidak terinstall.")
             return 0.0
         try:
             client = Tron(provider=HTTPProvider(timeout=20.0))
@@ -87,7 +114,7 @@ class TronSender(BaseCryptoSender):
                 decimals = 6
             return float(int(raw_balance) / (10 ** decimals))
         except Exception as e:
-            logger.error(f"Gagal mengambil saldo TRC-20: {e}", exc_info=True)
+            logger.warning(f"Tronpy _get_trc20_balance error: {e}")
             return 0.0
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:

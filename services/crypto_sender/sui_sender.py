@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 class SuiSender(BaseCryptoSender):
     def __init__(self):
         self.network = "SUI"
-        self.rpc_url = settings.SUI_RPC
-        self.wallet_address = settings.SUI_WALLET_ADDRESS or "0x7890abcdef1234567890abcdef1234567890abcdef1234567890abcdef123456"
+        raw_rpcs = [
+            settings.SUI_RPC,
+            "https://sui-rpc.publicnode.com",
+            "https://mainnet.sui.rpcpool.com",
+            "https://sui-mainnet-endpoint.blockvision.org",
+        ]
+        self.rpc_list = [r.strip() for r in raw_rpcs if r and r.strip()]
+        self.wallet_address = settings.SUI_WALLET_ADDRESS
         self.explorer_base = "https://suiscan.xyz"
 
     def validate_address(self, address: str) -> bool:
@@ -27,21 +33,27 @@ class SuiSender(BaseCryptoSender):
 
     async def get_balance(self, symbol: str = "") -> float:
         """Ambil saldo SUI dari node Sui JSON-RPC."""
-        try:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "suix_getBalance",
-                "params": [self.wallet_address, "0x2::sui::SUI"]
-            }
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                res = await client.post(self.rpc_url, json=payload)
-                if res.status_code == 200:
-                    data = res.json()
-                    total_balance = int(data.get("result", {}).get("totalBalance", 0))
-                    return float(total_balance / 1e9)
-        except Exception as e:
-            logger.warning(f"Gagal mengambil saldo SUI: {e}")
+        if not self.wallet_address:
+            return 0.0
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "suix_getBalance",
+            "params": [self.wallet_address, "0x2::sui::SUI"]
+        }
+        for rpc in self.rpc_list:
+            try:
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    res = await client.post(rpc, json=payload)
+                    if res.status_code == 200:
+                        data = res.json()
+                        result = data.get("result")
+                        if result and "totalBalance" in result:
+                            total_balance = int(result["totalBalance"])
+                            return float(total_balance / 1e9)
+            except Exception as e:
+                logger.warning(f"Gagal mengambil saldo SUI via {rpc}: {e}")
+                continue
         return 0.0
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:

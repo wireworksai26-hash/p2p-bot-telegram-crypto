@@ -89,19 +89,24 @@ class TonSender(BaseCryptoSender):
     async def _get_jetton_balance(self, jetton_master: str) -> float:
         if not self.wallet_address:
             return 0.0
-        jetton_wallet = await self._rpc(
-            "getAccountAddress",
-            {"jetton_master": jetton_master, "owner": self.wallet_address},
-        )
-        if not jetton_wallet:
-            return 0.0
-        result = await self._rpc("getWalletInformation", {"address": jetton_wallet})
-        if result:
-            try:
-                # USDT di TON menggunakan 6 decimals
-                return float(int(result.get("balance") or 0) / 1e6)
-            except (ValueError, TypeError):
-                return 0.0
+        # Coba via tonapi.io v2 API (standar industri untuk Jetton)
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(f"https://tonapi.io/v2/accounts/{self.wallet_address}/jettons")
+                if res.status_code == 200:
+                    data = res.json().get("balances", [])
+                    for item in data:
+                        jetton_info = item.get("jetton", {})
+                        master_addr = jetton_info.get("address", "")
+                        sym = jetton_info.get("symbol", "").upper()
+                        if master_addr == jetton_master or sym in ("USDT", "USD₮"):
+                            raw_bal = int(item.get("balance", 0))
+                            decimals = int(jetton_info.get("decimals", 6))
+                            return float(raw_bal / (10 ** decimals))
+                    return 0.0
+        except Exception as tonapi_err:
+            logger.warning(f"tonapi get_jetton_balance error: {tonapi_err}")
+
         return 0.0
 
     # ---------------- Send ----------------
