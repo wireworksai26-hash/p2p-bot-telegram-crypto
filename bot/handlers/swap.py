@@ -202,7 +202,7 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_TGT_NET
 
 
-def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float) -> tuple[float, int, str]:
+def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float, src_sym: str = "") -> tuple[float, int, str]:
     """
     Parse input nominal convert dari user:
     - USD ($10, 10$, 10 usd, 10 usdt, usd 25)
@@ -210,6 +210,7 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
     - Crypto Amount (0.05, 1.5, 4.2, 10)
     """
     text = raw_text.strip()
+    src_sym_upper = src_sym.upper() if src_sym else ""
 
     # 1. USD pattern: $10, 10$, 10 usd, 10 usdt, usd 10, $ 10.5
     usd_pattern = r'^(?:\$\s*([0-9]+(?:[\.,][0-9]+)?)|([0-9]+(?:[\.,][0-9]+)?)\s*(?:\$|usd|usdt)|(?:usd|usdt)\s*([0-9]+(?:[\.,][0-9]+)?))$'
@@ -220,7 +221,10 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         if usd_val <= 0:
             raise ValueError("Nominal USD harus lebih besar dari 0")
         nominal_idr = int(usd_val * usdt_idr_rate)
-        src_amount = nominal_idr / src_idr_price
+        if src_sym_upper in ["USDT", "USDC"]:
+            src_amount = usd_val
+        else:
+            src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "USD"
 
     # 2. IDR suffixes: 50k, 50rb, 1jt, 1m, 1.5jt
@@ -233,7 +237,7 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         nominal_idr = int(num * multiplier)
         if nominal_idr <= 0:
             raise ValueError("Nominal Rupiah harus lebih besar dari 0")
-        src_amount = nominal_idr / src_idr_price
+        src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "IDR"
 
     # 3. IDR thousand dot notation: 50.000, 1.000.000 (starts with 1-9)
@@ -241,7 +245,7 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         nominal_idr = int(clean.replace('.', ''))
         if nominal_idr <= 0:
             raise ValueError("Nominal Rupiah harus lebih besar dari 0")
-        src_amount = nominal_idr / src_idr_price
+        src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "IDR"
 
     # 4. Explicit Rp / IDR prefix: Rp 50000, IDR 10000
@@ -251,7 +255,7 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
             nominal_idr = int(num_str)
             if nominal_idr <= 0:
                 raise ValueError("Nominal Rupiah harus lebih besar dari 0")
-            src_amount = nominal_idr / src_idr_price
+            src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
             return src_amount, nominal_idr, "IDR"
 
     # 5. General number: crypto amount or raw IDR (if >= 1000)
@@ -259,13 +263,16 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
     val = float(num_str)
     if val <= 0:
         raise ValueError("Nominal harus lebih besar dari 0")
-    if val >= 1000:
+    if val >= 1000 and src_sym_upper not in ["USDT", "USDC"]:
         nominal_idr = int(val)
-        src_amount = nominal_idr / src_idr_price
+        src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "IDR"
     else:
         src_amount = val
-        nominal_idr = int(src_amount * src_idr_price)
+        if src_sym_upper in ["USDT", "USDC"]:
+            nominal_idr = int(src_amount * usdt_idr_rate)
+        else:
+            nominal_idr = int(src_amount * src_idr_price)
         return src_amount, nominal_idr, "CRYPTO"
 
 
@@ -284,13 +291,30 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rate_info = ""
     try:
         src_price_info = await price_service.get_price(src_sym)
-        if src_price_info:
-            price_idr = src_price_info.get("sell_price_idr") or src_price_info.get("market_price_idr") or 0
-            usdt_rate = src_price_info.get("usdt_idr_rate") or 16000
-            price_usd = price_idr / usdt_rate if usdt_rate else 1.0
-            rate_info = f"• <b>Estimasi Kurs:</b> <code>1 {src_sym} ≈ Rp {int(price_idr):,} (~${price_usd:.2f})</code>\n"
-    except Exception:
-        pass
+        tgt_price_info = await price_service.get_price(tgt_sym)
+        if src_price_info and tgt_price_info:
+            src_mkt = src_price_info.get("market_price_idr", 0)
+            tgt_mkt = tgt_price_info.get("market_price_idr", 1)
+            usdt_rate = src_price_info.get("usdt_idr_rate", 16000)
+
+            src_usd = 1.0 if src_sym.upper() in ["USDT", "USDC"] else (src_mkt / usdt_rate if usdt_rate else 0)
+            tgt_usd = 1.0 if tgt_sym.upper() in ["USDT", "USDC"] else (tgt_mkt / usdt_rate if usdt_rate else 0)
+
+            if src_sym.upper() in ["USDT", "USDC"]:
+                rate_info = f"• <b>Kurs {src_sym}:</b> <code>$1.00 (Rp {int(src_mkt):,})</code>\n"
+            else:
+                rate_info = f"• <b>Kurs {src_sym}:</b> <code>${src_usd:,.4f} (Rp {int(src_mkt):,})</code>\n"
+
+            if tgt_sym.upper() in ["USDT", "USDC"]:
+                rate_info += f"• <b>Kurs {tgt_sym}:</b> <code>$1.00 (Rp {int(tgt_mkt):,})</code>\n"
+            else:
+                rate_info += f"• <b>Kurs {tgt_sym}:</b> <code>${tgt_usd:,.4f} (Rp {int(tgt_mkt):,})</code>\n"
+
+            if tgt_mkt > 0:
+                direct_ratio = src_mkt / tgt_mkt
+                rate_info += f"• <b>Estimasi Rate:</b> <code>1 {src_sym} ≈ {direct_ratio:.6f} {tgt_sym}</code>\n"
+    except Exception as exc:
+        logger.warning(f"Error format rate info di swap: {exc}")
 
     keyboard = [
         [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
@@ -323,7 +347,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tgt_sym = context.user_data["swap_tgt_symbol"]
     tgt_net = context.user_data["swap_tgt_network"]
 
-    # Ambil harga koin asal & koin tujuan
+    # Ambil harga koin asal & koin tujuan secara realtime
     src_price_info = await price_service.get_price(src_sym)
     tgt_price_info = await price_service.get_price(tgt_sym)
 
@@ -331,12 +355,12 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Gagal mengambil harga realtime. Silakan coba beberapa saat lagi.")
         return ConversationHandler.END
 
-    src_idr_price = src_price_info["sell_price_idr"]
-    tgt_idr_price = tgt_price_info["buy_price_idr"]
+    src_market_price = src_price_info.get("market_price_idr") or src_price_info.get("sell_price_idr", 0)
+    tgt_market_price = tgt_price_info.get("market_price_idr") or tgt_price_info.get("buy_price_idr", 0)
     usdt_idr_rate = src_price_info.get("usdt_idr_rate", 16000.0)
 
     try:
-        src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_idr_price, usdt_idr_rate)
+        src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_market_price, usdt_idr_rate, src_sym)
     except (ValueError, Exception):
         keyboard = [
             [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
@@ -353,7 +377,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_AMOUNT
 
-    # Hitung Fee Convert Tier (Min Rp 6.000, Max Rp 600.000)
+    # Hitung Fee Convert Tier (Min Rp 6.000, Max Rp 1.010.000)
     try:
         fee_idr = calculate_fee_idr(
             nominal_idr,
@@ -373,9 +397,9 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_AMOUNT
 
-    # Perhitungan koin tujuan yang diterima
+    # Perhitungan koin tujuan yang diterima (berdasarkan market rate murni)
     net_idr_for_target = nominal_idr - fee_idr
-    tgt_amount = net_idr_for_target / tgt_idr_price
+    tgt_amount = net_idr_for_target / tgt_market_price if tgt_market_price > 0 else 0
 
     context.user_data["swap_src_amount"] = src_amount
     context.user_data["swap_nominal_idr"] = nominal_idr

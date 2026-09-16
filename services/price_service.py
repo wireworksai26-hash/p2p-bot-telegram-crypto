@@ -22,16 +22,16 @@ from database import crud
 logger = logging.getLogger(__name__)
 
 # Mapping symbol ke Binance pair name
-# USDT langsung punya pair IDR (USDTBIDR), yang lain lewat USDT dulu
 BINANCE_PAIRS = {
-    "USDT":  "USDTBIDR",
+    "USDT":  "USDCUSDT",
     "USDC":  "USDCUSDT",
     "ETH":   "ETHUSDT",
     "BNB":   "BNBUSDT",
     "SOL":   "SOLUSDT",
     "AVAX":  "AVAXUSDT",
     "TRX":   "TRXUSDT",
-    "MATIC": "MATICUSDT",
+    "MATIC": "POLUSDT",
+    "POL":   "POLUSDT",
     "ARB":   "ARBUSDT",
     "SUI":   "SUIUSDT",
     "TON":   "TONUSDT",
@@ -40,6 +40,8 @@ BINANCE_PAIRS = {
     "APT":   "APTUSDT",
     "OP":    "OPUSDT",
     "G":     "GUSDT",
+    "BASE":  "ETHUSDT",
+    "ETH_ROBINHOOD": "ETHUSDT",
 }
 
 COINGECKO_IDS = {
@@ -471,9 +473,9 @@ class PriceService:
         # Cek status Binance terlebih dahulu secara cepat
         if self.binance_online:
             try:
-                # Cek status base rate USDT/IDR
-                usdt_price = await self.get_binance_price("USDTBIDR")
-                if usdt_price is None:
+                # Cek status koneksi Binance via pair likuid ETHUSDT
+                eth_price = await self.get_binance_price("ETHUSDT")
+                if eth_price is None:
                     # Tandai offline agar sisanya langsung menggunakan batch CoinGecko
                     self.binance_online = False
                     self.binance_last_checked = time.time()
@@ -531,11 +533,10 @@ class PriceService:
         """
         try:
             # Refresh base rate USDT/IDR
-            await self.get_binance_price("USDTBIDR")
+            await self.get_realtime_usdt_idr_fallback()
             # Refresh rate pair symbol/USDT lainnya
             for pair in BINANCE_PAIRS.values():
-                if pair != "USDTBIDR":
-                    await self.get_binance_price(pair)
+                await self.get_binance_price(pair)
             logger.debug("Cache harga berhasil di-refresh dari Binance.")
         except Exception as e:
             logger.error(f"Gagal refresh semua harga di PriceService: {e}")
