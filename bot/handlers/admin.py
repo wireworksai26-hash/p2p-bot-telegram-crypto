@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import settings
 from database.connection import SessionLocal
-from database.models import User, Order
+from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, TopupOrder
 from database import crud
 from services.crypto_sender import CryptoSenderFactory
 from bot.utils.formatter import format_idr, format_crypto
@@ -33,35 +33,464 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_CHAT_IDS
 
 
+def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup:
+    """Membuat inline keyboard navigasi utama Admin Dashboard."""
+    order_label = f"📥 Antrean Order ({pending_count})" if pending_count > 0 else "📥 Antrean Order (0)"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
+            InlineKeyboardButton(order_label, callback_data="admin_panel_orders"),
+        ],
+        [
+            InlineKeyboardButton("💼 Hot Wallets & Saldo", callback_data="admin_panel_wallets"),
+            InlineKeyboardButton("🔄 Sync On-Chain", callback_data="admin_panel_sync_wallets"),
+        ],
+        [
+            InlineKeyboardButton("📜 Audit Trail Log", callback_data="admin_panel_audit"),
+            InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
+        ],
+        [
+            InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
+            InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
+        ],
+        [
+            InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
+            InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_admin_dashboard_text(db) -> str:
+    """Membangun teks ringkasan eksekutif Admin Dashboard."""
+    stats = crud.get_daily_stats(db)
+    total_users = crud.get_user_count(db)
+    pending_count = crud.get_pending_orders_count(db)
+    completed_all = crud.get_completed_order_count(db)
+    
+    now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
+    
+    status_indicator = "🔴 <b>Perlu Tindakan!</b>" if pending_count > 0 else "🟢 <b>Semua Sistem Lancar</b>"
+
+    text = (
+        "👑 <b>ADMIN EXECUTIVE CONTROL CENTER</b>\n"
+        f"🕒 <i>Status Update: {now_str}</i>\n\n"
+        f"🚦 <b>Kondisi Operasional:</b> {status_indicator}\n"
+        f"├── 👥 <b>Total Pengguna:</b> <code>{total_users:,} Member</code>\n"
+        f"├── 🛒 <b>Order Hari Ini:</b> <code>{stats['total_orders_today']} Order</code>\n"
+        f"├── ✅ <b>Total Sukses (All-Time):</b> <code>{completed_all:,} Transaksi</code>\n"
+        f"├── 💳 <b>Volume Hari Ini:</b> <code>{format_idr(stats['total_volume_idr_today'])}</code>\n"
+        f"└── ⏳ <b>Antrean Pending:</b> <b>{pending_count} Order</b>\n\n"
+        "💡 <i>Pilih menu di bawah ini untuk inspeksi & tindakan administratif cepat:</i>"
+    )
+    return text
+
+
+def build_admin_stats_text(db) -> str:
+    """Membangun teks laporan analitik dan statistik lengkap."""
+    stats = crud.get_daily_stats(db)
+    total_users = crud.get_user_count(db)
+    completed_all = crud.get_completed_order_count(db)
+    
+    # Hitung breakdown tipe order
+    buy_count = db.query(Order).filter(Order.order_type == "buy", Order.status == "completed").count()
+    sell_count = db.query(Order).filter(Order.order_type == "sell", Order.status == "completed").count()
+    swap_count = db.query(Order).filter(Order.order_type == "swap", Order.status == "completed").count()
+    
+    # Hitung total volume all-time
+    from sqlalchemy import func
+    total_vol_row = db.query(func.sum(Order.total_idr)).filter(Order.status == "completed").scalar()
+    total_vol_all = int(total_vol_row or 0)
+
+    # Hitung total profit fee all-time
+    total_fee_row = db.query(func.sum(Order.fee_idr)).filter(Order.status == "completed").scalar()
+    total_fee_all = int(total_fee_row or 0)
+
+    text = (
+        "📊 <b>LAPORAN STATISTIK & ANALITIK BOT</b>\n"
+        f"📅 <i>Tanggal: {datetime.now(timezone.utc).strftime('%d-%m-%Y %H:%M UTC')}</i>\n\n"
+        "📈 <b>Performa Hari Ini:</b>\n"
+        f"• Total Order: <code>{stats['total_orders_today']}</code>\n"
+        f"• Order Selesai: <code>{stats['completed_orders_today']}</code>\n"
+        f"• Volume Transaksi: <b>{format_idr(stats['total_volume_idr_today'])}</b>\n\n"
+        "🏛 <b>Akumulasi Keseluruhan (All-Time):</b>\n"
+        f"• Total Pengguna Terdaftar: <code>{total_users:,} User</code>\n"
+        f"• Total Transaksi Sukses: <code>{completed_all:,} Transaksi</code>\n"
+        f"  ├── 🛒 Beli Koin: <code>{buy_count:,}x</code>\n"
+        f"  ├── 💵 Jual Koin: <code>{sell_count:,}x</code>\n"
+        f"  └── 💱 Swap / Convert: <code>{swap_count:,}x</code>\n"
+        f"• Total Akumulasi Volume: <b>{format_idr(total_vol_all)}</b>\n"
+        f"• Estimasi Akumulasi Fee: <b>{format_idr(total_fee_all)}</b>\n"
+    )
+    return text
+
+
+def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
+    """Membangun teks antrean order pending beserta tombol aksi interaktif."""
+    orders = (
+        db.query(Order)
+        .filter(Order.status.in_(["pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"]))
+        .order_by(Order.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    if not orders:
+        text = (
+            "📥 <b>ANTREAN ORDER AKTIF & PENDING</b>\n\n"
+            "✨ <b>Semua antrean bersih!</b>\n"
+            "Tidak ada order tertunda yang memerlukan tinjauan manual admin saat ini."
+        )
+        buttons = [
+            [InlineKeyboardButton("🔄 Refresh Antrean", callback_data="admin_panel_orders")],
+            [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+        ]
+        return text, InlineKeyboardMarkup(buttons)
+
+    text_lines = [
+        f"📥 <b>ANTREAN ORDER AKTIF ({len(orders)} Terdeteksi)</b>\n",
+        "<i>Menampilkan maks 10 order tertunda terbaru:</i>\n"
+    ]
+
+    action_buttons = []
+    for idx, o in enumerate(orders, 1):
+        o_type = "🛒 BELI" if o.order_type == "buy" else ("💵 JUAL" if o.order_type == "sell" else "💱 SWAP")
+        crypto_str = format_crypto(float(o.crypto_amount or 0), o.crypto_symbol)
+        
+        text_lines.append(
+            f"<b>{idx}. {o.order_id}</b> ({o_type})\n"
+            f"   🚦 Status: <code>{o.status.upper()}</code>\n"
+            f"   🪙 Koin: <code>{crypto_str} ({o.network})</code>\n"
+            f"   💳 Nilai: <code>{format_idr(o.total_idr or 0)}</code>\n"
+            f"   👤 User ID: <code>{o.telegram_id}</code>\n"
+        )
+
+        # Tambahkan tombol aksi per order
+        if o.order_type == "sell" and o.status in ["paid", "pending", "manual_review", "WAITING_CRYPTO_DEPOSIT"]:
+            action_buttons.append([
+                InlineKeyboardButton(f"📸 Upload Bukti {o.order_id[-6:]}", callback_data=f"admin_upload_proof_{o.order_id}"),
+                InlineKeyboardButton(f"✅ Konfirmasi {o.order_id[-6:]}", callback_data=f"admin_confirm_sell_{o.order_id}"),
+            ])
+        elif o.order_type == "buy" and o.status in ["paid", "pending", "manual_review"]:
+            action_buttons.append([
+                InlineKeyboardButton(f"✅ Approve {o.order_id[-6:]}", callback_data=f"admin_approve_buy_{o.order_id}"),
+                InlineKeyboardButton(f"❌ Reject {o.order_id[-6:]}", callback_data=f"admin_reject_buy_{o.order_id}"),
+            ])
+        elif o.order_type == "swap" and o.status in ["paid", "pending", "manual_review", "WAITING_CRYPTO_DEPOSIT"]:
+            action_buttons.append([
+                InlineKeyboardButton(f"✅ Approve Swap {o.order_id[-6:]}", callback_data=f"admin_approve_swap_{o.order_id}"),
+                InlineKeyboardButton(f"❌ Reject Swap {o.order_id[-6:]}", callback_data=f"admin_reject_swap_{o.order_id}"),
+            ])
+
+    action_buttons.append([
+        InlineKeyboardButton("🔄 Refresh Antrean", callback_data="admin_panel_orders"),
+        InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+    ])
+    return "\n".join(text_lines), InlineKeyboardMarkup(action_buttons)
+
+
+def build_admin_wallets_view(db) -> str:
+    """Membangun teks status saldo hot wallet dan kesiapan gas fee seluruh chain."""
+    wallets = db.query(WalletBalance).order_by(WalletBalance.network, WalletBalance.symbol).all()
+    
+    text_lines = [
+        "💼 <b>MONITORING HOT WALLETS & GAS FEE</b>\n",
+        "<i>Ringkasan saldo cadangan sistem di database:</i>\n"
+    ]
+
+    if not wallets:
+        text_lines.append("⚠️ <i>Belum ada data saldo di database. Tekan tombol <b>Sync On-Chain</b> di bawah.</i>\n")
+    else:
+        current_net = None
+        for w in wallets:
+            if w.network != current_net:
+                current_net = w.network
+                text_lines.append(f"\n🌐 <b>Jaringan {current_net}:</b>")
+            
+            bal_val = float(w.balance or 0.0)
+            res_val = float(w.reserved_balance or 0.0)
+            avail_val = max(0.0, bal_val - res_val)
+            
+            # Status indicator
+            status_icon = "🟢" if avail_val > 0 else "🔴"
+            
+            text_lines.append(
+                f"• {status_icon} <b>{w.symbol}</b>: <code>{bal_val:,.6f}</code> (Tersedia: <code>{avail_val:,.6f}</code>)"
+            )
+
+    text_lines.append("\n💡 <i>Klik <b>Sync On-Chain</b> untuk mengecek saldo live langsung dari blockchain.</i>")
+    return "\n".join(text_lines)
+
+
+def build_admin_audit_view(db) -> str:
+    """Membangun teks 10 log audit event sistem terbaru."""
+    logs = crud.get_recent_audit_logs(db, limit=10)
+    
+    text_lines = [
+        "📜 <b>AUDIT TRAIL LOG SISTEM (10 Terbaru)</b>\n"
+    ]
+
+    if not logs:
+        text_lines.append("ℹ️ <i>Belum ada catatan audit log tersimpan.</i>")
+    else:
+        for log in logs:
+            time_str = log.created_at.strftime("%H:%M:%S") if log.created_at else "-"
+            text_lines.append(
+                f"• <b>[{time_str}] {log.action}</b>\n"
+                f"  Order: <code>{log.order_id or '-'}</code> | {log.from_status or '-'} ➔ <b>{log.to_status or '-'}</b>\n"
+                f"  Detail: <i>{log.details or '-'}</i>\n"
+            )
+
+    return "\n".join(text_lines)
+
+
+def build_admin_users_view(db) -> str:
+    """Membangun teks manajemen dan statistik pengguna."""
+    total_users = db.query(User).count()
+    banned_users = db.query(User).filter(User.is_banned == True).all() # noqa: E712
+    active_users = total_users - len(banned_users)
+
+    text_lines = [
+        "👥 <b>MANAJEMEN PENGGUNA BOT</b>\n",
+        f"• <b>Total Pengguna Terdaftar:</b> <code>{total_users:,} User</code>",
+        f"• <b>Pengguna Aktif:</b> <code>{active_users:,} User</code>",
+        f"• <b>Pengguna Terblokir (Banned):</b> <code>{len(banned_users)} User</code>\n",
+    ]
+
+    if banned_users:
+        text_lines.append("🚫 <b>Daftar User Banned:</b>")
+        for u in banned_users[:10]:
+            uname = f"@{u.username}" if u.username else u.full_name or "Tanpa Nama"
+            text_lines.append(f"• ID <code>{u.telegram_id}</code> ({uname})")
+        text_lines.append("")
+
+    text_lines.extend([
+        "⚙️ <b>Perintah Cepat Kelola User:</b>",
+        "• <code>/ban [USER_ID]</code> — Blokir akses transaksi user",
+        "• <code>/unban [USER_ID]</code> — Buka blokir akses user"
+    ])
+    return "\n".join(text_lines)
+
+
+def build_admin_spread_view(db) -> str:
+    """Membangun teks konfigurasi spread harga koin."""
+    configs = db.query(PriceConfig).order_by(PriceConfig.symbol).all()
+
+    text_lines = [
+        "⚙️ <b>PENGATURAN SPREAD HARGA KOIN</b>\n",
+        "<i>Kebijakan harga saat ini: <b>Harga Pasar Murni (0.0% Spread)</b></i>\n",
+        "<b>Status Spread Koin Saat Ini:</b>"
+    ]
+
+    if not configs:
+        text_lines.append("• Default Global: <code>0.0% (Live Market)</code>")
+    else:
+        for c in configs:
+            text_lines.append(f"• <b>{c.symbol}</b>: <code>{c.spread_pct}%</code> (Aktif: {'✅' if c.is_active else '❌'})")
+
+    text_lines.extend([
+        "\n💡 <b>Cara Mengubah Spread:</b>",
+        "Gunakan perintah: <code>/setspread [SYMBOL] [PERSEN]</code>",
+        "<i>Contoh:</i> <code>/setspread USDT 1.5</code> atau <code>/setspread ETH 0.0</code>"
+    ])
+    return "\n".join(text_lines)
+
+
+def build_admin_broadcast_view() -> str:
+    """Membangun panduan dan template broadcast."""
+    text = (
+        "📢 <b>PUSAT PENGIRIMAN BROADCAST / PENGUMUMAN</b>\n\n"
+        "Fitur ini memungkinkan Anda mengirimkan siaran pesan resmi ke seluruh pengguna bot secara serentak.\n\n"
+        "📝 <b>Format Perintah:</b>\n"
+        "<code>/broadcast [PESAN PENGUMUMAN]</code>\n\n"
+        "💡 <b>Contoh Penggunaan:</b>\n"
+        "<code>/broadcast 🚀 Promo Spesial Hari Ini! Rate USDT termurah se-Indonesia & bebas biaya admin. Transaksi sekarang di @hsn_store_bot!</code>\n\n"
+        "⚠️ <b>Catatan Penting:</b>\n"
+        "• Anda dapat menggunakan tag HTML seperti <code>&lt;b&gt;tebal&lt;/b&gt;</code>, <code>&lt;i&gt;miring&lt;/i&gt;</code>, dan <code>&lt;code&gt;kode&lt;/code&gt;</code>.\n"
+        "• User yang memblokir bot akan otomatis dilewati tanpa menghentikan broadcast."
+    )
+    return text
+
+
+def build_admin_emojis_view() -> str:
+    """Membangun panduan otomatisasi dan status custom emoji 3D."""
+    text = (
+        "🎨 <b>OTOMATISASI CUSTOM EMOJI 3D PREMIUM</b>\n\n"
+        "Bot dilengkapi integrasi penuh dengan Animated Emoji Telegram Premium!\n\n"
+        "✨ <b>Perintah-Perintah Otomasi:</b>\n"
+        "• <code>/syncpack [NAMA_PACK_ATAU_URL]</code> — Sinkronisasi 1 paket emoji Telegram otomatis\n"
+        "• <code>/setemoji [KEY] [EMOJI]</code> — Ganti 1 emoji custom secara spesifik\n"
+        "• <code>/listemojis</code> — Tampilkan seluruh custom emoji yang sedang aktif\n"
+        "• <code>/getemoji [EMOJI]</code> — Deteksi ID custom emoji dari pesan\n"
+        "• <code>/resetemojis</code> — Reset ke emoji default bawaan Telegram\n\n"
+        "💡 <i>Semua perubahan langsung aktif realtime di bot tanpa perlu restart server!</i>"
+    )
+    return text
+
+
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tampilkan menu bantuan admin."""
+    """Tampilkan Executive Admin Dashboard Control Center."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("⛔ Anda tidak memiliki akses ke menu administrator.")
         return
 
-    admin_text = (
-        "👑 <b>ADMIN PANEL — P2P CRYPTO BOT</b>\n\n"
-        "Gunakan perintah-perintah di bawah ini untuk mengelola bot:\n\n"
-        "📊 <b>Statistik & Wallet:</b>\n"
-        "• /stats — Statistik harian & volume transaksi\n"
-        "• /refreshwallet — Sinkronisasi saldo on-chain sekarang\n\n"
-        "🛒 <b>Manajemen Order:</b>\n"
-        "• /orders — Daftar seluruh order pending/paid aktif\n"
-        "• /confirm <code>[ORDER_ID]</code> — Konfirmasi penyelesaian order manual\n\n"
-        "🎨 <b>Otomatisasi Emoji Animasi 3D:</b>\n"
-        "• /syncpack <code>[URL/NAMA_PACK]</code> — Sinkronisasi 1 pack emoji otomatis\n"
-        "• /setemoji <code>[KEY] [EMOJI]</code> — Set/ganti custom emoji langsung\n"
-        "• /listemojis — Lihat seluruh custom emoji aktif & preview\n"
-        "• /getemoji <code>[EMOJI]</code> — Deteksi custom_emoji_id dari pesan\n"
-        "• /resetemojis — Reset emoji ke default bawaan Telegram\n\n"
-        "⚙️ <b>Sistem & Pengguna:</b>\n"
-        "• /setspread <code>[SYMBOL] [PERCENT]</code> — Set spread koin (e.g. <code>/setspread USDT 1.2</code>)\n"
-        "• /broadcast <code>[PESAN]</code> — Kirim siaran pesan ke semua pengguna\n"
-        "• /ban <code>[USER_ID]</code> — Blokir pengguna dari bot\n"
-        "• /unban <code>[USER_ID]</code> — Buka blokir pengguna\n"
-    )
-    await update.message.reply_text(admin_text, parse_mode="HTML")
+    db = SessionLocal()
+    try:
+        pending_count = crud.get_pending_orders_count(db)
+        dashboard_text = build_admin_dashboard_text(db)
+        reply_markup = get_admin_dashboard_keyboard(pending_count)
+        
+        await update.message.reply_text(
+            text=dashboard_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
+
+
+async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler routing untuk semua tombol interaktif Admin Dashboard."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+
+    data = query.data
+    logger.info(f"Admin panel callback received: {data} from {user_id}")
+
+    db = SessionLocal()
+    try:
+        if data == "admin_panel_main":
+            pending_count = crud.get_pending_orders_count(db)
+            text = build_admin_dashboard_text(db)
+            markup = get_admin_dashboard_keyboard(pending_count)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Dashboard diperbarui.")
+
+        elif data == "admin_panel_stats":
+            text = build_admin_stats_text(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh Data", callback_data="admin_panel_stats")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Statistik dimuat.")
+
+        elif data == "admin_panel_orders":
+            text, markup = build_admin_orders_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Antrean order dimuat.")
+
+        elif data == "admin_panel_wallets":
+            text = build_admin_wallets_view(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Sync On-Chain Sekarang", callback_data="admin_panel_sync_wallets")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Hot wallets dimuat.")
+
+        elif data == "admin_panel_sync_wallets":
+            await query.answer("⏳ Sedang menyinkronkan saldo on-chain...", show_alert=False)
+            from config.assets import STOCK_ASSETS
+            success_list = []
+            fail_list = []
+            for sym, net in STOCK_ASSETS:
+                try:
+                    sender = CryptoSenderFactory.get_sender(net)
+                    balance = await sender.get_balance(symbol=sym)
+                    addr = getattr(sender, "wallet_address", None)
+                    crud.update_wallet_balance(db, network=net, symbol=sym, balance=balance, address=addr)
+                    success_list.append(f"{sym} ({net})")
+                except Exception as sync_err:
+                    logger.warning(f"Admin callback sync fail {sym} ({net}): {sync_err}")
+                    fail_list.append(f"{sym} ({net})")
+
+            text = (
+                f"✅ <b>SINKRONISASI ON-CHAIN SELESAI!</b>\n\n"
+                f"• Berhasil Disinkronkan: <code>{len(success_list)} Asset</code>\n"
+                f"• Gagal: <code>{len(fail_list)} Asset</code>\n\n"
+            ) + build_admin_wallets_view(db)
+            
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh Ulang", callback_data="admin_panel_sync_wallets")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+
+        elif data == "admin_panel_audit":
+            text = build_admin_audit_view(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh Log", callback_data="admin_panel_audit")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Audit log dimuat.")
+
+        elif data == "admin_panel_spread":
+            text = build_admin_spread_view(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh Spread", callback_data="admin_panel_spread")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Pengaturan spread dimuat.")
+
+        elif data == "admin_panel_users":
+            text = build_admin_users_view(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh Data", callback_data="admin_panel_users")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Manajemen pengguna dimuat.")
+
+        elif data == "admin_panel_broadcast":
+            text = build_admin_broadcast_view()
+            buttons = [
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Panduan broadcast dimuat.")
+
+        elif data == "admin_panel_emojis":
+            text = build_admin_emojis_view()
+            buttons = [
+                [InlineKeyboardButton("📋 Tampilkan List Emoji (/listemojis)", callback_data="admin_panel_list_emojis")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Manajemen emoji dimuat.")
+
+        elif data == "admin_panel_list_emojis":
+            lines = ["✨ <b>DAFTAR CUSTOM EMOJI AKTIF BOT</b>\n"]
+            for key, cid in sorted(CUSTOM_EMOJI_IDS.items()):
+                alt = CUSTOM_EMOJI_ALTS.get(key, "✨")
+                preview = tg_emoji(key, alt)
+                lines.append(f"• <b>{key}:</b> {preview} — ID: <code>{cid}</code>")
+            lines.append("\n💡 <i>Gunakan <code>/setemoji [KEY] [EMOJI]</code> atau <code>/syncpack [PACK]</code> untuk mengubah.</i>")
+            
+            buttons = [
+                [InlineKeyboardButton("🔙 Kembali ke Kelola Emoji", callback_data="admin_panel_emojis")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Daftar emoji aktif dimuat.")
+
+        elif data == "admin_panel_close":
+            await query.answer("Panel ditutup.")
+            await query.message.delete()
+
+    except Exception as exc:
+        logger.error(f"Error in admin_panel_callback ({data}): {exc}", exc_info=True)
+        await query.answer(f"❌ Error: {exc}", show_alert=True)
+    finally:
+        db.close()
+
 
 
 async def syncpack_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

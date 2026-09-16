@@ -23,6 +23,7 @@ from database.models import (
     TopupOrder,
     MonthlyReport,
     GopaySession,
+    AuditLog,
 )
 
 logger = logging.getLogger(__name__)
@@ -1025,3 +1026,15 @@ def sync_gopay_session_file(session_file_path: str = None) -> bool:
         return False
     finally:
         db.close()
+
+
+def get_recent_audit_logs(db: Session, limit: int = 15) -> list:
+    """Mengambil log audit sistem terbaru."""
+    return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+
+def get_pending_orders_count(db: Session) -> int:
+    """Menghitung total order yang berstatus pending/menunggu review."""
+    return db.query(Order).filter(
+        Order.status.in_(["pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"])
+    ).count()

@@ -289,6 +289,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import admin_reject_swap_callback
         await admin_reject_swap_callback(update, context)
 
+    elif data.startswith("admin_panel_"):
+        from bot.handlers.admin import admin_panel_callback
+        await admin_panel_callback(update, context)
+
     elif data == "menu_price":
         from bot.handlers.price import show_prices
         await show_prices(update, context)
