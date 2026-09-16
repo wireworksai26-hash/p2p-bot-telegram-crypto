@@ -69,7 +69,7 @@ class Settings:
 
     # App logic configurations
     ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 30))
-    DEFAULT_SPREAD_PCT = float(os.getenv("DEFAULT_SPREAD_PCT", 1.5))
+    DEFAULT_SPREAD_PCT = float(os.getenv("DEFAULT_SPREAD_PCT", 0.0))
     ENABLE_LOW_BALANCE_ALERT = os.getenv("ENABLE_LOW_BALANCE_ALERT", "false").lower() in ("true", "1", "yes")
     LOW_BALANCE_ALERT_HOURS = int(os.getenv("LOW_BALANCE_ALERT_HOURS", 6))
 

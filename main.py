@@ -271,10 +271,10 @@ def _seed_price_configs(db):
         return
 
     symbols = {
-        "USDT": 1.5, "ETH": 1.5, "BNB": 1.5, "SOL": 1.5,
-        "AVAX": 1.5, "TRX": 1.5, "MATIC": 1.5, "LTC": 1.5,
-        "G": 2.0,     # Gravity — less liquid, wider spread
-        "BASE": 1.5, "ARB": 1.5,
+        "USDT": 0.0, "ETH": 0.0, "BNB": 0.0, "SOL": 0.0,
+        "AVAX": 0.0, "TRX": 0.0, "MATIC": 0.0, "LTC": 0.0,
+        "G": 0.0,
+        "BASE": 0.0, "ARB": 0.0,
     }
     configs = [
         PriceConfig(symbol=sym, spread_pct=spread, is_active=True)

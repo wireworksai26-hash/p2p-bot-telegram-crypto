@@ -138,27 +138,32 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         text_lines = [
             f"{E_CHART()} <b>DAFTAR HARGA CRYPTO HARI INI</b>\n",
-            "<i>Berikut adalah harga beli (Rupiah ke Crypto) & jual (Crypto ke Rupiah) terupdate:</i>\n",
+            "<i>Berikut adalah harga crypto realtime terupdate (Beli & Jual sama sesuai market):</i>\n",
         ]
 
         for symbol, network, emoji, display_label in CURATED_PRICE_ASSETS:
             price_data = await price_service.get_price(symbol, db)
             if price_data:
-                buy_price = format_idr(price_data["buy_price_idr"])
-                sell_price = format_idr(price_data["sell_price_idr"])
+                price_idr = price_data.get("market_price_idr", 0)
+                price_str = format_idr(price_idr)
+                usdt_rate = price_data.get("usdt_idr_rate", 16000)
+                if symbol.upper() in ["USDT", "USDC"]:
+                    usd_str = "$1.00"
+                else:
+                    price_usd = price_idr / usdt_rate if usdt_rate > 0 else 0
+                    usd_str = f"${price_usd:,.2f}" if price_usd >= 1 else f"${price_usd:,.4f}"
             else:
-                buy_price = "-"
-                sell_price = "-"
+                price_str = "-"
+                usd_str = "-"
 
             text_lines.append(
                 f"{get_coin_emoji(symbol)} <b>{display_label}</b>\n"
-                f"{E_CART()} Beli: <code>{buy_price}</code>\n"
-                f"{E_DOLLAR()} Jual: <code>{sell_price}</code>\n"
+                f"{E_CART()} Beli / {E_DOLLAR()} Jual: <code>{price_str}</code> (~{usd_str})\n"
             )
 
         update_time_str = format_datetime(datetime.now(timezone.utc))
         text_lines.append(f"{E_CALENDAR()} Update: {update_time_str}")
-        text_lines.append(f"{E_WARN()} Harga di atas sudah termasuk markup/markdown spread bot.")
+        text_lines.append(f"{E_SPARKLES()} <i>Harga realtime pasar murni. Transaksi dikenakan fee fixed resmi sesuai tier.</i>")
 
         message_text = "\n".join(text_lines)
 
