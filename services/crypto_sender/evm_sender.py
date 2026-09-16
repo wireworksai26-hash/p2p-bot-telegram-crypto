@@ -54,9 +54,10 @@ class EVMSender(BaseCryptoSender):
         "ETH": {
             "rpc_list": [
                 settings.ETH_RPC,
-                "https://eth.llamarpc.com",
+                "https://ethereum-rpc.publicnode.com",
                 "https://1rpc.io/eth",
-                "https://rpc.ankr.com/eth"
+                "https://eth.drpc.org",
+                "https://cloudflare-eth.com",
             ],
             "chain_id": 1,
             "explorer": "https://etherscan.io",
@@ -68,14 +69,11 @@ class EVMSender(BaseCryptoSender):
         },
         "BSC": {
             "rpc_list": [
+                settings.BSC_RPC,
                 "https://bsc-dataseed.bnbchain.org",
-                "https://bsc.meowrpc.com",
                 "https://bsc-dataseed1.bnbchain.org",
-                "https://bsc-dataseed2.bnbchain.org",
-                "https://bsc-dataseed.defibit.io",
-                "https://bsc-dataseed.ninicoin.io",
-                "https://bsc.publicnode.com",
-                "https://binance.nodereal.io",
+                "https://bsc-rpc.publicnode.com",
+                "https://1rpc.io/bnb",
             ],
             "chain_id": 56,
             "explorer": "https://bscscan.com",
@@ -88,12 +86,12 @@ class EVMSender(BaseCryptoSender):
         "AVAX": {
             "rpc_list": [
                 settings.AVAX_RPC,
-                "https://avalanche.llamarpc.com",
                 "https://api.avax.network/ext/bc/C/rpc",
-                "https://1rpc.io/avax/c"
+                "https://avalanche-c-chain-rpc.publicnode.com",
+                "https://1rpc.io/avax/c",
             ],
             "chain_id": 43114,
-            "explorer": "https://snowtrace.io",
+            "explorer": "https://snowscan.xyz",
             "native_symbol": "AVAX",
             "tokens": {
                 "USDT": "0x97082348230b92f14910e17d061f37fa62241f8c"
@@ -102,9 +100,8 @@ class EVMSender(BaseCryptoSender):
         "POLYGON": {
             "rpc_list": [
                 settings.POLYGON_RPC,
-                "https://polygon.llamarpc.com",
+                "https://polygon-bor-rpc.publicnode.com",
                 "https://1rpc.io/matic",
-                "https://rpc.ankr.com/polygon"
             ],
             "chain_id": 137,
             "explorer": "https://polygonscan.com",
@@ -117,9 +114,9 @@ class EVMSender(BaseCryptoSender):
         "BASE": {
             "rpc_list": [
                 settings.BASE_RPC,
-                "https://base.llamarpc.com",
                 "https://mainnet.base.org",
-                "https://1rpc.io/base"
+                "https://base-rpc.publicnode.com",
+                "https://1rpc.io/base",
             ],
             "chain_id": 8453,
             "explorer": "https://basescan.org",
@@ -131,9 +128,9 @@ class EVMSender(BaseCryptoSender):
         "ARB": {
             "rpc_list": [
                 settings.ARB_RPC,
-                "https://arbitrum.llamarpc.com",
                 "https://arb1.arbitrum.io/rpc",
-                "https://1rpc.io/arb"
+                "https://arbitrum-one-rpc.publicnode.com",
+                "https://1rpc.io/arb",
             ],
             "chain_id": 42161,
             "explorer": "https://arbiscan.io",
@@ -147,9 +144,9 @@ class EVMSender(BaseCryptoSender):
         "OPTIMISM": {
             "rpc_list": [
                 settings.OPTIMISM_RPC,
-                "https://optimism.llamarpc.com",
                 "https://mainnet.optimism.io",
-                "https://1rpc.io/op"
+                "https://optimism-rpc.publicnode.com",
+                "https://1rpc.io/op",
             ],
             "chain_id": 10,
             "explorer": "https://optimistic.etherscan.io",
@@ -159,7 +156,6 @@ class EVMSender(BaseCryptoSender):
         "ROBINHOOD": {
             "rpc_list": [
                 settings.ROBINHOOD_RPC,
-                "https://rpc.robinhood.com"
             ],
             "chain_id": 1337,
             "explorer": "https://explorer.robinhood.com",
@@ -170,7 +166,7 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.KAIA_RPC,
                 "https://public-en.node.kaia.io",
-                "https://klaytn.drpc.org"
+                "https://klaytn.drpc.org",
             ],
             "chain_id": 8217,
             "explorer": "https://kaiascan.io",
@@ -181,7 +177,7 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.BERA_RPC,
                 "https://rpc.berachain.com",
-                "https://berachain.drpc.org"
+                "https://berachain.drpc.org",
             ],
             "chain_id": 80094,
             "explorer": "https://berascan.com",
@@ -191,7 +187,7 @@ class EVMSender(BaseCryptoSender):
         "HYPEREVM": {
             "rpc_list": [
                 settings.HYPEREVM_RPC,
-                "https://rpc.hyperliquid.xyz/evm"
+                "https://rpc.hyperliquid.xyz/evm",
             ],
             "chain_id": 998,
             "explorer": "https://hyperevm.cloud",
@@ -201,7 +197,7 @@ class EVMSender(BaseCryptoSender):
         "GRAVITY": {
             "rpc_list": [
                 settings.GRAVITY_RPC,
-                "https://rpc.gravity.xyz"
+                "https://rpc.gravity.xyz",
             ],
             "chain_id": 1625,
             "explorer": "https://gravityscan.com",
@@ -343,84 +339,109 @@ class EVMSender(BaseCryptoSender):
             # tanpa tabrakan nomor urut nonce (nonce collision).
             lock = _get_network_send_lock(self.network)
             async with lock:
-                def _get_nonce():
+                max_rpc_attempts = min(len(self.rpc_list), 3)
+                tx_hash_bytes = None
+                tx_hash_str = None
+                last_rpc_error = None
+
+                for rpc_attempt in range(max_rpc_attempts):
                     try:
-                        return self.w3.eth.get_transaction_count(self.wallet_address, 'pending')
-                    except Exception:
-                        return self.w3.eth.get_transaction_count(self.wallet_address)
+                        def _get_nonce():
+                            try:
+                                return self.w3.eth.get_transaction_count(self.wallet_address, 'pending')
+                            except Exception:
+                                return self.w3.eth.get_transaction_count(self.wallet_address)
 
-                nonce = await asyncio.to_thread(_get_nonce)
-                
-                # Dapatkan gas price saat ini dengan buffer 10%
-                def _get_gas_price():
-                    return self.w3.eth.gas_price
-                gas_price_raw = await asyncio.to_thread(_get_gas_price)
-                gas_price = int(gas_price_raw * 1.1)
+                        nonce = await asyncio.to_thread(_get_nonce)
+                        
+                        # Dapatkan gas price saat ini dengan buffer 10%
+                        def _get_gas_price():
+                            return self.w3.eth.gas_price
+                        gas_price_raw = await asyncio.to_thread(_get_gas_price)
+                        gas_price = int(gas_price_raw * 1.1)
 
-                gas_estimation_failed = False
-                if symbol_upper == native_sym:
-                    # --- Kirim Native Coin (BNB, ETH, AVAX, MATIC, G) ---
-                    amount_wei = self.w3.to_wei(amount, 'ether')
-                    
-                    tx = {
-                        'nonce': nonce,
-                        'to': to_checksum,
-                        'value': amount_wei,
-                        'gas': 21000,
-                        'gasPrice': gas_price,
-                        'chainId': self.config["chain_id"]
-                    }
-                else:
-                    # --- Kirim ERC-20 Token (USDT) ---
-                    token_address = self.config["tokens"].get(symbol_upper)
-                    if not token_address:
-                        return SendResult(
-                            success=False,
-                            error_message=f"Token '{symbol_upper}' tidak terdaftar di network {self.network}"
-                        )
-                    
-                    checksum_token = Web3.to_checksum_address(token_address)
-                    contract = self.w3.eth.contract(address=checksum_token, abi=ERC20_ABI)
-                    
-                    decimals = await asyncio.to_thread(contract.functions.decimals().call)
-                    # Parse amount ke format raw token unit berdasarkan decimals
-                    raw_amount = int(Decimal(str(amount)) * Decimal(10 ** decimals))
-                    
-                    # Build contract transfer function call
-                    tx_data = contract.functions.transfer(to_checksum, raw_amount)
-                    
-                    # Estimate gas limit
-                    try:
-                        gas_estimate = await asyncio.to_thread(tx_data.estimate_gas, {'from': self.wallet_address})
-                        gas_limit = int(gas_estimate * 1.2) # 20% safety margin
-                    except Exception as gas_err:
-                        logger.warning(f"Gagal estimasi gas, menggunakan default: {gas_err}")
-                        gas_limit = 100000 # default fallback untuk ERC20 transfer
-                        gas_estimation_failed = True
-                    
-                    tx = tx_data.build_transaction({
-                        'chainId': self.config["chain_id"],
-                        'gas': gas_limit,
-                        'gasPrice': gas_price,
-                        'nonce': nonce,
-                    })
+                        gas_estimation_failed = False
+                        if symbol_upper == native_sym:
+                            # --- Kirim Native Coin (BNB, ETH, AVAX, MATIC, G) ---
+                            amount_wei = self.w3.to_wei(amount, 'ether')
+                            
+                            tx = {
+                                'nonce': nonce,
+                                'to': to_checksum,
+                                'value': amount_wei,
+                                'gas': 21000,
+                                'gasPrice': gas_price,
+                                'chainId': self.config["chain_id"]
+                            }
+                        else:
+                            # --- Kirim ERC-20 Token (USDT) ---
+                            token_address = self.config["tokens"].get(symbol_upper)
+                            if not token_address:
+                                return SendResult(
+                                    success=False,
+                                    error_message=f"Token '{symbol_upper}' tidak terdaftar di network {self.network}"
+                                )
+                            
+                            checksum_token = Web3.to_checksum_address(token_address)
+                            contract = self.w3.eth.contract(address=checksum_token, abi=ERC20_ABI)
+                            
+                            decimals = await asyncio.to_thread(contract.functions.decimals().call)
+                            # Parse amount ke format raw token unit berdasarkan decimals
+                            raw_amount = int(Decimal(str(amount)) * Decimal(10 ** decimals))
+                            
+                            # Build contract transfer function call
+                            tx_data = contract.functions.transfer(to_checksum, raw_amount)
+                            
+                            # Estimate gas limit
+                            try:
+                                gas_estimate = await asyncio.to_thread(tx_data.estimate_gas, {'from': self.wallet_address})
+                                gas_limit = int(gas_estimate * 1.2) # 20% safety margin
+                            except Exception as gas_err:
+                                logger.warning(f"Gagal estimasi gas, menggunakan default: {gas_err}")
+                                gas_limit = 100000 # default fallback untuk ERC20 transfer
+                                gas_estimation_failed = True
+                            
+                            tx = tx_data.build_transaction({
+                                'chainId': self.config["chain_id"],
+                                'gas': gas_limit,
+                                'gasPrice': gas_price,
+                                'nonce': nonce,
+                            })
 
-                if self.network == "ETH" and gas_estimation_failed:
+                        if self.network == "ETH" and gas_estimation_failed:
+                            return SendResult(
+                                success=False,
+                                error_message="MANUAL_REVIEW: Estimasi gas ETH L1 gagal.",
+                            )
+
+                        gas_review = await self._gas_review_reason(tx.get('gas', 21000), gas_price)
+                        if gas_review:
+                            return SendResult(success=False, error_message=gas_review)
+
+                        # Sign transaction
+                        signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=self.private_key)
+                        
+                        # Broadcast transaction (masuk ke mempool on-chain)
+                        tx_hash_bytes = await asyncio.to_thread(self.w3.eth.send_raw_transaction, signed_tx.raw_transaction)
+                        tx_hash_str = self.w3.to_hex(tx_hash_bytes)
+                        break  # Sukses broadcast, keluar dari loop RPC retry
+
+                    except Exception as rpc_err:
+                        last_rpc_error = rpc_err
+                        logger.warning(f"[{self.network}] Broadcast via RPC index {self.current_rpc_index} gagal: {rpc_err}")
+                        if rpc_attempt < max_rpc_attempts - 1:
+                            self._rotate_rpc()
+                        else:
+                            return SendResult(
+                                success=False,
+                                error_message=f"Gagal broadcast transaksi di {self.network}: {rpc_err}"
+                            )
+
+                if not tx_hash_bytes or not tx_hash_str:
                     return SendResult(
                         success=False,
-                        error_message="MANUAL_REVIEW: Estimasi gas ETH L1 gagal.",
+                        error_message=f"Gagal broadcast transaksi setelah rotasi RPC: {last_rpc_error}"
                     )
-
-                gas_review = await self._gas_review_reason(gas_limit, gas_price)
-                if gas_review:
-                    return SendResult(success=False, error_message=gas_review)
-
-                # Sign transaction
-                signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=self.private_key)
-                
-                # Broadcast transaction (masuk ke mempool on-chain)
-                tx_hash_bytes = await asyncio.to_thread(self.w3.eth.send_raw_transaction, signed_tx.raw_transaction)
-                tx_hash_str = self.w3.to_hex(tx_hash_bytes)
 
             # --- Di Luar Lock (Asynchronous Parallel): Tunggu Receipt ---
             # Lock dilepas setelah broadcast agar transaksi berikutnya langsung dapat nonce selanjutnya

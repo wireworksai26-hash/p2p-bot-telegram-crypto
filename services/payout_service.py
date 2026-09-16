@@ -32,6 +32,7 @@ async def send_crypto_with_retry(
     Returns:
         dict with keys 'success', 'tx_hash', 'error_message', 'explorer_url'.
     """
+    last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
             result = await sender.send(
@@ -51,6 +52,8 @@ async def send_crypto_with_retry(
                     "error_message": "",
                 }
 
+            last_error = result.error_message or "Send failed"
+
             if result.error_message.startswith("MANUAL_REVIEW:"):
                 return {
                     "success": False,
@@ -65,6 +68,7 @@ async def send_crypto_with_retry(
             )
 
         except Exception as exc:
+            last_error = f"{exc.__class__.__name__}: {str(exc)}"
             logger.error(
                 "Exception on send attempt %d/%d: %s",
                 attempt + 1, MAX_RETRIES, exc,
@@ -78,7 +82,7 @@ async def send_crypto_with_retry(
         "success": False,
         "tx_hash": "",
         "explorer_url": "",
-        "error_message": "Max retries exceeded",
+        "error_message": last_error or "Max retries exceeded",
     }
 
 
