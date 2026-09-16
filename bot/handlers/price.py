@@ -34,16 +34,16 @@ logger = logging.getLogger(__name__)
 
 # Daftar 10 koin terkurasi yang wajib ditampilkan saat Cek Harga
 CURATED_PRICE_ASSETS = [
-    ("USDT", "TON", "🪙", "USDT (TON)"),
+    ("USDT", "TON", "💵", "USDT (TON)"),
     ("ETH", "ETH", "🔷", "ETH (ETH)"),
-    ("BNB", "BSC", "🟢", "BNB (BSC)"),
+    ("BNB", "BSC", "🟡", "BNB (BSC)"),
     ("SOL", "SOLANA", "🟣", "SOL (SOLANA)"),
     ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
-    ("TRX", "TRON", "❤️", "TRX (TRON)"),
+    ("TRX", "TRON", "🔴", "TRX (TRON)"),
     ("MATIC", "POLYGON", "🟪", "MATIC (POLYGON)"),
     ("G", "GRAVITY", "🌌", "G (GRAVITY)"),
-    ("BASE", "EVM", "🪙", "BASE (EVM)"),
-    ("ARB", "ARB", "💎", "ARB (ARB)"),
+    ("BASE", "EVM", "🔵", "BASE (EVM)"),
+    ("ARB", "ARB", "🔷", "ARB (ARB)"),
 ]
 
 

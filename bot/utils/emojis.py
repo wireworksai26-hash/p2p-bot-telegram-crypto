@@ -69,24 +69,24 @@ DEFAULT_EMOJI_IDS = {
     "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
 
     # --- Crypto Coins (3D Animated Custom Emojis) ---
-    "COIN_USDT":  "5978561005351865286",  # 🟢 3D Green Sphere
-    "COIN_USDC":  "5341683880103527632",  # 🔵 3D Blue Sphere
-    "COIN_ETH":   "5309958691854754293",  # 🔷 3D Diamond / Ethereum
-    "COIN_SOL":   "5341580002024503875",  # 🟣 3D Purple Sphere
-    "COIN_TRX":   "5967750804596067258",  # ❤️ 3D Red Heart
-    "COIN_BNB":   "5976277053413003198",  # 🟡 3D Gold Sphere
-    "COIN_SUI":   "5979034860503698472",  # 💧 3D Aqua Crystal
-    "COIN_TON":   "5462902520215002477",  # 💎 3D Ton Diamond
-    "COIN_POL":   "5204196780048137722",  # 🟪 3D Purple Cube
-    "COIN_MATIC": "5204196780048137722",  # 🟪 3D Purple Cube
-    "COIN_ARB":   "5309958691854754293",  # 💎 3D Crystal
-    "COIN_AVAX":  "5204321862380698787",  # 🔴 3D Red Sphere
-    "COIN_KAIA":  "5474417568053745249",  # 🌱 3D Sprout
-    "COIN_BERA":  "5379815450160943570",  # 🐻 3D Animated Bear
-    "COIN_APT":   "5312016608254762256",  # ⚡ 3D Lightning
-    "COIN_HYPE":  "5203966320692969547",  # 🚀 3D Rocket
-    "COIN_G":     "5979034860503698472",  # 🌌 3D Crystal
-    "COIN_BASE":  "5341683880103527632",  # 🔵 3D Blue Sphere
+    "COIN_USDT":  "5309929258443874898",  # 💵 3D Animated Dollar / Tether
+    "COIN_USDC":  "5309929258443874898",  # 💵 3D Animated Dollar / USDC
+    "COIN_ETH":   "5309958691854754293",  # 🔷 3D Ethereum Diamond
+    "COIN_SOL":   "5341580002024503875",  # 🟣 3D Solana Purple
+    "COIN_TRX":   "5967750804596067258",  # ❤️ 3D TRON Red
+    "COIN_BNB":   "5976277053413003198",  # 🟡 3D Binance Gold Coin
+    "COIN_SUI":   "5979034860503698472",  # 💧 3D SUI Aqua Crystal
+    "COIN_TON":   "5462902520215002477",  # 💎 3D TON Diamond
+    "COIN_POL":   "5204196780048137722",  # 🟪 3D Polygon Purple Cube
+    "COIN_MATIC": "5204196780048137722",  # 🟪 3D Polygon Purple Cube
+    "COIN_ARB":   "5309958691854754293",  # 🔷 3D Arbitrum Blue Crystal
+    "COIN_AVAX":  "5204321862380698787",  # 🔴 3D Avalanche Red
+    "COIN_KAIA":  "5474417568053745249",  # 🌱 3D Kaia Sprout
+    "COIN_BERA":  "5379815450160943570",  # 🐻 3D Berachain Bear
+    "COIN_APT":   "5312016608254762256",  # ⚡ 3D Aptos Lightning
+    "COIN_HYPE":  "5203966320692969547",  # 🚀 3D Hyperliquid Rocket
+    "COIN_G":     "5979034860503698472",  # 🌌 3D Gravity Crystal
+    "COIN_BASE":  "5341683880103527632",  # 🔵 3D Base Blue Circle
 
     # --- Network Identifiers (3D Animated) ---
     "NET_BSC":        "5976277053413003198",
@@ -105,6 +105,7 @@ DEFAULT_EMOJI_IDS = {
     "NET_BERA":       "5379815450160943570",
     "NET_APTOS":      "5312016608254762256",
     "NET_HYPEREVM":   "5203966320692969547",
+    "NET_GRAVITY":    "5979034860503698472",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -117,7 +118,7 @@ DEFAULT_EMOJI_ALTS = {
     "CHART": "📈",
     "CHART_UP": "📈",
     "MONEY_BAG": "💰",
-    "DOLLAR": "💸",
+    "DOLLAR": "💵",
     "CARD": "💼",
     "COIN": "🪙",
     "CART": "🛒",
@@ -141,17 +142,17 @@ DEFAULT_EMOJI_ALTS = {
     "PARTY": "🎉",
 
     # Coins
-    "COIN_USDT": "🟢",
-    "COIN_USDC": "🔵",
+    "COIN_USDT": "💵",
+    "COIN_USDC": "💲",
     "COIN_ETH":  "🔷",
     "COIN_SOL":  "🟣",
-    "COIN_TRX":  "❤️",
+    "COIN_TRX":  "🔴",
     "COIN_BNB":  "🟡",
     "COIN_SUI":  "💧",
     "COIN_TON":  "💎",
     "COIN_POL":  "🟪",
     "COIN_MATIC": "🟪",
-    "COIN_ARB":  "💎",
+    "COIN_ARB":  "🔷",
     "COIN_AVAX": "🔴",
     "COIN_KAIA": "🌱",
     "COIN_BERA": "🐻",
@@ -163,20 +164,21 @@ DEFAULT_EMOJI_ALTS = {
     # Networks
     "NET_BSC":        "🟡",
     "NET_POLYGON":    "🟪",
-    "NET_ARB":        "💎",
+    "NET_ARB":        "🔷",
     "NET_TON":        "💎",
     "NET_SOLANA":     "🟣",
     "NET_ETH":        "🔷",
     "NET_BASE":       "🔵",
     "NET_OPTIMISM":   "🔴",
-    "NET_ROBINHOOD":  "🟢",
-    "NET_TRON":       "❤️",
+    "NET_ROBINHOOD":  "🏹",
+    "NET_TRON":       "🔴",
     "NET_SUI":        "💧",
     "NET_AVAX":       "🔴",
     "NET_KAIA":       "🌱",
     "NET_BERA":       "🐻",
     "NET_APTOS":      "⚡",
     "NET_HYPEREVM":   "🚀",
+    "NET_GRAVITY":    "🌌",
 }
 
 # In-memory working copies
