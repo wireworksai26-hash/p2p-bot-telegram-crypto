@@ -500,6 +500,127 @@ async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFA
         db.close()
 
 
+async def admin_upload_proof_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback tombol Admin: Inisiasi upload bukti transfer gambar untuk order Sell."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+
+    order_id = query.data.replace("admin_upload_proof_", "").strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order:
+            await query.answer("❌ Order tidak ditemukan.", show_alert=True)
+            return
+
+        # Simpan state di user_data admin
+        context.user_data["admin_awaiting_proof_order_id"] = order_id
+        await query.answer("📸 Silakan kirimkan foto bukti transfer.", show_alert=False)
+
+        prompt_msg = (
+            f"📸 <b>UPLOAD BUKTI TRANSFER PEMBAYARAN</b>\n\n"
+            f"Order ID: <code>{order_id}</code>\n"
+            f"Total Rupiah: <b>{format_idr(int(order.total_idr or 0))}</b>\n"
+            f"Rekening Tujuan: <code>{order.buyer_wallet}</code>\n\n"
+            f"👉 <b>Silakan kirimkan FOTO / SCREENSHOT bukti transfer ke chat ini sekarang.</b>\n"
+            f"Bot akan otomatis meneruskan bukti foto tersebut langsung ke pembeli dan menyelesaikan order."
+        )
+        await query.message.reply_text(prompt_msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error admin_upload_proof_callback {order_id}: {e}", exc_info=True)
+        await query.answer("❌ Terjadi kesalahan.", show_alert=True)
+    finally:
+        db.close()
+
+
+async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Menangani foto bukti transfer yang dikirim oleh admin, meneruskannya ke user, dan menyelesaikan order."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    order_id = context.user_data.pop("admin_awaiting_proof_order_id", None)
+    if not order_id or not update.message or not update.message.photo:
+        return
+
+    # Ambil resolusi foto tertinggi
+    photo_file_id = update.message.photo[-1].file_id
+
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order:
+            await update.message.reply_text("❌ Order tidak ditemukan di database.")
+            return
+
+        # Update status order ke completed
+        crud.update_order_status(
+            db,
+            order_id,
+            new_status="completed",
+            completed_at=datetime.utcnow(),
+        )
+        crud.release_order_inventory(db, order_id)
+
+        # Buat caption menarik untuk user
+        from bot.utils.messages import format_sell_bank_info
+        from bot.utils.formatter import format_crypto, format_idr
+        import html
+
+        bank_info_str = format_sell_bank_info(order.buyer_wallet or "")
+        crypto_amount_val = float(order.crypto_amount) if order.crypto_amount else 0.0
+        crypto_str = format_crypto(crypto_amount_val, order.crypto_symbol)
+        nominal_str = format_idr(int(order.total_idr or 0))
+
+        user_caption = (
+            f"🎉 <b>DANA TELAH DITRANSFER OLEH ADMIN!</b>\n\n"
+            f"Halo kak! Pembayaran dana hasil penjualan crypto Anda telah berhasil dikirimkan oleh admin ke rekening Anda:\n\n"
+            f"📝 <b>ID Order:</b> <code>{html.escape(order.order_id)}</code>\n"
+            f"🪙 <b>Koin Terjual:</b> <b>{crypto_str}</b> ({html.escape(order.network)})\n"
+            f"💵 <b>Dana Diterima:</b> <b>{nominal_str}</b>\n\n"
+            f"🏦 <b>Rekening Tujuan:</b>\n"
+            f"{bank_info_str}\n\n"
+            f"📸 <i>Bukti transfer pembayaran terlampir di atas.</i>\n\n"
+            f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
+            f"Silakan periksa saldo / mutasi rekening Anda. Terima kasih banyak telah bertransaksi bersama kami! 🙏✨"
+        )
+
+        menu_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+        ]])
+
+        sent_to_user = False
+        try:
+            await context.bot.send_photo(
+                chat_id=order.telegram_id,
+                photo=photo_file_id,
+                caption=user_caption,
+                reply_markup=menu_keyboard,
+                parse_mode="HTML"
+            )
+            sent_to_user = True
+        except Exception as send_err:
+            logger.error(f"Gagal mengirim foto bukti ke user {order.telegram_id}: {send_err}")
+
+        notif_admin = (
+            f"✅ <b>BUKTI TRANSFER BERHASIL DITERUSKAN!</b>\n\n"
+            f"Order ID: <code>{order_id}</code>\n"
+            f"User ID: <code>{order.telegram_id}</code>\n"
+            f"Status Order: <b>COMPLETED</b>\n"
+            f"Pengiriman ke user: {'Sukses' if sent_to_user else 'Gagal (User memblokir bot/chat error)'}"
+        )
+        await update.message.reply_text(notif_admin, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Error handle_admin_upload_proof {order_id}: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses bukti transfer.")
+    finally:
+        db.close()
+
+
 async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Mengirim pesan broadcast/siaran ke seluruh user terdaftar di bot."""
     user_id = update.effective_user.id

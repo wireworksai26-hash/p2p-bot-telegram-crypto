@@ -424,7 +424,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="HTML"
             )
         
-        # Beritahu admin
+        # Beritahu admin dengan action buttons
         admin_alert = (
             f"🔔 <b>ORDER BARU DIBUAT (SELL)</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
@@ -432,9 +432,16 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             f"Crypto Dijual: {format_crypto(crypto_amount, symbol)} ({network})\n"
             f"Rupiah Bersih Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
             f"Tujuan Rekening:\n"
-            f"• {context.user_data['sell_bank_name']} - {context.user_data['sell_bank_acc']} a/n {context.user_data['sell_bank_holder']}"
+            f"• {context.user_data['sell_bank_name']} - {context.user_data['sell_bank_acc']} a/n {context.user_data['sell_bank_holder']}\n\n"
+            f"<i>Menunggu deposit crypto dari user ke hot wallet.</i>"
         )
-        await notify_admins(context.bot, admin_alert)
+        admin_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order_id}"),
+                InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
+            ]
+        ])
+        await notify_admins(context.bot, admin_alert, reply_markup=admin_keyboard)
                 
     except Exception as e:
         logger.error(f"Error saat konfirmasi order sell: {e}", exc_info=True)
@@ -509,6 +516,26 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
         if order:
             order.deposit_tx_hash = tx_hash
             db.commit()
+
+        # Beritahu admin update TX Hash dengan action buttons
+        admin_tx_alert = (
+            f"🔍 <b>TX HASH PENJUALAN DITERIMA (SELL)</b>\n\n"
+            f"Order ID: <code>{order_id}</code>\n"
+            f"User ID: <code>{order.telegram_id if order else context.user_data.get('sell_user_id', update.effective_user.id)}</code>\n"
+            f"Crypto: {format_crypto(crypto_amount, symbol)} ({network})\n"
+            f"Rupiah Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
+            f"TX Hash: <code>{tx_hash}</code>\n\n"
+            f"Tujuan Rekening:\n"
+            f"• {bank_info}\n\n"
+            f"<i>Silakan cek mutasi crypto masuk, lalu transfer Rupiah ke rekening di atas.</i>"
+        )
+        admin_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order_id}"),
+                InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
+            ]
+        ])
+        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard)
 
         response_user = (
             f"✅ <b>TX Hash Diterima!</b>\n\n"

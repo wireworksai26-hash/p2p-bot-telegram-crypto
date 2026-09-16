@@ -277,6 +277,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import admin_confirm_sell_callback
         await admin_confirm_sell_callback(update, context)
 
+    elif data.startswith("admin_upload_proof_"):
+        from bot.handlers.admin import admin_upload_proof_callback
+        await admin_upload_proof_callback(update, context)
+
     elif data.startswith("admin_approve_swap_"):
         from bot.handlers.admin import admin_approve_swap_callback
         await admin_approve_swap_callback(update, context)

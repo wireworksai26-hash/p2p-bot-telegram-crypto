@@ -229,9 +229,12 @@ class DepositDetector:
                         f"<code>{order.buyer_wallet}</code>\n\n"
                         f"Setelah transfer, klik tombol di bawah atau ketik <code>/confirm {order.order_id}</code>."
                     )
-                    admin_keyboard = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("✅ Konfirmasi Rupiah Terkirim", callback_data=f"admin_confirm_sell_{order.order_id}")
-                    ]])
+                    admin_keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order.order_id}"),
+                            InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order.order_id}")
+                        ]
+                    ])
                     await notify_admins(bot_app, admin_msg, reply_markup=admin_keyboard)
                 except Exception as exc:
                     logger.warning("Gagal notif admin sell: %s", exc)
