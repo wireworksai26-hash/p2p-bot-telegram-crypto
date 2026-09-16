@@ -27,7 +27,11 @@ AMOUNT_TOLERANCE = 0.02
 # keccak256("Transfer(address,address,uint256)")
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-SOLANA_RPC = "https://api.mainnet-beta.solana.com"
+SOLANA_RPCS = [
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.ankr.com/solana",
+]
 TRONGRID_URL = "https://api.trongrid.io"
 TRON_USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
@@ -198,35 +202,41 @@ async def _verify_solana(symbol, tx_hash, expected_wallet, expected_amount):
         "jsonrpc": "2.0", "id": 1, "method": "getTransaction",
         "params": [tx_hash, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.post(SOLANA_RPC, json=payload)
-            if res.status_code != 200:
-                return _fail(f"RPC Solana HTTP {res.status_code}")
-            data = res.json()
-    except Exception as exc:
-        return _fail(f"RPC Solana error: {exc}")
+    last_err = ""
+    for rpc in SOLANA_RPCS:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(rpc, json=payload)
+                if res.status_code != 200:
+                    last_err = f"RPC {rpc} HTTP {res.status_code}"
+                    continue
+                data = res.json()
+                result = data.get("result")
+                if not result:
+                    last_err = "TX tidak ditemukan"
+                    continue
+                meta = result.get("meta") or {}
+                if meta.get("err"):
+                    return _fail("TX gagal di blockchain")
 
-    result = data.get("result")
-    if not result:
-        return _fail("TX tidak ditemukan")
-    meta = result.get("meta") or {}
-    if meta.get("err"):
-        return _fail("TX gagal di blockchain")
+                msg = (result.get("transaction") or {}).get("message") or {}
+                amounts = _solana_walk_transfer(
+                    symbol,
+                    msg.get("instructions") or [],
+                    meta.get("innerInstructions") or [],
+                    expected_wallet,
+                )
+                if not amounts:
+                    return _fail("Tidak ada transfer ke wallet tujuan di TX ini")
+                amount = max(amounts)
+                if _amount_matches(amount, expected_amount):
+                    return _ok(amount, "")
+                return _fail(f"Nominal tidak sesuai: {amount} vs {expected_amount}")
+        except Exception as exc:
+            last_err = f"RPC {rpc} error: {exc}"
+            continue
 
-    msg = (result.get("transaction") or {}).get("message") or {}
-    amounts = _solana_walk_transfer(
-        symbol,
-        msg.get("instructions") or [],
-        meta.get("innerInstructions") or [],
-        expected_wallet,
-    )
-    if not amounts:
-        return _fail("Tidak ada transfer ke wallet tujuan di TX ini")
-    amount = max(amounts)
-    if _amount_matches(amount, expected_amount):
-        return _ok(amount, "")
-    return _fail(f"Nominal tidak sesuai: {amount} vs {expected_amount}")
+    return _fail(last_err or "Gagal verifikasi transaksi Solana")
 
 
 # ---------------- TRON ----------------
@@ -541,15 +551,18 @@ async def _scan_solana_incoming(symbol, wallet, min_amount, limit):
         "jsonrpc": "2.0", "id": 1, "method": "getSignaturesForAddress",
         "params": [wallet, {"limit": min(limit * 2, 40)}],
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.post(SOLANA_RPC, json=payload)
-            if res.status_code != 200:
-                return []
-            sigs = res.json().get("result") or []
-    except Exception as exc:
-        logger.warning("SOLANA scan error: %s", exc)
-        return []
+    sigs = []
+    for rpc in SOLANA_RPCS:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(rpc, json=payload)
+                if res.status_code == 200:
+                    sigs = res.json().get("result") or []
+                    if sigs:
+                        break
+        except Exception as exc:
+            logger.warning(f"SOLANA scan error via {rpc}: {exc}")
+            continue
 
     results = []
     for sig_item in sigs:
@@ -625,14 +638,40 @@ async def _scan_ton_incoming(symbol, wallet, min_amount, limit):
     from config.settings import settings
     rpc = settings.TON_RPC or "https://toncenter.com/api/v2/jsonRPC"
     api_key = settings.TON_API_KEY
-    if symbol.upper() != "TON":
-        return []  # scan jetton tidak didukung — andalkan TX hash manual
+    symbol_upper = symbol.upper()
+    results = []
 
+    if symbol_upper in ("USDT", "USDC"):
+        # Scan Jetton USDT via TonAPI v2 REST
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(f"https://tonapi.io/v2/accounts/{wallet}/jettons/history?limit={limit}")
+                if res.status_code == 200:
+                    data = res.json()
+                    for event in data.get("events", []):
+                        if not event.get("in_progress", False):
+                            for action in event.get("actions", []):
+                                if action.get("type") == "JettonTransfer":
+                                    jt = action.get("JettonTransfer", {})
+                                    recip = (jt.get("recipient") or {}).get("address", "")
+                                    if recip and recip.lower() == wallet.lower():
+                                        dec = int((jt.get("jetton") or {}).get("decimals", 6))
+                                        amt = float(jt.get("amount", 0)) / (10 ** dec)
+                                        if amt >= min_amount * (1 - AMOUNT_TOLERANCE):
+                                            results.append({
+                                                "tx_hash": event.get("event_id", ""),
+                                                "amount": amt,
+                                                "from_address": (jt.get("sender") or {}).get("address", ""),
+                                            })
+        except Exception as exc:
+            logger.warning(f"TON Jetton scan error: %s", exc)
+        return results
+
+    # Native TON via Toncenter
     data = await _ton_rpc(rpc, api_key, "getTransactions", {"address": wallet, "limit": limit})
     if not isinstance(data, list):
         return []
 
-    results = []
     for txn in data:
         if txn.get("success") is not True:
             continue

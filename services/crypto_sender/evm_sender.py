@@ -278,7 +278,10 @@ class EVMSender(BaseCryptoSender):
                 return float(balance)
 
             except Exception as e:
-                logger.warning(f"Gagal mengambil saldo {symbol} di {self.network} via {self.rpc_list[self.current_rpc_index]}: {e}")
+                if self.network == "ROBINHOOD":
+                    logger.debug(f"Robinhood RPC unreachable: {e}")
+                else:
+                    logger.warning(f"Gagal mengambil saldo {symbol} di {self.network} via {self.rpc_list[self.current_rpc_index]}: {e}")
                 if attempt < len(self.rpc_list) - 1:
                     self._rotate_rpc()
                 else:
