@@ -22,7 +22,8 @@ from weakref import WeakValueDictionary
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from database.connection import SessionLocal
-from database.models import Order, AuditLog
+from database.models import Order, AuditLog, DepositClaim
+from sqlalchemy.exc import IntegrityError
 from services import tx_verifier
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto, format_idr
@@ -97,12 +98,18 @@ class DepositDetector:
 
     # ---------------- Per order ----------------
     async def _process_order(self, db, order, bot_app):
+        if order.status not in ("WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"):
+            return
         expected_wallet = order.deposit_wallet or ""
         expected_amount = float(order.crypto_amount or 0)
 
         # Order yang payout-nya pernah gagal/crash (PAYOUT_QUEUED tanpa hash) -> retry langsung.
         if order.status == "PAYOUT_QUEUED":
-            await self._execute_payout(db, order, bot_app)
+            # A crashed worker may already have broadcast. Never blindly resend.
+            if order.updated_at and (datetime.utcnow() - order.updated_at).total_seconds() > 120:
+                order.status = "manual_review"
+                order.failure_reason = "Payout terputus; periksa receipt sebelum mengirim ulang."
+                db.commit()
             return
 
         tx_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
@@ -118,6 +125,8 @@ class DepositDetector:
                 tx_hash=tx_hash,
                 expected_wallet=expected_wallet,
                 expected_amount=expected_amount,
+                not_before=order.created_at,
+                not_after=order.quote_expires_at or order.expired_at,
             )
 
         # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi)
@@ -129,7 +138,20 @@ class DepositDetector:
                     wallet=expected_wallet,
                     min_amount=expected_amount,
                     limit=20,
+                    not_before=order.created_at,
+                    not_after=order.quote_expires_at or order.expired_at,
                 )
+                # Equal quotes on a shared address cannot be attributed safely.
+                competing = db.query(Order).filter(
+                    Order.order_id != order.order_id,
+                    Order.status == "WAITING_CRYPTO_DEPOSIT",
+                    Order.network == order.network,
+                    Order.crypto_symbol == order.crypto_symbol,
+                    Order.deposit_wallet == expected_wallet,
+                    Order.crypto_amount == order.crypto_amount,
+                ).first()
+                if competing:
+                    return
                 for txn in incoming:
                     if not txn.get("tx_hash"):
                         continue
@@ -142,9 +164,11 @@ class DepositDetector:
                         tx_hash=txn["tx_hash"],
                         expected_wallet=expected_wallet,
                         expected_amount=expected_amount,
+                        not_before=order.created_at,
+                        not_after=order.quote_expires_at or order.expired_at,
                     )
                     if ver.get("verified"):
-                        tx_hash = txn["tx_hash"]
+                        tx_hash = ver["tx_hash"]
                         verified = ver
                         break
 
@@ -154,6 +178,8 @@ class DepositDetector:
                 order.order_id, tx_hash or "-",
             )
             return
+
+        tx_hash = verified.get("tx_hash", tx_hash)
 
         # Guard anti reuse hash: hash yang sudah diklaim order lain tidak boleh
         # mengonfirmasi order ini (jalur verifikasi hash langsung maupun auto-scan).
@@ -171,10 +197,33 @@ class DepositDetector:
     async def _confirm_order(self, db, order, tx_hash, verified, bot_app):
         if order.status != "WAITING_CRYPTO_DEPOSIT":
             return
+        # The direct user hash path and the background scanner share these guards.
+        if not verified.get("verified") or not verified.get("timestamp") or not order.created_at:
+            return
+        if verified["timestamp"] < int(tx_verifier._timestamp(order.created_at)):
+            return
+        deadline = order.quote_expires_at or order.expired_at
+        if deadline and verified["timestamp"] > tx_verifier._timestamp(deadline):
+            return
+        if not tx_verifier._amount_matches(verified.get("amount", 0), order.crypto_amount):
+            return
+        tx_hash = tx_verifier.normalize_tx_hash(order.network, verified.get("tx_hash") or tx_hash)
+        if self._is_hash_used(db, tx_hash, exclude_order=order.order_id):
+            return
+        try:
+            db.add(DepositClaim(network=order.network.upper(), tx_hash=tx_hash, order_id=order.order_id))
+            db.flush()
+            changed = db.query(Order).filter(Order.order_id == order.order_id,
+                Order.status == "WAITING_CRYPTO_DEPOSIT").update({"status": "CRYPTO_CONFIRMED"}, synchronize_session=False)
+            if changed != 1:
+                db.rollback()
+                return
+        except IntegrityError:
+            db.rollback()
+            return
 
         old_status = order.status
         order.status = "CRYPTO_CONFIRMED"
-        order.confirmed_at = datetime.utcnow()
         if tx_hash:
             order.deposit_tx_hash = tx_hash
         db.add(AuditLog(
@@ -235,7 +284,7 @@ class DepositDetector:
                             InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order.order_id}")
                         ]
                     ])
-                    await notify_admins(bot_app, admin_msg, reply_markup=admin_keyboard)
+                    await notify_admins(bot_app, admin_msg, reply_markup=admin_keyboard, order_type="sell")
                 except Exception as exc:
                     logger.warning("Gagal notif admin sell: %s", exc)
 
@@ -254,16 +303,17 @@ class DepositDetector:
             if order.payout_tx_hash or order.status == "COMPLETED":
                 return
 
-            if order.status == "PAYOUT_QUEUED":
-                # Masih in-flight dari worker lain jika updated_at segar (<120s).
-                # Stale (>120s, crash) -> boleh di-retry.
-                if order.updated_at and (datetime.utcnow() - order.updated_at).total_seconds() < 120:
-                    return
-            elif order.status != "CRYPTO_CONFIRMED":
+            if order.status != "CRYPTO_CONFIRMED":
                 return
 
             old_status = order.status
-            order.status = "PAYOUT_QUEUED"
+            # Cross-process claim: an in-memory lock alone cannot protect two workers.
+            changed = db.query(Order).filter(Order.order_id == order.order_id,
+                Order.status == "CRYPTO_CONFIRMED", Order.payout_tx_hash.is_(None)).update(
+                    {"status": "PAYOUT_QUEUED", "updated_at": datetime.utcnow()}, synchronize_session=False)
+            if changed != 1:
+                db.rollback()
+                return
             db.add(AuditLog(
                 telegram_id=order.telegram_id,
                 action="PAYOUT_QUEUED",
@@ -274,6 +324,7 @@ class DepositDetector:
                         f"({order.target_network}) ke {order.buyer_wallet}",
             ))
             db.commit()
+            db.refresh(order)
 
             if not reserve_order_inventory(
                 db,
@@ -327,6 +378,8 @@ class DepositDetector:
                         logger.warning("Gagal notif payout sukses: %s", exc)
             else:
                 order.status = "manual_review"
+                if result.get("tx_hash"):
+                    order.payout_tx_hash = result["tx_hash"]
                 order.failure_reason = result.get("error_message") or "Auto-payout gagal"
                 db.commit()
                 if bot_app:
@@ -338,8 +391,9 @@ class DepositDetector:
                             f"({order.target_network})\n"
                             f"Wallet: <code>{order.buyer_wallet}</code>\n"
                             f"Error: {order.failure_reason}\n\n"
-                            f"Payout gagal otomatis — kirim secara manual, lalu "
-                            f"<code>/confirm {order.order_id}</code>."
+                            f"TX payout: <code>{order.payout_tx_hash or '-'}</code>\n"
+                            "Periksa receipt dan riwayat wallet terlebih dahulu. "
+                            "Jangan kirim ulang jika status broadcast belum pasti."
                         )
                         await notify_admins(bot_app, admin_msg)
                         await safe_send_message(
@@ -358,10 +412,14 @@ class DepositDetector:
     def _is_hash_used(db, tx_hash, exclude_order):
         if not tx_hash:
             return True
+        if db.query(DepositClaim).filter(DepositClaim.tx_hash == tx_hash,
+                                       DepositClaim.order_id != exclude_order).first():
+            return True
         existing = (
             db.query(Order)
             .filter(Order.deposit_tx_hash == tx_hash)
             .filter(Order.order_id != exclude_order)
+            .filter(Order.status != "WAITING_CRYPTO_DEPOSIT")
             .first()
         )
         return existing is not None

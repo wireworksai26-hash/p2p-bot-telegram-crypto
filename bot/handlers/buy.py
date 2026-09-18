@@ -42,7 +42,7 @@ from database.crud import (
     reserve_order_inventory,
     release_order_inventory,
 )
-from services.price_service import price_service
+from services.price_service import price_service, quote_source_text
 from services.fee_service import calculate_fee_idr, get_fee_category
 from services.gopay_service import gopay_service
 from bot.keyboards.crypto_select import (
@@ -63,7 +63,7 @@ from bot.utils.emojis import (
     E_SPARKLES,
     CUSTOM_EMOJI_IDS,
 )
-from config.assets import QRIS_STATIC_IMAGE
+from config.assets import QRIS_STATIC_IMAGE, MANUAL_PAYOUT_NETWORKS
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,22 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["buy_symbol"] = symbol
     context.user_data["buy_network"] = network
     
+    if network.upper() in MANUAL_PAYOUT_NETWORKS:
+        keyboard = [
+            [InlineKeyboardButton("Kembali (Pilih Koin)", callback_data="buy_back_symbols", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()]
+        ]
+        await query.edit_message_text(
+            text=(
+                f"ℹ️ <b>Pengiriman Otomatis Belum Tersedia</b>\n\n"
+                f"Pengiriman koin otomatis untuk jaringan <b>{network}</b> saat ini belum tersedia.\n"
+                f"Silakan hubungi admin untuk transaksi manual; <b>jangan melakukan pembayaran dahulu</b>."
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return SELECT_NETWORK
+
     keyboard = [
         [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
@@ -243,55 +259,69 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 ),
                 parse_mode="HTML"
             )
-            db.close()
             return INPUT_AMOUNT
+
+        buy_price_idr = price_data["buy_price_idr"]
+        
+        # Hitung jumlah crypto yang didapatkan ((Nominal - Fee) / Kurs Beli)
+        received_idr = nominal_idr - fee_idr
+        crypto_amount = received_idr / buy_price_idr
+        
+        # Simpan rincian perhitungan ke context
+        context.user_data["buy_nominal_idr"] = nominal_idr
+        context.user_data["buy_fee_idr"] = fee_idr
+        context.user_data["buy_received_idr"] = received_idr
+        context.user_data["buy_total_idr"] = nominal_idr
+        context.user_data["buy_price_per_unit"] = buy_price_idr
+        context.user_data["buy_crypto_amount"] = crypto_amount
+
+        available_inventory = get_available_inventory(db, network, symbol)
+        if available_inventory is not None and available_inventory < Decimal(str(crypto_amount)):
+            available_text = format_crypto(float(available_inventory), symbol)
+            await update.message.reply_text(
+                text=(
+                    f"⚠️ <b>Stok {symbol} ({network}) Tidak Mencukupi!</b>\n\n"
+                    f"Jumlah yang ingin Anda beli: <code>{format_crypto(crypto_amount, symbol)}</code>\n"
+                    f"Stok tersedia saat ini: <code>{available_text}</code>\n\n"
+                    "Silakan masukkan nominal Rupiah yang lebih kecil, atau hubungi admin untuk transaksi manual."
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+            return INPUT_AMOUNT
+
+        quote_info = ""
+        try:
+            quote_info = f"\nℹ️ <i>{quote_source_text(price_data)}</i>"
+        except Exception:
+            pass
+
+        await update.message.reply_text(
+            text=(
+                f"🪙 <b>Simulasi Perhitungan Pembelian:</b>\n"
+                f"• Aset: <code>{format_crypto(crypto_amount, symbol)}</code>\n"
+                f"• Kurs Beli: <code>{format_idr(buy_price_idr)}</code>\n"
+                f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
+                f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
+                f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>"
+                f"{quote_info}\n\n"
+                f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
+                f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return INPUT_WALLET
 
     except ValueError as val_err:
         await update.message.reply_text(f"⚠️ {str(val_err)}")
-        db.close()
         return INPUT_AMOUNT
     except Exception as e:
         logger.error(f"Gagal memproses nominal untuk {symbol}: {e}", exc_info=True)
         await update.message.reply_text("⚠️ Terjadi kesalahan saat mengambil rate harga. Silakan coba sesaat lagi.")
-        db.close()
         return ConversationHandler.END
     finally:
         db.close()
-
-    buy_price_idr = price_data["buy_price_idr"]
-    
-    # Hitung jumlah crypto yang didapatkan ((Nominal - Fee) / Kurs Beli)
-    received_idr = nominal_idr - fee_idr
-    crypto_amount = received_idr / buy_price_idr
-    
-    # Simpan rincian perhitungan ke context
-    context.user_data["buy_nominal_idr"] = nominal_idr
-    context.user_data["buy_fee_idr"] = fee_idr
-    context.user_data["buy_received_idr"] = received_idr
-    context.user_data["buy_total_idr"] = nominal_idr
-    context.user_data["buy_price_per_unit"] = buy_price_idr
-    context.user_data["buy_crypto_amount"] = crypto_amount
-    
-    keyboard = [
-        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-        [get_owner_button()]
-    ]
-
-    await update.message.reply_text(
-        text=(
-            f"🪙 <b>Simulasi Perhitungan Pembelian:</b>\n"
-            f"• Aset: <code>{format_crypto(crypto_amount, symbol)}</code>\n"
-            f"• Kurs Beli: <code>{format_idr(buy_price_idr)}</code>\n"
-            f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
-            f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
-            f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"
-            f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
-            f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
-        ),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
-    return INPUT_WALLET
 
 
 async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -329,6 +359,12 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         user_balance = get_user_balance(db, user_id)
         available_inventory = get_available_inventory(db, network, symbol)
+        if available_inventory is None:
+            from services.wallet_sync import sync_wallet_balances
+            stock_sym = "MATIC" if network.upper() == "POLYGON" and symbol.upper() == "POL" else symbol
+            await sync_wallet_balances([(stock_sym, network)])
+            available_inventory = get_available_inventory(db, network, symbol)
+
         if available_inventory is None or available_inventory < Decimal(str(context.user_data["buy_crypto_amount"])):
             available_text = (
                 format_crypto(float(available_inventory), symbol)
@@ -484,6 +520,46 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         buyer_wallet = context.user_data["buy_wallet"]
         method_code = context.user_data["buy_pay_method"]
         
+        if network.upper() in MANUAL_PAYOUT_NETWORKS:
+            await query.edit_message_text(
+                text=(
+                    f"ℹ️ <b>Pengiriman Otomatis Belum Tersedia</b>\n\n"
+                    f"Jaringan <b>{network}</b> belum mendukung pengiriman otomatis. "
+                    "Silakan hubungi admin untuk transaksi manual."
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+                ]]),
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+
+        available_inventory = get_available_inventory(db, network, symbol)
+        if available_inventory is None:
+            from services.wallet_sync import sync_wallet_balances
+            stock_sym = "MATIC" if network.upper() == "POLYGON" and symbol.upper() == "POL" else symbol
+            await sync_wallet_balances([(stock_sym, network)])
+            available_inventory = get_available_inventory(db, network, symbol)
+
+        if available_inventory is None or available_inventory < Decimal(str(crypto_amount)):
+            available_text = (
+                format_crypto(float(available_inventory), symbol)
+                if available_inventory is not None
+                else "belum tersedia"
+            )
+            await query.edit_message_text(
+                text=(
+                    f"⚠️ <b>Stok {symbol} ({network}) tidak mencukupi.</b>\n\n"
+                    f"Stok tersedia saat ini: <code>{available_text}</code>\n"
+                    "Mohon maaf, ketersediaan stok telah berubah atau belum mencukupi. Silakan hubungi admin untuk transaksi manual. Pembayaran belum dilakukan."
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+                ]]),
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+
         # --- 2. Handle Payment Method ---
         if method_code == "BOT_BALANCE":
             # [FIX KRITIS-1] Atomic: Buat order DULU, baru potong saldo.

@@ -57,6 +57,7 @@ from bot.handlers.admin import (
     setemoji_handler,
     listemojis_handler,
     resetemojis_handler,
+    check_api_command,
 )
 
 # FastAPI app & webhook bridge
@@ -163,6 +164,7 @@ def _migrate_orders_schema():
             new_columns_orders = [
                 ("payment_method", "VARCHAR(30)"),
                 ("unique_code", "INTEGER DEFAULT 0"),
+                ("deposit_proof_file_id", "VARCHAR(500)"),
             ]
             with engine.begin() as conn:
                 for col, dtype in new_columns_orders:
@@ -181,22 +183,33 @@ def _migrate_orders_schema():
 
 
 def _migrate_inventory_schema():
-    """Tambah kolom reservation pada wallet_balances jika belum ada."""
+    """Tambah kolom reservation dan kesehatan sinkronisasi wallet."""
     from sqlalchemy import inspect
     from database.connection import engine
     try:
         inspector = inspect(engine)
         if "wallet_balances" in inspector.get_table_names():
             columns = {c["name"] for c in inspector.get_columns("wallet_balances")}
-            if "reserved_balance" not in columns:
-                with engine.begin() as conn:
-                    conn.exec_driver_sql(
-                        "ALTER TABLE wallet_balances ADD COLUMN reserved_balance NUMERIC(36, 18) DEFAULT 0"
-                    )
-                    logger.info("Migrasi wallet_balances: kolom reserved_balance ditambahkan.")
+            new_columns = [
+                ("reserved_balance", "NUMERIC(36, 18) DEFAULT 0"),
+                ("sync_status", "VARCHAR(20) DEFAULT 'UNKNOWN' NOT NULL"),
+                ("last_error", "VARCHAR(500)"),
+                ("last_checked_at", "TIMESTAMP"),
+                ("last_success_at", "TIMESTAMP"),
+            ]
             with engine.begin() as conn:
+                for name, definition in new_columns:
+                    if name not in columns:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE wallet_balances ADD COLUMN {name} {definition}"
+                        )
+                        logger.info("Migrasi wallet_balances: kolom %s ditambahkan.", name)
                 conn.exec_driver_sql(
                     "UPDATE wallet_balances SET reserved_balance = 0 WHERE reserved_balance IS NULL"
+                )
+                conn.exec_driver_sql(
+                    "UPDATE wallet_balances SET sync_status = 'UNKNOWN' "
+                    "WHERE sync_status IS NULL OR sync_status = ''"
                 )
     except Exception as exc:
         logger.error("Migrasi inventory gagal: %s", exc, exc_info=True)
@@ -309,6 +322,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("admin", admin_handler))
     application.add_handler(CommandHandler("setspread", setspread_handler))
     application.add_handler(CommandHandler("orders", orders_handler))
+    from bot.handlers.admin import sellorders_handler
+    application.add_handler(CommandHandler("sellorders", sellorders_handler))
     application.add_handler(CommandHandler("confirm", confirm_handler))
     application.add_handler(CommandHandler("broadcast", broadcast_handler))
     application.add_handler(CommandHandler("ban", ban_handler))
@@ -320,6 +335,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("setemoji", setemoji_handler))
     application.add_handler(CommandHandler("listemojis", listemojis_handler))
     application.add_handler(CommandHandler("resetemojis", resetemojis_handler))
+    application.add_handler(CommandHandler("checkapi", check_api_command))
+    application.add_handler(CommandHandler("cekurl", check_api_command))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands
@@ -476,6 +493,17 @@ def setup_scheduler():
         coalesce=True,
     )
 
+    # --- Coin API & RPC Health Monitor (every 5 min) ---
+    scheduler.add_job(
+        _job_check_coin_apis,
+        "interval",
+        minutes=5,
+        id="coin_api_health_monitor",
+        name="Monitor Coin APIs and RPC Endpoints",
+        max_instances=1,
+        coalesce=True,
+    )
+
     # --- Wallet Balance Sync (every 5 min) ---
     scheduler.add_job(
         _job_sync_wallet_balances,
@@ -579,40 +607,22 @@ async def _job_expire_orders():
         logger.error("Order expiry job failed: %s", exc, exc_info=True)
 
 
+async def _job_check_coin_apis():
+    """Memeriksa kesehatan seluruh URL/API koin dan mengirim alarm ke admin jika ada yang down/berubah."""
+    try:
+        from services.coin_api_monitor import coin_api_monitor
+        from services.bot_runtime import bot_app
+        await coin_api_monitor.check_all_and_alert(bot_app)
+    except Exception as exc:
+        logger.error("Job pemantau API koin gagal: %s", exc, exc_info=True)
+
+
 async def _job_sync_wallet_balances():
     """Query on-chain balances for all (network, symbol) pairs and update wallet_balances table."""
-    from services.crypto_sender import CryptoSenderFactory
-    from database.crud import update_wallet_balance, prune_wallet_balances
-    from config.assets import STOCK_ASSETS
-
-    async def fetch_balance(network, symbol):
-        try:
-            sender = CryptoSenderFactory.get_sender(network)
-            balance = await sender.get_balance(symbol=symbol)
-            addr = getattr(sender, "wallet_address", None)
-            return balance, addr
-        except Exception as exc:
-            logger.warning("Balance sync failed for %s (%s): %s", network, symbol, exc)
-            return None, None
-
-    tasks = [fetch_balance(net, sym) for sym, net in STOCK_ASSETS]
-    results = await asyncio.gather(*tasks)
-
-    db = SessionLocal()
-    try:
-        for (sym, net), (balance, addr) in zip(STOCK_ASSETS, results):
-            if balance is not None:
-                update_wallet_balance(
-                    db, network=net, symbol=sym, balance=balance, address=addr
-                )
-        prune_wallet_balances(db, STOCK_ASSETS)
-        logger.debug("Wallet balances synced")
-
-        # Sync sesi GoPay dari file ke DB berkala
-        from database.crud import sync_gopay_session_file
-        sync_gopay_session_file()
-    finally:
-        db.close()
+    from services.wallet_sync import sync_wallet_balances
+    from database.crud import sync_gopay_session_file
+    await sync_wallet_balances()
+    sync_gopay_session_file()
 
 
 async def _job_low_balance_alert():
@@ -908,6 +918,8 @@ async def main():
 
         # Trigger initial wallet balance sync immediately on startup
         asyncio.create_task(_job_sync_wallet_balances())
+        # Trigger initial coin API & RPC health check immediately on startup
+        asyncio.create_task(_job_check_coin_apis())
 
         # Keep running until we receive a stop signal
         stop_event = asyncio.Event()

@@ -6,6 +6,8 @@ Menangani pengiriman SOL native ke wallet customer menggunakan solana-py & solde
 
 import logging
 import asyncio
+import base64
+from decimal import Decimal
 import base58
 import httpx
 from config.settings import settings
@@ -13,7 +15,7 @@ from services.crypto_sender import BaseCryptoSender, SendResult
 
 # Solana imports
 try:
-    from solana.rpc.api import Client
+    from solders.hash import Hash
     from solders.pubkey import Pubkey
     from solders.keypair import Keypair
     from solders.message import Message
@@ -21,11 +23,14 @@ try:
     from solders.transaction import VersionedTransaction
     from spl.token.constants import TOKEN_PROGRAM_ID
     from spl.token.instructions import (
-        TransferCheckedParams,
         create_associated_token_account,
         get_associated_token_address,
         transfer_checked,
     )
+    try:
+        from spl.token.models import TransferCheckedParams
+    except ImportError:
+        from spl.token.instructions import TransferCheckedParams
     SOLANA_LIB_AVAILABLE = True
 except ImportError:
     SOLANA_LIB_AVAILABLE = False
@@ -40,8 +45,12 @@ SPL_TOKENS = {
 
 class SolanaSender(BaseCryptoSender):
     def __init__(self):
-        raw_rpcs = [settings.SOL_RPC, "https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com", "https://1rpc.io/solana"]
-        self.rpc_list = [r.strip() for r in raw_rpcs if r and r.strip()]
+        raw_rpcs = [
+            settings.SOL_RPC,
+            "https://solana-rpc.publicnode.com",
+            "https://api.mainnet-beta.solana.com",
+        ]
+        self.rpc_list = list(dict.fromkeys(r.strip() for r in raw_rpcs if r and r.strip()))
         self.rpc_url = self.rpc_list[0]
         self.explorer_base = "https://explorer.solana.com"
         self.wallet_address = settings.SOL_WALLET_ADDRESS
@@ -61,34 +70,42 @@ class SolanaSender(BaseCryptoSender):
     async def get_balance(self, symbol: str = "") -> float:
         """Mengambil saldo SOL native atau token SPL (USDT/USDC)."""
         if not self.wallet_address:
-            return 0.0
+            raise RuntimeError("SOL_WALLET_ADDRESS belum dikonfigurasi.")
         sym = symbol.upper() if symbol else ""
         if sym in SPL_TOKENS:
             return await self._get_spl_token_balance(SPL_TOKENS[sym])
+        if sym not in ("", "SOL"):
+            raise ValueError(f"Token '{sym}' tidak didukung pada Solana.")
 
-        if not SOLANA_LIB_AVAILABLE:
-            logger.error("Solana library (solana/solders) tidak terinstall.")
-            return 0.0
-        
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getBalance",
+            "params": [self.wallet_address, {"commitment": "confirmed"}],
+        }
+        last_error = None
         for rpc in self.rpc_list:
             try:
-                client = Client(rpc)
-                pubkey = Pubkey.from_string(self.wallet_address)
-                response = await asyncio.to_thread(client.get_balance, pubkey)
-                lamports = response.value
-                balance = lamports / 10**9
-                return float(balance)
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    res = await client.post(rpc, json=payload)
+                    res.raise_for_status()
+                    data = res.json()
+                    if data.get("error") or "result" not in data:
+                        raise RuntimeError(str(data.get("error") or "result kosong"))
+                    lamports = int(data["result"]["value"])
+                    return float(lamports / 10**9)
             except Exception as e:
+                last_error = e
                 logger.warning(f"Gagal mengambil saldo Solana via {rpc}: {e}")
                 continue
-        return 0.0
+        raise RuntimeError(f"Semua RPC Solana gagal membaca saldo SOL: {last_error}")
 
     async def _get_spl_token_balance(self, mint_address: str) -> float:
         """
         Mengambil saldo token SPL milik wallet bot via RPC getTokenAccountsByOwner.
         """
         if not self.wallet_address:
-            return 0.0
+            raise RuntimeError("SOL_WALLET_ADDRESS belum dikonfigurasi.")
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -99,154 +116,100 @@ class SolanaSender(BaseCryptoSender):
                 {"encoding": "jsonParsed"},
             ],
         }
+        last_error = None
         for rpc in self.rpc_list:
             try:
                 async with httpx.AsyncClient(timeout=8.0) as client:
                     res = await client.post(rpc, json=payload)
-                    if res.status_code == 200:
-                        data = res.json()
-                        total = 0.0
-                        for item in (data.get("result", {}).get("value") or []):
-                            info = (
-                                item.get("account", {})
-                                .get("data", {})
-                                .get("parsed", {})
-                                .get("info", {})
-                            )
-                            amt = info.get("tokenAmount", {}).get("uiAmount")
-                            if amt is not None:
-                                total += float(amt)
-                        return total
+                    res.raise_for_status()
+                    data = res.json()
+                    if data.get("error") or "result" not in data:
+                        raise RuntimeError(str(data.get("error") or "result kosong"))
+                    total = 0.0
+                    accounts = data["result"]["value"]
+                    if not isinstance(accounts, list):
+                        raise ValueError("Daftar akun SPL tidak valid.")
+                    for item in accounts:
+                        token_amount = item["account"]["data"]["parsed"]["info"]["tokenAmount"]
+                        total += int(token_amount["amount"]) / (10 ** int(token_amount["decimals"]))
+                    return total
             except Exception as e:
+                last_error = e
                 logger.warning(f"Gagal mengambil saldo SPL token via {rpc}: {e}")
                 continue
-        return 0.0
+        raise RuntimeError(f"Semua RPC Solana gagal membaca saldo SPL: {last_error}")
+
+    async def _rpc(self, method, params):
+        async with httpx.AsyncClient(timeout=12) as client:
+            response = await client.post(self.rpc_url, json={
+                "jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+            response.raise_for_status()
+            data = response.json()
+            if data.get("error") or "result" not in data:
+                raise RuntimeError("RPC Solana menolak/belum mengonfirmasi transaksi.")
+            return data["result"]
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
-        """Mengirim SOL native atau token SPL USDT/USDC."""
+        """Sign once; a signature exists before broadcast, and success needs finality."""
         if not SOLANA_LIB_AVAILABLE:
-            return SendResult(
-                success=False,
-                error_message="Library Solana tidak tersedia di server ini."
-            )
+            return SendResult(False, error_message="MANUAL_REVIEW: SDK Solana tidak tersedia.")
+        tx_hash = ""
+        broadcast_attempted = False
         try:
-            # Validasi input
+            sym = symbol.upper()
+            quantity = Decimal(str(amount))
+            if sym not in {"SOL", *SPL_TOKENS} or not quantity.is_finite() or quantity <= 0:
+                return SendResult(False, error_message="MANUAL_REVIEW: Aset/nominal Solana tidak valid.")
             if not self.validate_address(to_address):
-                return SendResult(success=False, error_message="Alamat wallet Solana tidak valid.")
-
-            # Load private key (biasanya format base58 phantom export)
-            try:
-                secret_key = base58.b58decode(self.private_key_b58)
-                sender_keypair = Keypair.from_bytes(secret_key)
-            except Exception as key_err:
-                return SendResult(
-                    success=False,
-                    error_message=f"Gagal memuat Solana Private Key: {key_err}"
-                )
-
-            client = Client(self.rpc_url)
-            
-            # Inisialisasi pubkeys
-            from_pubkey = sender_keypair.pubkey()
-            to_pubkey = Pubkey.from_string(to_address)
-
+                return SendResult(False, error_message="MANUAL_REVIEW: Alamat Solana tidak valid.")
+            keypair = Keypair.from_bytes(base58.b58decode(self.private_key_b58))
+            owner, recipient = keypair.pubkey(), Pubkey.from_string(to_address)
+            if str(owner) != self.wallet_address:
+                return SendResult(False, error_message="MANUAL_REVIEW: Key Solana tidak cocok dengan alamat stok.")
+            # Reject a accidentally configured devnet/testnet RPC before signing.
+            if await self._rpc("getGenesisHash", []) != "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp":
+                return SendResult(False, error_message="MANUAL_REVIEW: RPC bukan Solana mainnet.")
             instructions = []
-            if symbol.upper() in SPL_TOKENS:
-                mint = Pubkey.from_string(SPL_TOKENS[symbol.upper()])
-                supply = await asyncio.to_thread(client.get_token_supply, mint)
-                decimals = int(supply.value.decimals)
-                token_balance = await self.get_balance(symbol.upper())
-                if token_balance < amount:
-                    return SendResult(
-                        success=False,
-                        error_message=(
-                            f"Saldo {symbol.upper()} tidak cukup. Saldo: {token_balance}, "
-                            f"Kebutuhan: {amount}"
-                        ),
-                    )
-
-                source_ata = get_associated_token_address(from_pubkey, mint)
-                destination_ata = get_associated_token_address(to_pubkey, mint)
-                destination_info = await asyncio.to_thread(
-                    client.get_account_info, destination_ata
-                )
-                if destination_info.value is None:
-                    sol_balance = await self.get_balance()
-                    if sol_balance < 0.01:
-                        return SendResult(
-                            success=False,
-                            error_message=(
-                                "MANUAL_REVIEW: Saldo SOL tidak cukup untuk membuat "
-                                "Associated Token Account penerima."
-                            ),
-                        )
-                    instructions.append(
-                        create_associated_token_account(from_pubkey, to_pubkey, mint)
-                    )
-
-                instructions.append(
-                    transfer_checked(
-                        TransferCheckedParams(
-                            program_id=TOKEN_PROGRAM_ID,
-                            source=source_ata,
-                            mint=mint,
-                            dest=destination_ata,
-                            owner=from_pubkey,
-                            amount=int(round(amount * (10 ** decimals))),
-                            decimals=decimals,
-                            signers=[],
-                        )
-                    )
-                )
+            decimals = 9 if sym == "SOL" else 6
+            units = int(quantity * 10**decimals)
+            if units <= 0:
+                return SendResult(False, error_message="MANUAL_REVIEW: Nominal di bawah unit minimum.")
+            if sym == "SOL":
+                instructions.append(transfer(TransferParams(
+                    from_pubkey=owner, to_pubkey=recipient, lamports=units)))
             else:
-                # Cek saldo SOL native (juga membayar fee/ATA rent).
-                balance = await self.get_balance()
-                if balance < amount:
-                    return SendResult(
-                        success=False,
-                        error_message=f"Saldo SOL tidak cukup. Saldo: {balance} SOL, Kebutuhan: {amount} SOL"
-                    )
-                instructions.append(
-                    transfer(
-                        TransferParams(
-                            from_pubkey=from_pubkey,
-                            to_pubkey=to_pubkey,
-                            lamports=int(amount * 10**9),
-                        )
-                    )
-                )
-
-            # Dapatkan blockhash terbaru
-            recent_blockhash_resp = await asyncio.to_thread(client.get_latest_blockhash)
-            recent_blockhash = recent_blockhash_resp.value.blockhash
-
-            message = Message.new_with_blockhash(
-                instructions,
-                from_pubkey,
-                recent_blockhash,
-            )
-            tx = VersionedTransaction(message, [sender_keypair])
-            
-            # Sign & Send transaksi
-            # Note: signers di solders/solana-py menerima list Keypair
-            response = await asyncio.to_thread(client.send_transaction, tx)
-            
-            tx_hash = str(response.value)
-            explorer_url = f"{self.explorer_base}/tx/{tx_hash}"
-            
-            # Verifikasi transaksi di blockchain (confirm transaction)
-            # Karena ini async wrapper dan library solana blocking,
-            # kita asumsikan transaksi berhasil dikirim. Kita beri delay aman.
-            logger.info(f"Transaksi Solana berhasil dikirim. Hash: {tx_hash}")
-            return SendResult(
-                success=True,
-                tx_hash=tx_hash,
-                explorer_url=explorer_url
-            )
-
-        except Exception as e:
-            logger.error(f"Error saat mengirim SOL: {e}", exc_info=True)
-            return SendResult(
-                success=False,
-                error_message=f"Exception saat pengiriman Solana: {str(e)}"
-            )
+                mint = Pubkey.from_string(SPL_TOKENS[sym])
+                source = get_associated_token_address(owner, mint)
+                destination = get_associated_token_address(recipient, mint)
+                account = await self._rpc("getAccountInfo", [str(destination), {"encoding": "base64"}])
+                if account["value"] is None:
+                    instructions.append(create_associated_token_account(owner, recipient, mint))
+                instructions.append(transfer_checked(TransferCheckedParams(
+                    program_id=TOKEN_PROGRAM_ID, source=source, mint=mint, dest=destination,
+                    owner=owner, amount=units, decimals=decimals, signers=[])))
+            recent = await self._rpc("getLatestBlockhash", [{"commitment": "finalized"}])
+            message = Message.new_with_blockhash(instructions, owner, Hash.from_string(recent["value"]["blockhash"]))
+            transaction = VersionedTransaction(message, [keypair])
+            tx_hash = str(transaction.signatures[0])
+            encoded = base64.b64encode(bytes(transaction)).decode()
+            broadcast_attempted = True
+            returned = await self._rpc("sendTransaction", [encoded, {
+                "encoding": "base64", "skipPreflight": False, "preflightCommitment": "finalized", "maxRetries": 0}])
+            if returned != tx_hash:
+                raise RuntimeError("Signature response tidak cocok.")
+            for _ in range(40):
+                status = (await self._rpc("getSignatureStatuses", [[tx_hash], {"searchTransactionHistory": True}]))["value"][0]
+                if status and status.get("err") is not None:
+                    return SendResult(False, tx_hash, "MANUAL_REVIEW: Transaksi Solana gagal on-chain.",
+                                      f"{self.explorer_base}/tx/{tx_hash}")
+                if status and status.get("confirmationStatus") == "finalized":
+                    return SendResult(True, tx_hash, explorer_url=f"{self.explorer_base}/tx/{tx_hash}")
+                await asyncio.sleep(1)
+            raise RuntimeError("Receipt belum finalized.")
+        except Exception as exc:
+            logger.warning("Payout Solana belum selesai (%s)", type(exc).__name__)
+            if broadcast_attempted:
+                return SendResult(False, tx_hash,
+                    "MANUAL_REVIEW: Broadcast/receipt Solana belum pasti; jangan kirim ulang.",
+                    f"{self.explorer_base}/tx/{tx_hash}")
+            return SendResult(False, error_message=f"MANUAL_REVIEW: Preflight Solana gagal ({type(exc).__name__}).")

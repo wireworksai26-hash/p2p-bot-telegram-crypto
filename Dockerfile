@@ -6,11 +6,11 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
 
-# 1. Install Node.js 20 & PM2
+# 1. Install Node.js 22 & PM2
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g pm2 \
     && rm -rf /var/lib/apt/lists/*

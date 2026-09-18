@@ -84,6 +84,7 @@ class Order(Base):
     
     # Hashes & Idempotency
     deposit_tx_hash = Column(String(250), nullable=True)
+    deposit_proof_file_id = Column(String(500), nullable=True)
     payout_tx_hash = Column(String(250), nullable=True)
     tx_hash = Column(String(250), nullable=True)        # Legacy compatibility
     
@@ -99,6 +100,17 @@ class Order(Base):
     # Relationships
     user = relationship("User", back_populates="orders")
 
+class DepositClaim(Base):
+    """A receipt may fund only one order, even with concurrent bot workers."""
+    __tablename__ = "deposit_claims"
+    __table_args__ = (UniqueConstraint("network", "tx_hash", name="uq_deposit_receipt"),)
+    id = Column(Integer, primary_key=True)
+    network = Column(String(30), nullable=False)
+    tx_hash = Column(String(250), nullable=False)
+    order_id = Column(String(50), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WalletBalance(Base):
     __tablename__ = 'wallet_balances'
     __table_args__ = (
@@ -111,6 +123,10 @@ class WalletBalance(Base):
     balance = Column(Numeric(36, 18), default=0.0)
     reserved_balance = Column(Numeric(36, 18), default=0.0)
     address = Column(String(200), nullable=False)
+    sync_status = Column(String(20), default="UNKNOWN", nullable=False, index=True)
+    last_error = Column(String(500), nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

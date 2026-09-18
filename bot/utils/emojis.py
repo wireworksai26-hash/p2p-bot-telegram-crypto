@@ -13,6 +13,7 @@ Mendukung:
 import json
 import os
 import logging
+from html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -68,44 +69,10 @@ DEFAULT_EMOJI_IDS = {
     "STAR":       "5235579393115438657",  # ⭐️ (Forum — animated star)
     "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
 
-    # --- Crypto Coins (3D Animated Custom Emojis) ---
-    "COIN_USDT":  "5309929258443874898",  # 💵 3D Animated Dollar / Tether
-    "COIN_USDC":  "5309929258443874898",  # 💵 3D Animated Dollar / USDC
-    "COIN_ETH":   "5309958691854754293",  # 🔷 3D Ethereum Diamond
-    "COIN_SOL":   "5341580002024503875",  # 🟣 3D Solana Purple
-    "COIN_TRX":   "5967750804596067258",  # ❤️ 3D TRON Red
-    "COIN_BNB":   "5976277053413003198",  # 🟡 3D Binance Gold Coin
-    "COIN_SUI":   "5979034860503698472",  # 💧 3D SUI Aqua Crystal
-    "COIN_TON":   "5462902520215002477",  # 💎 3D TON Diamond
-    "COIN_POL":   "5204196780048137722",  # 🟪 3D Polygon Purple Cube
-    "COIN_MATIC": "5204196780048137722",  # 🟪 3D Polygon Purple Cube
-    "COIN_ARB":   "5309958691854754293",  # 🔷 3D Arbitrum Blue Crystal
-    "COIN_AVAX":  "5204321862380698787",  # 🔴 3D Avalanche Red
-    "COIN_KAIA":  "5474417568053745249",  # 🌱 3D Kaia Sprout
-    "COIN_BERA":  "5379815450160943570",  # 🐻 3D Berachain Bear
-    "COIN_APT":   "5312016608254762256",  # ⚡ 3D Aptos Lightning
-    "COIN_HYPE":  "5203966320692969547",  # 🚀 3D Hyperliquid Rocket
-    "COIN_G":     "5979034860503698472",  # 🌌 3D Gravity Crystal
-    "COIN_BASE":  "5341683880103527632",  # 🔵 3D Base Blue Circle
-
-    # --- Network Identifiers (3D Animated) ---
-    "NET_BSC":        "5976277053413003198",
-    "NET_POLYGON":    "5204196780048137722",
-    "NET_ARB":        "5309958691854754293",
-    "NET_TON":        "5462902520215002477",
-    "NET_SOLANA":     "5341580002024503875",
-    "NET_ETH":        "5309958691854754293",
-    "NET_BASE":       "5341683880103527632",
-    "NET_OPTIMISM":   "5204321862380698787",
-    "NET_ROBINHOOD":  "5978561005351865286",
-    "NET_TRON":       "5967750804596067258",
-    "NET_SUI":        "5979034860503698472",
-    "NET_AVAX":       "5204321862380698787",
-    "NET_KAIA":       "5474417568053745249",
-    "NET_BERA":       "5379815450160943570",
-    "NET_APTOS":      "5312016608254762256",
-    "NET_HYPEREVM":   "5203966320692969547",
-    "NET_GRAVITY":    "5979034860503698472",
+    # Dollar emoji verified through Telegram metadata. Other assets use a
+    # universal coin until an admin selects a visually verified custom logo.
+    "COIN_USDT": "5309929258443874898",
+    "COIN_USDC": "5309929258443874898",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -146,7 +113,7 @@ DEFAULT_EMOJI_ALTS = {
     "COIN_USDC": "💲",
     "COIN_ETH":  "🔷",
     "COIN_SOL":  "🟣",
-    "COIN_TRX":  "🔴",
+    "COIN_TRX":  "🔺",
     "COIN_BNB":  "🟡",
     "COIN_SUI":  "💧",
     "COIN_TON":  "💎",
@@ -156,9 +123,9 @@ DEFAULT_EMOJI_ALTS = {
     "COIN_AVAX": "🔴",
     "COIN_KAIA": "🌱",
     "COIN_BERA": "🐻",
-    "COIN_APT":  "⚡",
-    "COIN_HYPE": "🚀",
-    "COIN_G":    "🌌",
+    "COIN_APT":  "⚫",
+    "COIN_HYPE": "🟢",
+    "COIN_G":    "🪙",
     "COIN_BASE": "🔵",
 
     # Networks
@@ -176,10 +143,22 @@ DEFAULT_EMOJI_ALTS = {
     "NET_AVAX":       "🔴",
     "NET_KAIA":       "🌱",
     "NET_BERA":       "🐻",
-    "NET_APTOS":      "⚡",
-    "NET_HYPEREVM":   "🚀",
-    "NET_GRAVITY":    "🌌",
+    "NET_APTOS":      "⚫",
+    "NET_HYPEREVM":   "🟢",
+    "NET_GRAVITY":    "🪙",
 }
+
+# Retire historical unverified IDs even when an old saved config contains them.
+LEGACY_ASSET_IDS = {
+    "5309958691854754293", "5341580002024503875", "5967750804596067258",
+    "5976277053413003198", "5979034860503698472", "5462902520215002477",
+    "5204196780048137722", "5204321862380698787", "5474417568053745249",
+    "5379815450160943570", "5312016608254762256", "5203966320692969547",
+    "5341683880103527632", "5978561005351865286",
+}
+for _key in DEFAULT_EMOJI_ALTS:
+    if _key.startswith(("COIN_", "NET_")):
+        DEFAULT_EMOJI_ALTS[_key] = "💵" if _key in ("COIN_USDT", "COIN_USDC") else "🪙"
 
 # In-memory working copies
 CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
@@ -196,8 +175,19 @@ def load_custom_emojis() -> None:
                 if isinstance(data, dict):
                     ids = data.get("ids", {})
                     alts = data.get("alts", {})
-                    CUSTOM_EMOJI_IDS.update(ids)
-                    CUSTOM_EMOJI_ALTS.update(alts)
+                    # Version 2 records deliberate admin choices made after migration.
+                    for key, value in ids.items():
+                        if not isinstance(value, str) or not value.isdigit():
+                            continue
+                        if (
+                            data.get("version", 1) < 2
+                            and key.startswith(("COIN_", "NET_"))
+                            and value in LEGACY_ASSET_IDS
+                        ):
+                            continue
+                        CUSTOM_EMOJI_IDS[key] = value
+                        if isinstance(alts.get(key), str):
+                            CUSTOM_EMOJI_ALTS[key] = alts[key]
                     logger.info("Berhasil memuat %d custom emoji kustom.", len(ids))
     except Exception as exc:
         logger.warning("Gagal memuat custom_emojis.json: %s", exc)
@@ -209,6 +199,7 @@ def save_custom_emojis() -> bool:
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(CUSTOM_EMOJIS_FILE, "w", encoding="utf-8") as f:
             json.dump({
+                "version": 2,
                 "ids": CUSTOM_EMOJI_IDS,
                 "alts": CUSTOM_EMOJI_ALTS
             }, f, indent=2, ensure_ascii=False)
@@ -221,6 +212,8 @@ def save_custom_emojis() -> bool:
 def set_custom_emoji(key: str, emoji_id: str, alt_char: str = "") -> bool:
     """Mengubah atau mendaftarkan satu custom emoji spesifik."""
     key = key.upper().strip()
+    if not str(emoji_id).strip().isdigit():
+        return False
     CUSTOM_EMOJI_IDS[key] = str(emoji_id).strip()
     if alt_char:
         CUSTOM_EMOJI_ALTS[key] = str(alt_char).strip()
@@ -230,8 +223,10 @@ def set_custom_emoji(key: str, emoji_id: str, alt_char: str = "") -> bool:
 def reset_custom_emojis() -> bool:
     """Mereset semua custom emoji kembali ke default."""
     global CUSTOM_EMOJI_IDS, CUSTOM_EMOJI_ALTS
-    CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
-    CUSTOM_EMOJI_ALTS = dict(DEFAULT_EMOJI_ALTS)
+    CUSTOM_EMOJI_IDS.clear()
+    CUSTOM_EMOJI_IDS.update(DEFAULT_EMOJI_IDS)
+    CUSTOM_EMOJI_ALTS.clear()
+    CUSTOM_EMOJI_ALTS.update(DEFAULT_EMOJI_ALTS)
     if os.path.exists(CUSTOM_EMOJIS_FILE):
         try:
             os.remove(CUSTOM_EMOJIS_FILE)
@@ -335,8 +330,10 @@ def tg_emoji(key: str, fallback: str = "") -> str:
     emoji_id = CUSTOM_EMOJI_IDS.get(key, "").strip()
     alt_char = CUSTOM_EMOJI_ALTS.get(key, "").strip() or fallback or "✨"
     if emoji_id:
-        return f'<tg-emoji emoji-id="{emoji_id}">{alt_char}</tg-emoji>'
-    return fallback or alt_char
+        return f'<tg-emoji emoji-id="{emoji_id}">{escape(alt_char)}</tg-emoji>'
+    if key.startswith(("COIN_", "NET_")):
+        return escape(alt_char if key in DEFAULT_EMOJI_ALTS else "🪙")
+    return escape(fallback or alt_char)
 
 
 # Shortcut siap pakai untuk tampilan pesan
@@ -394,18 +391,14 @@ def get_coin_emoji(symbol: str) -> str:
     """Mengembalikan tag custom emoji untuk koin crypto tertentu."""
     sym = symbol.upper().strip()
     key = f"COIN_{sym}"
-    if key in CUSTOM_EMOJI_IDS:
-        return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "🪙"))
-    return tg_emoji("COIN", "🪙")
+    return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "🪙"))
 
 
 def get_network_emoji(network: str) -> str:
     """Mengembalikan tag custom animated emoji untuk jaringan crypto tertentu."""
     net = network.upper().strip()
     key = f"NET_{net}"
-    if key in CUSTOM_EMOJI_IDS:
-        return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "•"))
-    return "•"
+    return tg_emoji(key, DEFAULT_EMOJI_ALTS.get(key, "•"))
 
 
 def get_coin_emoji_id(symbol: str) -> str | None:
@@ -413,6 +406,14 @@ def get_coin_emoji_id(symbol: str) -> str | None:
     sym = symbol.upper().strip()
     key = f"COIN_{sym}"
     return CUSTOM_EMOJI_IDS.get(key)
+
+
+def coin_button_text(symbol: str) -> str:
+    return symbol if get_coin_emoji_id(symbol) else f"🪙 {symbol}"
+
+
+def network_button_text(network: str) -> str:
+    return network if get_network_emoji_id(network) else f"🪙 {network}"
 
 
 def get_network_emoji_id(network: str) -> str | None:

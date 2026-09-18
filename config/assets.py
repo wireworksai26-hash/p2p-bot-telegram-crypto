@@ -8,6 +8,21 @@ stoknya muncul dengan nominal asli di fitur "Cek Stok".
 
 import os
 
+STOCK_MAX_AGE_SECONDS = 15 * 60
+MANUAL_PAYOUT_NETWORKS = {"SUI", "APTOS"}
+
+
+def get_wallet_address(network: str) -> str:
+    from config.settings import settings
+    non_evm = {
+        "SOLANA": settings.SOL_WALLET_ADDRESS,
+        "TRON": settings.TRX_WALLET_ADDRESS,
+        "TON": settings.TON_WALLET_ADDRESS,
+        "SUI": settings.SUI_WALLET_ADDRESS,
+        "APTOS": settings.APTOS_WALLET_ADDRESS,
+    }
+    return non_evm.get(network.upper(), settings.EVM_WALLET_ADDRESS)
+
 # Pasangan (SYMBOL, NETWORK) yang stoknya disinkronkan dari blockchain.
 # Termasuk native coin tiap chain + token yang diperjualbelikan bot.
 STOCK_ASSETS = [
@@ -39,6 +54,7 @@ STOCK_ASSETS = [
     ("USDT", "SOLANA"),
     ("USDC", "SOLANA"),
     ("TRX", "TRON"),
+    ("USDT", "TRON"),
     ("TON", "TON"),
     ("USDT", "TON"),
     ("SUI", "SUI"),

@@ -6,7 +6,10 @@ Menyediakan inline keyboard untuk memilih aset cryptocurrency.
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.keyboards.main_menu import get_owner_button
-from bot.utils.emojis import get_coin_emoji_id, get_network_emoji_id, CUSTOM_EMOJI_IDS
+from bot.utils.emojis import (
+    get_coin_emoji_id, get_network_emoji_id, CUSTOM_EMOJI_IDS,
+    coin_button_text, network_button_text,
+)
 
 # Mapping simbol ke daftar network yang tersedia untuk Beli/Jual Crypto
 BUY_NETWORKS_BY_SYMBOL = {
@@ -36,7 +39,7 @@ def _get_symbol_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarku
         emoji_id = get_coin_emoji_id(sym)
         row.append(
             InlineKeyboardButton(
-                text=sym,
+                text=coin_button_text(sym),
                 callback_data=f"{prefix}_sym_{sym}",
                 icon_custom_emoji_id=emoji_id
             )
@@ -60,7 +63,7 @@ def _get_network_keyboard(symbol: str, prefix: str, back_callback: str) -> Inlin
     keyboard = [
         [
             InlineKeyboardButton(
-                text=net,
+                text=network_button_text(net),
                 callback_data=f"{prefix}_net_{symbol}_{net}",
                 icon_custom_emoji_id=get_network_emoji_id(net)
             )

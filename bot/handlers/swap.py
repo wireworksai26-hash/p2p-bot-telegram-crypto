@@ -17,6 +17,7 @@ Alur Transaksi Convert/Swap (FULL OTOMATIS — tanpa verifikasi admin):
 
 import logging
 import re
+from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -28,6 +29,7 @@ from telegram.ext import (
     filters,
 )
 from config.settings import settings
+from config.assets import MANUAL_PAYOUT_NETWORKS
 from database.connection import SessionLocal
 from database.models import User, Order, AuditLog
 from services.price_service import price_service
@@ -49,6 +51,8 @@ from bot.utils.emojis import (
     CUSTOM_EMOJI_IDS,
     get_coin_emoji_id,
     get_network_emoji_id,
+    coin_button_text,
+    network_button_text,
 )
 
 
@@ -89,7 +93,7 @@ async def start_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, symbol in enumerate(SUPPORTED_ASSETS, 1):
         row.append(
             InlineKeyboardButton(
-                text=symbol,
+                text=coin_button_text(symbol),
                 callback_data=f"swap_src_sym_{symbol}",
                 icon_custom_emoji_id=get_coin_emoji_id(symbol)
             )
@@ -122,7 +126,7 @@ async def select_src_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton(
-                text=net,
+                text=network_button_text(net),
                 callback_data=f"swap_src_net_{net}",
                 icon_custom_emoji_id=get_network_emoji_id(net)
             )
@@ -153,7 +157,7 @@ async def select_src_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue # Bisa koin sama beda jaringan atau koin beda
         row.append(
             InlineKeyboardButton(
-                text=symbol,
+                text=coin_button_text(symbol),
                 callback_data=f"swap_tgt_sym_{symbol}",
                 icon_custom_emoji_id=get_coin_emoji_id(symbol)
             )
@@ -184,7 +188,7 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton(
-                text=net,
+                text=network_button_text(net),
                 callback_data=f"swap_tgt_net_{net}",
                 icon_custom_emoji_id=get_network_emoji_id(net)
             )
@@ -281,6 +285,9 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     net = query.data.replace("swap_tgt_net_", "")
+    if net in MANUAL_PAYOUT_NETWORKS:
+        await query.edit_message_text("Pengiriman otomatis jaringan tujuan ini belum tersedia. Hubungi admin; jangan menyetor crypto dahulu.")
+        return ConversationHandler.END
     context.user_data["swap_tgt_network"] = net
 
     src_sym = context.user_data["swap_src_symbol"]
@@ -401,6 +408,12 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     net_idr_for_target = nominal_idr - fee_idr
     tgt_amount = net_idr_for_target / tgt_market_price if tgt_market_price > 0 else 0
 
+    # Store exactly the amount shown in deposit instructions. Never request a
+    # rounded-down display amount while expecting a higher hidden amount.
+    src_amount = float(Decimal(str(src_amount)).quantize(Decimal("0.000001"), rounding=ROUND_DOWN))
+    if src_amount <= 0 or tgt_amount <= 0:
+        await update.message.reply_text("Nominal terlalu kecil untuk convert.")
+        return INPUT_AMOUNT
     context.user_data["swap_src_amount"] = src_amount
     context.user_data["swap_nominal_idr"] = nominal_idr
     context.user_data["swap_fee_idr"] = fee_idr
@@ -494,6 +507,18 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fee_idr = context.user_data["swap_fee_idr"]
     target_addr = context.user_data["swap_target_addr"]
     seller_deposit_wallet = context.user_data["swap_seller_deposit_wallet"]
+    if tgt_net in MANUAL_PAYOUT_NETWORKS or not seller_deposit_wallet:
+        await query.edit_message_text("Jaringan/wallet belum siap untuk auto-convert. Jangan menyetor crypto; hubungi admin.")
+        return ConversationHandler.END
+    from services.wallet_sync import sync_wallet_balances
+    from database.crud import get_available_inventory
+    stock_symbol = "MATIC" if tgt_net == "POLYGON" and tgt_sym == "POL" else tgt_sym
+    await sync_wallet_balances([(stock_symbol, tgt_net)])
+    with SessionLocal() as stock_db:
+        available = get_available_inventory(stock_db, tgt_net, stock_symbol)
+    if available is None or available < Decimal(str(tgt_amount)):
+        await query.edit_message_text("Stok tujuan tidak cukup atau belum terverifikasi. Order belum dibuat; jangan menyetor crypto.")
+        return ConversationHandler.END
 
     quoted_at = datetime.utcnow()
     expires_at = quoted_at + timedelta(minutes=30)
@@ -605,7 +630,7 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db = SessionLocal()
     try:
         order = db.query(Order).filter(Order.order_id == order_id).first() if order_id else None
-        if not order:
+        if not order or order.telegram_id != update.effective_user.id or order.status != "WAITING_CRYPTO_DEPOSIT":
             await update.message.reply_text("❌ Order tidak ditemukan atau sudah kadaluarsa.")
             return ConversationHandler.END
 
@@ -616,14 +641,21 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
             photo_file_id = update.message.photo[-1].file_id
             deposit_proof = f"PHOTO:{photo_file_id}"
         elif update.message and update.message.text:
-            deposit_proof = update.message.text.strip()
+            try:
+                deposit_proof = tx_verifier.normalize_tx_hash(order.network, update.message.text)
+            except (ValueError, TypeError):
+                await update.message.reply_text("⚠️ Hash/link explorer tidak valid untuk jaringan ini.")
+                return WAITING_DEPOSIT_HASH
         else:
             await update.message.reply_text("⚠️ Silakan kirimkan teks TX Hash atau unggah foto screenshot bukti transfer.")
             return WAITING_DEPOSIT_HASH
 
         # Simpan bukti. Status tetap WAITING_CRYPTO_DEPOSIT hingga
         # deposit terverifikasi on-chain (bypass verifikasi admin).
-        order.deposit_tx_hash = deposit_proof
+        if photo_file_id:
+            order.deposit_proof_file_id = photo_file_id
+        else:
+            order.deposit_tx_hash = deposit_proof
         db.commit()
 
         # --- Verifikasi on-chain langsung (respons instan) ---
@@ -635,6 +667,8 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 tx_hash=deposit_proof,
                 expected_wallet=order.deposit_wallet,
                 expected_amount=float(order.crypto_amount),
+                not_before=order.created_at,
+                not_after=order.quote_expires_at or order.expired_at,
             )
 
         menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
@@ -652,7 +686,7 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"ID Order: <code>{order.order_id}</code>\n"
                 f"TX Hash: <code>{deposit_proof}</code>\n\n"
                 f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
-                f"(maksimal ±2 menit). Setelah terverifikasi, koin tujuan "
+                f"(waktu mengikuti konfirmasi jaringan). Setelah terverifikasi, koin tujuan "
                 f"<b>{order.target_crypto_symbol} ({order.target_network})</b> "
                 f"akan langsung dikirim ke walletmu — <b>tanpa konfirmasi admin</b>.",
                 parse_mode="HTML",
@@ -679,11 +713,11 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
             f"Koin Tujuan: <b>{order.target_crypto_amount} {order.target_crypto_symbol}</b> ({order.target_network})\n"
             f"Wallet Tujuan: <code>{order.buyer_wallet}</code>\n"
             f"Bukti/TX Hash: <code>{deposit_proof}</code>\n\n"
-            f"ℹ️ <i>Bot memverifikasi on-chain otomatis. Admin juga dapat menekan tombol di bawah untuk langsung menyetujui & mengeksekusi pengiriman koin tujuan secara instan.</i>"
+            f"ℹ️ <i>Belum terverifikasi. Tombol admin hanya memeriksa ulang blockchain, bukan menyetujui foto sebagai deposit.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("Approve & Eksekusi Payout", callback_data=f"admin_approve_swap_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+                InlineKeyboardButton("Cek Ulang Deposit", callback_data=f"admin_approve_swap_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
                 InlineKeyboardButton("Tolak", callback_data=f"admin_reject_swap_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CROSS", "5462882007451185227"))
             ]
         ])

@@ -48,6 +48,7 @@ INPUT_BANK = 4
 CONFIRM_ORDER = 5
 WAITING_TX = 6
 INPUT_TX_HASH = 7
+INPUT_PROOF = 8
 
 # Helper untuk mendapatkan alamat hot wallet bot berdasarkan network
 def get_hot_wallet_address(network: str) -> str:
@@ -392,6 +393,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         
         keyboard = [
             [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
+            [InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data="sell_upload_proof")],
             [InlineKeyboardButton("Batal Jual", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
@@ -517,6 +519,14 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
             order.deposit_tx_hash = tx_hash
             db.commit()
 
+        # Picu scan verifikasi deposit langsung agar user tidak perlu menunggu jadwal scheduler berikutnya
+        try:
+            import asyncio
+            from services.detector import deposit_detector
+            asyncio.create_task(deposit_detector.scan_incoming_deposits(bot_app=context.application))
+        except Exception as scan_err:
+            logger.debug(f"Gagal trigger scan deposit instan: {scan_err}")
+
         # Beritahu admin update TX Hash dengan action buttons
         admin_tx_alert = (
             f"🔍 <b>TX HASH PENJUALAN DITERIMA (SELL)</b>\n\n"
@@ -527,7 +537,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"TX Hash: <code>{tx_hash}</code>\n\n"
             f"Tujuan Rekening:\n"
             f"• {bank_info}\n\n"
-            f"<i>Silakan cek mutasi crypto masuk, lalu transfer Rupiah ke rekening di atas.</i>"
+            f"<i>Hash diterima, sedang diverifikasi on-chain. Tunggu notifikasi DEPOSIT TERVERIFIKASI sebelum transfer Rupiah.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([
             [
@@ -535,7 +545,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
             ]
         ])
-        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard)
+        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard, order_type="sell")
 
         response_user = (
             f"✅ <b>TX Hash Diterima!</b>\n\n"
@@ -563,7 +573,85 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
     finally:
         db.close()
         
-    return ConversationHandler.END
+    return WAITING_TX
+
+
+async def prompt_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+        [get_owner_button()]
+    ]
+    await safe_edit_message(
+        query,
+        text=(
+            "📸 <b>UPLOAD BUKTI TRANSFER</b>\n\n"
+            "Silakan kirimkan <b>foto / screenshot</b> bukti transfer Anda ke chat ini.\n\n"
+            "<i>Catatan: Foto bukti transfer adalah bukti pendukung bagi admin. Deposit tetap harus terverifikasi secara on-chain di blockchain.</i>"
+        ),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return INPUT_PROOF
+
+
+async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    from bot.utils.telegram_utils import admin_notification_targets
+    db = SessionLocal()
+    try:
+        order_id = context.user_data.get("sell_order_id")
+        order = get_order_by_id(db, order_id)
+        if not order or order.telegram_id != update.effective_user.id or order.status != "WAITING_CRYPTO_DEPOSIT":
+            await update.message.reply_text("Order tidak tersedia untuk upload bukti.")
+            return ConversationHandler.END
+
+        file_id = update.message.photo[-1].file_id
+        order.deposit_proof_file_id = file_id
+        db.commit()
+
+        # Picu scan verifikasi deposit langsung di background
+        try:
+            import asyncio
+            from services.detector import deposit_detector
+            asyncio.create_task(deposit_detector.scan_incoming_deposits(bot_app=context.application))
+        except Exception:
+            pass
+
+        caption = (
+            f"📸 <b>BUKTI TRANSFER PENJUALAN (SELL)</b>\n\n"
+            f"Order: <code>{order.order_id}</code>\n"
+            f"User ID: <code>{order.telegram_id}</code>\n"
+            f"Crypto: {format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({order.network})\n"
+            f"Rupiah Bersih: <b>{format_idr(order.total_idr)}</b>\n"
+            f"Rekening: <code>{order.buyer_wallet}</code>\n\n"
+            f"<i>⚠️ Foto bukan konfirmasi blockchain. Jangan transfer Rupiah sebelum ada notifikasi DEPOSIT TERVERIFIKASI.</i>"
+        )
+        delivered = False
+        for chat_id in admin_notification_targets("sell"):
+            try:
+                await context.bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption, parse_mode="HTML")
+                delivered = True
+            except Exception:
+                logger.warning("Gagal forward bukti sell ke tujuan admin.")
+        if not delivered:
+            await notify_admins(context.bot, f"Bukti foto tersimpan untuk order {order.order_id}; penerusan foto gagal.", order_type="sell")
+
+        keyboard = [
+            [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
+            [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()]
+        ]
+        await update.message.reply_text(
+            "✅ <b>Bukti Transfer Tersimpan!</b>\n\n"
+            "Foto bukti telah diteruskan ke admin. Sistem sedang memverifikasi setoran Anda di blockchain secara otomatis.\n"
+            "Jika Anda memiliki <b>TX Hash</b>, Anda juga dapat menekannya di bawah untuk mempercepat verifikasi. 🙏",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return WAITING_TX
+    finally:
+        db.close()
 
 
 async def cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -633,14 +721,23 @@ sell_conversation_handler = ConversationHandler(
         ],
         WAITING_TX: [
             CallbackQueryHandler(prompt_tx_hash, pattern="^sell_input_tx$"),
+            CallbackQueryHandler(prompt_proof, pattern="^sell_upload_proof$"),
+            MessageHandler(filters.PHOTO, handle_sell_proof),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],
         INPUT_TX_HASH: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tx_hash_input),
+            MessageHandler(filters.PHOTO, handle_sell_proof),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
-        ]
+        ],
+        INPUT_PROOF: [
+            MessageHandler(filters.PHOTO, handle_sell_proof),
+            CallbackQueryHandler(prompt_tx_hash, pattern="^sell_input_tx$"),
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
+        ],
     },
     fallbacks=[
         CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),

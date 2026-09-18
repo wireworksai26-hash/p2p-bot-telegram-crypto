@@ -5,9 +5,7 @@ Mengintegrasikan pengecekan saldo dan pengiriman koin SUI di Sui Network.
 """
 
 import logging
-import asyncio
 import re
-import secrets
 import httpx
 from config.settings import settings
 from services.crypto_sender import BaseCryptoSender, SendResult
@@ -34,42 +32,39 @@ class SuiSender(BaseCryptoSender):
     async def get_balance(self, symbol: str = "") -> float:
         """Ambil saldo SUI dari node Sui JSON-RPC."""
         if not self.wallet_address:
-            return 0.0
+            raise RuntimeError("SUI_WALLET_ADDRESS belum dikonfigurasi.")
+        if symbol and symbol.upper() != "SUI":
+            raise ValueError(f"Token '{symbol}' tidak didukung pada Sui.")
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "suix_getBalance",
             "params": [self.wallet_address, "0x2::sui::SUI"]
         }
+        last_error = None
         for rpc in self.rpc_list:
             try:
                 async with httpx.AsyncClient(timeout=6.0) as client:
                     res = await client.post(rpc, json=payload)
-                    if res.status_code == 200:
-                        data = res.json()
-                        result = data.get("result")
-                        if result and "totalBalance" in result:
-                            total_balance = int(result["totalBalance"])
-                            return float(total_balance / 1e9)
+                    res.raise_for_status()
+                    data = res.json()
+                    if data.get("error"):
+                        raise RuntimeError(str(data["error"]))
+                    return int(data["result"]["totalBalance"]) / 1e9
             except Exception as e:
+                last_error = e
                 logger.warning(f"Gagal mengambil saldo SUI via {rpc}: {e}")
                 continue
-        return 0.0
+        raise RuntimeError(f"Semua RPC Sui gagal membaca saldo SUI: {last_error}")
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
-        """Kirim / simulasi transaksi di Sui Network."""
-        try:
-            if not self.validate_address(to_address):
-                return SendResult(success=False, error_message="Alamat SUI tidak valid.")
-            
-            mock_hash = secrets.token_hex(32)
-            explorer_url = f"{self.explorer_base}/tx/{mock_hash}"
-            logger.info(f"[SUI] Auto-send {amount} {symbol} ke {to_address} (Hash: {mock_hash})")
-            
-            return SendResult(
-                success=True,
-                tx_hash=mock_hash,
-                explorer_url=explorer_url
-            )
-        except Exception as e:
-            return SendResult(success=False, error_message=f"Exception pengiriman SUI: {str(e)}")
+        """Tolak auto-payout sampai signing dan broadcast Sui tersedia."""
+        if not self.validate_address(to_address):
+            return SendResult(success=False, error_message="Alamat SUI tidak valid.")
+        return SendResult(
+            success=False,
+            error_message=(
+                "MANUAL_REVIEW: Auto-payout Sui belum tersedia; "
+                "kirim SUI secara manual dan catat digest transaksi asli."
+            ),
+        )

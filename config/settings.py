@@ -3,9 +3,9 @@ from dotenv import load_dotenv
 
 # Load .env file only if exists without overriding container environment
 if os.path.exists(".env"):
-    load_dotenv(".env", override=True)
+    load_dotenv(".env", override=False)
 elif os.path.exists("../.env"):
-    load_dotenv("../.env", override=True)
+    load_dotenv("../.env", override=False)
 
 class Settings:
     # Telegram settings
@@ -36,7 +36,7 @@ class Settings:
     BASE_RPC = (os.getenv("BASE_RPC", "https://base-rpc.publicnode.com") or "").strip()
     ARB_RPC = (os.getenv("ARB_RPC", "https://arbitrum-one-rpc.publicnode.com") or "").strip()
     OPTIMISM_RPC = (os.getenv("OPTIMISM_RPC", "https://optimism-rpc.publicnode.com") or "").strip()
-    ROBINHOOD_RPC = (os.getenv("ROBINHOOD_RPC", "https://rpc.robinhood.com") or "").strip()
+    ROBINHOOD_RPC = (os.getenv("ROBINHOOD_RPC", "https://rpc.mainnet.chain.robinhood.com") or "").strip()
     KAIA_RPC = (os.getenv("KAIA_RPC", "https://klaytn.drpc.org") or "").strip()
     BERA_RPC = (os.getenv("BERA_RPC", "https://berachain.drpc.org") or "").strip()
     HYPEREVM_RPC = (os.getenv("HYPEREVM_RPC", "https://rpc.hyperliquid.xyz/evm") or "").strip()
@@ -57,6 +57,12 @@ class Settings:
 
     TON_RPC = (os.getenv("TON_RPC", "https://toncenter.com/api/v2/jsonRPC") or "").strip()
     TON_API_KEY = (os.getenv("TON_API_KEY") or "").strip()
+    TON_INDEXER_URL = os.getenv("TON_INDEXER_URL", "https://toncenter.com/api/v3").rstrip("/")
+    TRONGRID_API_KEY = (os.getenv("TRONGRID_API_KEY") or "").strip()
+    APTOS_INDEXER_URL = os.getenv("APTOS_INDEXER_URL", "https://api.mainnet.aptoslabs.com/v1/graphql")
+    EVM_DEPOSIT_CONFIRMATIONS = max(1, int(os.getenv("EVM_DEPOSIT_CONFIRMATIONS", "2")))
+    SELL_ADMIN_CHAT_ID = int(os.getenv("SELL_ADMIN_CHAT_ID") or "0") or None
+    COINGECKO_API_KEY = (os.getenv("COINGECKO_API_KEY") or "").strip()
     TON_PRIVATE_KEY = (os.getenv("TON_PRIVATE_KEY") or "").strip()
     TON_WALLET_ADDRESS = (os.getenv("TON_WALLET_ADDRESS") or "").strip()
 

@@ -98,8 +98,19 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", 
         return False
 
 
-async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None) -> None:
+def admin_notification_targets(order_type=None):
+    from config.settings import settings
+    if order_type == "sell" and settings.SELL_ADMIN_CHAT_ID:
+        return [settings.SELL_ADMIN_CHAT_ID]
+    return list(dict.fromkeys(settings.ADMIN_CHAT_IDS))
+
+
+async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None, order_type=None) -> None:
     """Kirim pesan ke semua admin (ADMIN_CHAT_IDS) dengan aman."""
     from config.settings import settings
-    for admin_id in settings.ADMIN_CHAT_IDS:
-        await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    delivered = False
+    for admin_id in admin_notification_targets(order_type):
+        delivered = await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup) or delivered
+    if order_type == "sell" and settings.SELL_ADMIN_CHAT_ID and not delivered:
+        for admin_id in settings.ADMIN_CHAT_IDS:
+            await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup)

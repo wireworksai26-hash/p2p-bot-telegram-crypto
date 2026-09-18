@@ -41,7 +41,7 @@ async def send_crypto_with_retry(
                 symbol=symbol,
             )
 
-            if result.success:
+            if result.success and result.tx_hash:
                 logger.info(
                     "Crypto sent successfully — tx: %s", result.tx_hash,
                 )
@@ -54,12 +54,12 @@ async def send_crypto_with_retry(
 
             last_error = result.error_message or "Send failed"
 
-            if result.error_message.startswith("MANUAL_REVIEW:"):
+            if result.tx_hash or (result.error_message or "").startswith("MANUAL_REVIEW:") or result.success:
                 return {
                     "success": False,
                     "tx_hash": result.tx_hash or "",
                     "explorer_url": result.explorer_url or "",
-                    "error_message": result.error_message.removeprefix("MANUAL_REVIEW:").strip(),
+                    "error_message": (result.error_message or "Receipt/hash payout belum tersedia.").removeprefix("MANUAL_REVIEW:").strip(),
                 }
 
             logger.warning(
@@ -68,12 +68,10 @@ async def send_crypto_with_retry(
             )
 
         except Exception as exc:
-            last_error = f"{exc.__class__.__name__}: {str(exc)}"
-            logger.error(
-                "Exception on send attempt %d/%d: %s",
-                attempt + 1, MAX_RETRIES, exc,
-                exc_info=True,
-            )
+            # An unhandled exception may have occurred after a broadcast.
+            # Only a sender's explicit pre-broadcast failure is safe to retry.
+            return {"success": False, "tx_hash": "", "explorer_url": "",
+                    "error_message": f"Status payout tidak pasti ({type(exc).__name__}); periksa wallet sebelum retry."}
 
         if attempt < MAX_RETRIES - 1:
             await asyncio.sleep(RETRY_DELAYS[attempt])

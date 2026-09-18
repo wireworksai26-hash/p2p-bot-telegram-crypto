@@ -1,16 +1,18 @@
-"""Focused tests for fee boundaries, wallet validation, and inventory claims."""
+"""Scratch fee, inventory, and address validator sanity checks."""
 
 import os
 import sys
-import tempfile
+from pathlib import Path
+from datetime import datetime
 from decimal import Decimal
 
-_tmp_db = os.path.join(tempfile.gettempdir(), "opencode", "fee_inventory_test.db")
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db}"
-if os.path.exists(_tmp_db):
-    os.remove(_tmp_db)
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+testdeps = Path(__file__).resolve().parents[1] / ".testdeps"
+if testdeps.exists():
+    sys.path.insert(0, str(testdeps))
 
 from database.connection import Base, SessionLocal, engine
 from database.crud import (
@@ -24,14 +26,27 @@ from bot.utils.validator import validate_wallet_address
 
 
 def main():
-    assert calculate_fee_idr(1_010_000, "ALTCOIN") == 18_000
-    assert calculate_fee_idr(1_010_001, "ALTCOIN") == 20_201
-    assert calculate_fee_idr(1_575_000, "ALTCOIN") == 31_500
-    assert calculate_fee_idr(1_015_000, "USD") == 14_000
-    assert calculate_fee_idr(1_205_000, "USD") == 18_075
-    assert calculate_fee_idr(1_010_000, "CONVERT") == 17_000
-    assert calculate_fee_idr(1_575_000, "CONVERT") == 31_500
-    print("[PASS] fee tiers, caps, percentage ceiling")
+    assert calculate_fee_idr(1_010_000, "ALTCOIN") == 19_000
+    try:
+        calculate_fee_idr(1_010_001, "ALTCOIN")
+        assert False, "Should raise ValueError for above max Altcoin"
+    except ValueError:
+        pass
+
+    assert calculate_fee_idr(1_015_000, "USD") == 14_500
+    try:
+        calculate_fee_idr(1_015_001, "USD")
+        assert False, "Should raise ValueError for above max USD"
+    except ValueError:
+        pass
+
+    assert calculate_fee_idr(1_010_000, "CONVERT") == 18_000
+    try:
+        calculate_fee_idr(1_010_001, "CONVERT")
+        assert False, "Should raise ValueError for above max Convert"
+    except ValueError:
+        pass
+    print("[PASS] fee tiers, caps, and limit validation")
 
     assert validate_wallet_address("0x" + "a" * 40, "ROBINHOOD")
     assert validate_wallet_address("0x" + "a" * 64, "SUI")
@@ -44,7 +59,8 @@ def main():
     db = SessionLocal()
     db.add(WalletBalance(
         network="SOLANA", symbol="USDC", balance=6,
-        reserved_balance=0, address="A" * 32,
+        reserved_balance=0, address="A" * 32, sync_status="OK",
+        last_checked_at=datetime.utcnow(), last_success_at=datetime.utcnow(),
     ))
     db.commit()
     assert reserve_order_inventory(db, "ORD-1", "SOLANA", "USDC", Decimal("5"))
@@ -57,11 +73,6 @@ def main():
 
     db.close()
     engine.dispose()
-    try:
-        if os.path.exists(_tmp_db):
-            os.remove(_tmp_db)
-    except PermissionError:
-        pass
 
     print("ALL FEE/INVENTORY/VALIDATOR TESTS PASSED")
 

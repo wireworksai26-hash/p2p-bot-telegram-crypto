@@ -289,6 +289,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import admin_reject_swap_callback
         await admin_reject_swap_callback(update, context)
 
+    elif data.startswith("admin_sellorders_"):
+        from bot.handlers.admin import sellorders_handler
+        await sellorders_handler(update, context)
+
     elif data.startswith("admin_panel_"):
         from bot.handlers.admin import admin_panel_callback
         await admin_panel_callback(update, context)
@@ -305,7 +309,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.price import show_live_market
         await show_live_market(update, context)
         
-    elif data == "menu_stocks":
+    elif data == "menu_stocks" or data.startswith("menu_stocks_page_"):
         from bot.handlers.stocks import show_stocks
         await show_stocks(update, context)
         

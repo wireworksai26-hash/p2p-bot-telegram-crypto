@@ -156,9 +156,10 @@ class EVMSender(BaseCryptoSender):
         "ROBINHOOD": {
             "rpc_list": [
                 settings.ROBINHOOD_RPC,
+                "https://rpc.mainnet.chain.robinhood.com",
             ],
-            "chain_id": 1337,
-            "explorer": "https://explorer.robinhood.com",
+            "chain_id": 4663,
+            "explorer": "https://robinhoodchain.blockscout.com",
             "native_symbol": "ETH",
             "tokens": {}
         },
@@ -189,7 +190,7 @@ class EVMSender(BaseCryptoSender):
                 settings.HYPEREVM_RPC,
                 "https://rpc.hyperliquid.xyz/evm",
             ],
-            "chain_id": 998,
+            "chain_id": 999,
             "explorer": "https://hyperevm.cloud",
             "native_symbol": "HYPE",
             "tokens": {}
@@ -216,9 +217,9 @@ class EVMSender(BaseCryptoSender):
 
         # Inisialisasi daftar RPC (membersihkan duplikat & nilai kosong)
         raw_rpcs = self.config.get("rpc_list", [])
-        self.rpc_list = [r.strip() for r in raw_rpcs if r and r.strip()]
+        self.rpc_list = list(dict.fromkeys(r.strip() for r in raw_rpcs if r and r.strip()))
         if not self.rpc_list:
-            self.rpc_list = [settings.BSC_RPC]
+            raise ValueError(f"RPC {self.network} belum dikonfigurasi.")
 
         self.current_rpc_index = 0
         self.w3 = self._create_w3_instance(self.rpc_list[0])
@@ -251,11 +252,26 @@ class EVMSender(BaseCryptoSender):
         Ambil saldo wallet dengan auto-fallback RPC jika terjadi kegagalan koneksi.
         """
         symbol_upper = symbol.upper() if symbol else ""
+        if self.network == "POLYGON" and symbol_upper == "POL":
+            symbol_upper = "MATIC"
         native_sym = self.config["native_symbol"]
+        token_address = None
+        if symbol_upper and symbol_upper != native_sym:
+            token_address = self.config["tokens"].get(symbol_upper)
+            if not token_address:
+                raise ValueError(
+                    f"Token '{symbol_upper}' tidak terdaftar pada network {self.network}."
+                )
 
         # Coba setiap RPC yang ada dalam daftar
+        last_error = None
         for attempt in range(len(self.rpc_list)):
             try:
+                # Never accept a balance from a misconfigured Robinhood/testnet RPC.
+                if self.network in ("ROBINHOOD", "HYPEREVM"):
+                    actual_chain_id = await asyncio.to_thread(lambda: self.w3.eth.chain_id)
+                    if actual_chain_id != self.config["chain_id"]:
+                        raise ValueError(f"Chain ID RPC {self.network} tidak sesuai mainnet.")
                 # Jika symbol kosong atau merupakan native coin
                 if not symbol_upper or symbol_upper == native_sym:
                     balance_wei = await asyncio.to_thread(self.w3.eth.get_balance, self.wallet_address)
@@ -263,11 +279,6 @@ class EVMSender(BaseCryptoSender):
                     return float(balance)
 
                 # Jika token ERC20 (misal USDT/USDC)
-                token_address = self.config["tokens"].get(symbol_upper)
-                if not token_address:
-                    logger.warning(f"Token '{symbol_upper}' tidak terdaftar pada network {self.network}.")
-                    return 0.0
-
                 checksum_token = Web3.to_checksum_address(token_address)
                 contract = self.w3.eth.contract(address=checksum_token, abi=ERC20_ABI)
 
@@ -278,15 +289,17 @@ class EVMSender(BaseCryptoSender):
                 return float(balance)
 
             except Exception as e:
+                last_error = e
                 if self.network == "ROBINHOOD":
                     logger.debug(f"Robinhood RPC unreachable: {e}")
                 else:
                     logger.warning(f"Gagal mengambil saldo {symbol} di {self.network} via {self.rpc_list[self.current_rpc_index]}: {e}")
                 if attempt < len(self.rpc_list) - 1:
                     self._rotate_rpc()
-                else:
-                    return 0.0
-        return 0.0
+        raise RuntimeError(
+            f"Semua RPC {self.network} gagal membaca saldo {symbol_upper or native_sym}: "
+            f"{last_error or 'respons tidak valid'}"
+        )
 
     async def _gas_review_reason(self, gas_limit: int, gas_price: int) -> str:
         """Return alasan manual review jika estimasi gas ETH L1 melewati batas."""
@@ -315,8 +328,14 @@ class EVMSender(BaseCryptoSender):
         Mengirim koin native atau token ERC20 (USDT).
         """
         try:
+            if not Decimal(str(amount)).is_finite() or Decimal(str(amount)) <= 0:
+                return SendResult(False, error_message="MANUAL_REVIEW: Nominal payout tidak valid.")
+            if Web3().eth.account.from_key(self.private_key).address.lower() != self.wallet_address.lower():
+                return SendResult(False, error_message="MANUAL_REVIEW: Key EVM tidak cocok dengan alamat stok.")
             to_checksum = Web3.to_checksum_address(to_address)
             symbol_upper = symbol.upper()
+            if self.network == "POLYGON" and symbol_upper == "POL":
+                symbol_upper = "MATIC"
             native_sym = self.config["native_symbol"]
             
             explorer_base = self.config["explorer"]
@@ -349,6 +368,9 @@ class EVMSender(BaseCryptoSender):
 
                 for rpc_attempt in range(max_rpc_attempts):
                     try:
+                        chain_id = await asyncio.to_thread(lambda: self.w3.eth.chain_id)
+                        if chain_id != self.config["chain_id"]:
+                            raise ValueError(f"Chain ID RPC {self.network} tidak sesuai mainnet.")
                         def _get_nonce():
                             try:
                                 return self.w3.eth.get_transaction_count(self.wallet_address, 'pending')
@@ -376,6 +398,11 @@ class EVMSender(BaseCryptoSender):
                                 'gasPrice': gas_price,
                                 'chainId': self.config["chain_id"]
                             }
+                            # Contract destinations and newer EVM chains may need
+                            # more than the 21k EOA transfer minimum.
+                            gas_estimate = await asyncio.to_thread(self.w3.eth.estimate_gas,
+                                {**{k: v for k, v in tx.items() if k != 'gas'}, 'from': self.wallet_address})
+                            tx['gas'] = max(21000, int(gas_estimate * 1.2))
                         else:
                             # --- Kirim ERC-20 Token (USDT) ---
                             token_address = self.config["tokens"].get(symbol_upper)
@@ -399,10 +426,8 @@ class EVMSender(BaseCryptoSender):
                             try:
                                 gas_estimate = await asyncio.to_thread(tx_data.estimate_gas, {'from': self.wallet_address})
                                 gas_limit = int(gas_estimate * 1.2) # 20% safety margin
-                            except Exception as gas_err:
-                                logger.warning(f"Gagal estimasi gas, menggunakan default: {gas_err}")
-                                gas_limit = 100000 # default fallback untuk ERC20 transfer
-                                gas_estimation_failed = True
+                            except Exception:
+                                return SendResult(success=False, error_message="MANUAL_REVIEW: Simulasi transfer token gagal; tidak dibroadcast.")
                             
                             tx = tx_data.build_transaction({
                                 'chainId': self.config["chain_id"],
@@ -422,10 +447,23 @@ class EVMSender(BaseCryptoSender):
                             return SendResult(success=False, error_message=gas_review)
 
                         # Sign transaction
+                        required_wei = int(tx.get('value', 0)) + int(tx['gas']) * gas_price
+                        if await asyncio.to_thread(self.w3.eth.get_balance, self.wallet_address) < required_wei:
+                            return SendResult(success=False, error_message="MANUAL_REVIEW: Saldo native tidak cukup untuk nominal dan gas.")
                         signed_tx = self.w3.eth.account.sign_transaction(tx, private_key=self.private_key)
                         
                         # Broadcast transaction (masuk ke mempool on-chain)
-                        tx_hash_bytes = await asyncio.to_thread(self.w3.eth.send_raw_transaction, signed_tx.raw_transaction)
+                        raw = getattr(signed_tx, "raw_transaction", None) or getattr(signed_tx, "rawTransaction")
+                        # Once broadcast has been attempted, an RPC timeout is
+                        # ambiguous. Preserve the deterministic hash, never sign
+                        # another nonce in a retry and risk a duplicate payout.
+                        candidate_hash = self.w3.to_hex(self.w3.keccak(raw))
+                        try:
+                            tx_hash_bytes = await asyncio.to_thread(self.w3.eth.send_raw_transaction, raw)
+                        except Exception:
+                            return SendResult(success=False, tx_hash=candidate_hash,
+                                error_message="MANUAL_REVIEW: Status broadcast belum pasti; cek hash sebelum mengirim ulang.",
+                                explorer_url=f"{explorer_base}/tx/{candidate_hash}")
                         tx_hash_str = self.w3.to_hex(tx_hash_bytes)
                         break  # Sukses broadcast, keluar dari loop RPC retry
 
@@ -472,9 +510,9 @@ class EVMSender(BaseCryptoSender):
                 # Transaksi terkirim tapi receipt belum didapat (delay network)
                 logger.warning(f"Transaksi terkirim tapi receipt belum didapat: {wait_exc}")
                 return SendResult(
-                    success=True, # Kita anggap sukses/pending, admin nanti bisa trace lewat hash
+                    success=False,
                     tx_hash=tx_hash_str,
-                    error_message="Transaksi dikirim, tapi receipt belum didapat (timeout).",
+                    error_message="MANUAL_REVIEW: Transaksi sudah dibroadcast, menunggu receipt. Jangan kirim ulang.",
                     explorer_url=explorer_url
                 )
 

@@ -38,6 +38,7 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
     order_label = f"📥 Antrean Order ({pending_count})" if pending_count > 0 else "📥 Antrean Order (0)"
     
     keyboard = [
+        [InlineKeyboardButton("📥 Dashboard Jual Crypto", callback_data="admin_sellorders_0")],
         [
             InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
             InlineKeyboardButton(order_label, callback_data="admin_panel_orders"),
@@ -55,7 +56,10 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
         ],
         [
+            InlineKeyboardButton("📡 Status API & URL Koin", callback_data="admin_panel_check_apis"),
             InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
+        ],
+        [
             InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
         ],
     ]
@@ -85,6 +89,52 @@ def build_admin_dashboard_text(db) -> str:
         "💡 <i>Pilih menu di bawah ini untuk inspeksi & tindakan administratif cepat:</i>"
     )
     return text
+
+
+async def sellorders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A dedicated, paginated sell queue; group membership never grants admin rights."""
+    from html import escape
+    if not is_admin(update.effective_user.id):
+        if update.callback_query:
+            await update.callback_query.answer("Akses ditolak.", show_alert=True)
+        return
+    query = update.callback_query
+    page = 0
+    if query:
+        await query.answer()
+        suffix = query.data.removeprefix("admin_sellorders_")
+        page = max(0, int(suffix)) if suffix.isdigit() else 0
+    db = SessionLocal()
+    try:
+        orders = db.query(Order).filter(Order.order_type == "sell",
+            Order.status.in_(["WAITING_CRYPTO_DEPOSIT", "CRYPTO_CONFIRMED", "manual_review", "MANUAL_REVIEW"]))
+        count = orders.count()
+        page = min(page, max(0, (count - 1) // 8))
+        rows = orders.order_by(Order.created_at.desc()).offset(page * 8).limit(8).all()
+        lines = ["📥 <b>DASHBOARD JUAL CRYPTO</b>", f"Antrean aktif: {count}",
+                 "Transfer Rupiah hanya setelah status DEPOSIT TERVERIFIKASI.\n"]
+        keyboard = []
+        for order in rows:
+            ready = order.status == "CRYPTO_CONFIRMED"
+            status = "✅ DEPOSIT TERVERIFIKASI" if ready else "⏳ BELUM TERVERIFIKASI"
+            lines.append(f"<code>{escape(order.order_id)}</code> — {status}\n"
+                         f"{format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({escape(order.network)}) · {format_idr(order.total_idr)}")
+            if ready:
+                keyboard.append([InlineKeyboardButton(f"✅ Bayar {order.order_id[-6:]}", callback_data=f"admin_confirm_sell_{order.order_id}"),
+                                 InlineKeyboardButton("📸 Bukti pembayaran", callback_data=f"admin_upload_proof_{order.order_id}")])
+        navigation = [InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_sellorders_{page}")]
+        if page:
+            navigation.insert(0, InlineKeyboardButton("←", callback_data=f"admin_sellorders_{page - 1}"))
+        if (page + 1) * 8 < count:
+            navigation.append(InlineKeyboardButton("→", callback_data=f"admin_sellorders_{page + 1}"))
+        keyboard.append(navigation)
+        if query:
+            from bot.utils.telegram_utils import safe_edit_message
+            await safe_edit_message(query, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("\n\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    finally:
+        db.close()
 
 
 def build_admin_stats_text(db) -> str:
@@ -419,6 +469,17 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             buttons = [
                 [InlineKeyboardButton("🔄 Refresh Ulang", callback_data="admin_panel_sync_wallets")],
                 [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+
+        elif data == "admin_panel_check_apis":
+            await query.answer("Memeriksa status API & RPC koin...", show_alert=False)
+            from services.coin_api_monitor import coin_api_monitor
+            results = await coin_api_monitor.check_all()
+            text = coin_api_monitor.format_admin_dashboard(results)
+            buttons = [
+                [InlineKeyboardButton("Refresh Scan", callback_data="admin_panel_check_apis")],
+                [InlineKeyboardButton("Dashboard Utama", callback_data="admin_panel_main")],
             ]
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
 
@@ -821,7 +882,10 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text(f"❌ Order <code>{order_id}</code> tidak ditemukan.", parse_mode="HTML")
             return
 
-        was_already_completed = (order.status == "completed")
+        if order.order_type == "sell" and order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
+            await update.message.reply_text("⚠️ Deposit belum terverifikasi. Jangan transfer Rupiah/selesaikan order dahulu.")
+            return
+        was_already_completed = order.status.lower() == "completed"
 
         if not was_already_completed:
             # Update status order ke completed jika belum completed
@@ -883,7 +947,10 @@ async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("❌ Order tidak ditemukan.", show_alert=True)
             return
 
-        was_already_completed = (order.status == "completed")
+        if order.order_type != "sell" or order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
+            await query.answer("Deposit belum terverifikasi; penyelesaian diblokir.", show_alert=True)
+            return
+        was_already_completed = order.status.lower() == "completed"
 
         if not was_already_completed:
             # Update status order ke completed
@@ -985,6 +1052,9 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text("❌ Order tidak ditemukan di database.")
             return
 
+        if order.order_type != "sell" or order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
+            await update.message.reply_text("⚠️ Deposit belum terverifikasi. Bukti pembayaran tidak boleh menyelesaikan order ini.")
+            return
         # Update status order ke completed
         crud.update_order_status(
             db,
@@ -1173,26 +1243,10 @@ async def refreshwallet_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.message.reply_text("⏳ <i>Melakukan sinkronisasi saldo on-chain wallet...</i>", parse_mode="HTML")
     
-    from config.assets import STOCK_ASSETS
-
-    db = SessionLocal()
+    from services.wallet_sync import sync_wallet_balances
     try:
-        success_list = []
-        fail_list = []
-        
-        for sym, net in STOCK_ASSETS:
-            try:
-                sender = CryptoSenderFactory.get_sender(net)
-                balance = await sender.get_balance(symbol=sym)
-                addr = getattr(sender, "wallet_address", None)
-                crud.update_wallet_balance(
-                    db, network=net, symbol=sym, balance=balance, address=addr
-                )
-                success_list.append(f"{sym} ({net})")
-            except Exception as net_exc:
-                logger.warning(f"Refresh wallet manual gagal untuk {sym} ({net}): {net_exc}")
-                fail_list.append(f"{sym} ({net})")
-                
+        report = await sync_wallet_balances()
+        success_list, fail_list = report["success"], report["failed"]
         status_msg = (
             "✅ <b>SINKRONISASI WALLET SELESAI</b>\n\n"
             f"• Sukses: <code>{', '.join(success_list)}</code>\n"
@@ -1202,8 +1256,6 @@ async def refreshwallet_handler(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"Error refreshwallet: {e}", exc_info=True)
         await update.message.reply_text("❌ Gagal menyinkronisasikan wallet.")
-    finally:
-        db.close()
 
 
 async def admin_approve_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1375,31 +1427,20 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
             return
 
         if order.status == "COMPLETED" or order.payout_tx_hash:
-            await query.answer("ℹ️ Order ini sudah COMPLETED.", show_alert=True)
+            await query.answer("Order selesai atau sudah memiliki referensi broadcast. Periksa status/receipt; jangan kirim ulang.", show_alert=True)
             return
 
-        await query.answer("⚡ Menyetujui deposit & mengeksekusi payout swap...", show_alert=False)
-
-        # Ubah status ke CRYPTO_CONFIRMED agar dapat dipayout
-        order.status = "CRYPTO_CONFIRMED"
-        order.confirmed_at = datetime.utcnow()
-        db.commit()
-
+        if order.order_type != "swap" or order.status not in ("WAITING_CRYPTO_DEPOSIT", "CRYPTO_CONFIRMED"):
+            await query.answer("Order tidak dapat diproses otomatis dalam status ini.", show_alert=True)
+            return
+        await query.answer("Memeriksa ulang deposit on-chain...")
         from services.detector import deposit_detector
-        await deposit_detector._execute_payout(db, order, context.application)
-
-        caption_now = query.message.caption or ""
-        text_now = query.message.text or ""
-        if caption_now:
-            await query.edit_message_caption(
-                caption=f"{caption_now}\n\n✅ <b>SWAP DI-APPROVE & DIEKSEKUSI OLEH ADMIN</b>",
-                parse_mode="HTML"
-            )
-        elif text_now:
-            await query.edit_message_text(
-                text=f"{text_now}\n\n✅ <b>SWAP DI-APPROVE & DIEKSEKUSI OLEH ADMIN</b>",
-                parse_mode="HTML"
-            )
+        if order.status == "WAITING_CRYPTO_DEPOSIT":
+            await deposit_detector._process_order(db, order, context.application)
+        else:
+            await deposit_detector._execute_payout(db, order, context.application)
+        db.refresh(order)
+        await query.message.reply_text(f"Status order {order.order_id}: {order.status}. Foto saja tidak mengesahkan deposit.")
     except Exception as e:
         logger.error(f"Error admin_approve_swap_callback {order_id}: {e}", exc_info=True)
         await query.answer(f"❌ Error: {e}", show_alert=True)
@@ -1445,4 +1486,22 @@ async def admin_reject_swap_callback(update: Update, context: ContextTypes.DEFAU
         logger.error(f"Error admin_reject_swap_callback {order_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+async def check_api_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /checkapi atau /cekurl untuk memeriksa status seluruh URL/API koin."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("Akses ditolak. Khusus admin.")
+        return
+
+    msg = await update.message.reply_text("Sedang melakukan diagnosa & ping ke seluruh API & RPC koin...", parse_mode="HTML")
+    from services.coin_api_monitor import coin_api_monitor
+    results = await coin_api_monitor.check_all()
+    text = coin_api_monitor.format_admin_dashboard(results)
+    buttons = [
+        [InlineKeyboardButton("Refresh Scan", callback_data="admin_panel_check_apis")],
+        [InlineKeyboardButton("Buka Admin Dashboard", callback_data="admin_panel_main")],
+    ]
+    await msg.edit_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
 

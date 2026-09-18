@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
+from config.assets import STOCK_MAX_AGE_SECONDS
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -435,12 +436,17 @@ def update_wallet_balance(
             else:
                 address = "Unknown"
 
+        now = datetime.utcnow()
         if wallet:
             # Update existing
             wallet.balance = Decimal(str(balance))
             wallet.symbol = symbol_upper
             wallet.address = address
-            wallet.updated_at = datetime.utcnow()
+            wallet.sync_status = "OK"
+            wallet.last_error = None
+            wallet.last_checked_at = now
+            wallet.last_success_at = now
+            wallet.updated_at = now
         else:
             # Create new
             wallet = WalletBalance(
@@ -448,6 +454,9 @@ def update_wallet_balance(
                 symbol=symbol_upper,
                 balance=Decimal(str(balance)),
                 address=address,
+                sync_status="OK",
+                last_checked_at=now,
+                last_success_at=now,
             )
             db.add(wallet)
 
@@ -462,6 +471,61 @@ def update_wallet_balance(
         raise
 
 
+def mark_wallet_balance_error(
+    db: Session,
+    network: str,
+    symbol: str,
+    error: str = None,
+    address: str = None,
+) -> WalletBalance:
+    """Catat kegagalan sinkronisasi tanpa mengubah saldo terakhir yang valid."""
+    network_upper = network.upper()
+    symbol_upper = symbol.upper()
+    wallet = db.query(WalletBalance).filter(
+        WalletBalance.network == network_upper,
+        WalletBalance.symbol == symbol_upper,
+    ).first()
+
+    if not address:
+        from config.settings import settings
+        if network_upper in {
+            "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "GRAVITY",
+            "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM",
+        }:
+            address = settings.EVM_WALLET_ADDRESS
+        else:
+            address = {
+                "SOLANA": settings.SOL_WALLET_ADDRESS,
+                "TRON": settings.TRX_WALLET_ADDRESS,
+                "TON": settings.TON_WALLET_ADDRESS,
+                "SUI": settings.SUI_WALLET_ADDRESS,
+                "APTOS": settings.APTOS_WALLET_ADDRESS,
+            }.get(network_upper, "")
+
+    if not wallet:
+        wallet = WalletBalance(
+            network=network_upper,
+            symbol=symbol_upper,
+            balance=0,
+            reserved_balance=0,
+            address=address or "Unknown",
+        )
+        db.add(wallet)
+
+    wallet.sync_status = "ERROR"
+    wallet.last_error = (error or "Gagal membaca saldo dari RPC")[:500]
+    wallet.last_checked_at = datetime.utcnow()
+    # Do not label an old wallet's balance as belonging to a new address.
+    if address and wallet.address != address:
+        wallet.balance = Decimal("0")
+        wallet.last_success_at = None
+    if address:
+        wallet.address = address
+    db.commit()
+    db.refresh(wallet)
+    return wallet
+
+
 def get_all_wallet_balances(db: Session) -> list[WalletBalance]:
     """Ambil semua wallet balance records."""
     try:
@@ -471,8 +535,19 @@ def get_all_wallet_balances(db: Session) -> list[WalletBalance]:
         raise
 
 
+def wallet_balance_is_fresh(wallet, now=None) -> bool:
+    now = now or datetime.utcnow()
+    return (
+        wallet.sync_status == "OK"
+        and wallet.last_success_at is not None
+        and wallet.last_success_at >= now - timedelta(seconds=STOCK_MAX_AGE_SECONDS)
+    )
+
+
 def get_available_inventory(db: Session, network: str, symbol: str) -> Optional[Decimal]:
     """Saldo aset yang belum di-reserve untuk payout lain."""
+    if network.upper() == "POLYGON" and symbol.upper() == "POL":
+        symbol = "MATIC"
     wallet = (
         db.query(WalletBalance)
         .filter(
@@ -482,6 +557,8 @@ def get_available_inventory(db: Session, network: str, symbol: str) -> Optional[
         .first()
     )
     if not wallet:
+        return None
+    if not wallet_balance_is_fresh(wallet):
         return None
     balance = Decimal(str(wallet.balance or 0))
     reserved = Decimal(str(wallet.reserved_balance or 0))
@@ -498,7 +575,11 @@ def reserve_order_inventory(
     """Atomically reserve inventory untuk satu payout order."""
     from sqlalchemy import update
 
+    if network.upper() == "POLYGON" and symbol.upper() == "POL":
+        symbol = "MATIC"
     amount = Decimal(str(amount))
+    if not amount.is_finite() or amount <= 0:
+        return False
     existing = (
         db.query(InventoryReservation)
         .filter(
@@ -508,7 +589,15 @@ def reserve_order_inventory(
         .first()
     )
     if existing:
-        return True
+        wallet = db.query(WalletBalance).filter_by(
+            network=network.upper(), symbol=symbol.upper(),
+        ).first()
+        return bool(
+            wallet and wallet_balance_is_fresh(wallet)
+            and existing.network == network.upper()
+            and existing.symbol == symbol.upper()
+            and Decimal(str(existing.amount)) == amount
+        )
 
     try:
         result = db.execute(
@@ -516,6 +605,8 @@ def reserve_order_inventory(
             .where(
                 WalletBalance.network == network.upper(),
                 WalletBalance.symbol == symbol.upper(),
+                WalletBalance.sync_status == "OK",
+                WalletBalance.last_success_at >= datetime.utcnow() - timedelta(seconds=STOCK_MAX_AGE_SECONDS),
                 (WalletBalance.balance - WalletBalance.reserved_balance) >= amount,
             )
             .values(reserved_balance=WalletBalance.reserved_balance + amount)

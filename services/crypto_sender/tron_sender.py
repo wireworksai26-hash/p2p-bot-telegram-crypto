@@ -6,6 +6,7 @@ Menangani pengiriman koin TRX native ke wallet customer menggunakan tronpy.
 
 import logging
 import asyncio
+from decimal import Decimal
 from config.settings import settings
 from services.crypto_sender import BaseCryptoSender, SendResult
 
@@ -45,63 +46,67 @@ class TronSender(BaseCryptoSender):
     async def get_balance(self, symbol: str = "") -> float:
         """Mengambil saldo TRX native atau token TRC-20 (USDT)."""
         if not self.wallet_address:
-            return 0.0
+            raise RuntimeError("TRX_WALLET_ADDRESS belum dikonfigurasi.")
         sym = symbol.upper() if symbol else ""
         if sym in ("USDT",):
             return await self._get_trc20_balance(USDT_TRC20)
+        if sym not in ("", "TRX"):
+            raise ValueError(f"Token '{sym}' tidak didukung pada TRON.")
 
         # Coba via TronGrid REST API (lebih cepat & bebas rate-limit 429)
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0) as client:
                 res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
-                if res.status_code == 200:
-                    data = res.json().get("data", [])
-                    if data:
-                        balance_sun = data[0].get("balance", 0)
-                        return float(balance_sun / 1e6)
-                    return 0.0
+                res.raise_for_status()
+                payload = res.json()
+                data = payload.get("data")
+                if payload.get("success") is False or not isinstance(data, list):
+                    raise ValueError("Respons saldo TRON tidak valid.")
+                if data:
+                    return int(data[0].get("balance", 0)) / 1e6
+                return 0.0
         except Exception as api_err:
             logger.warning(f"TronGrid REST API get_balance gagal: {api_err}")
 
         if not TRONPY_AVAILABLE:
-            return 0.0
+            raise RuntimeError("RPC TRON gagal membaca saldo dan SDK fallback tidak tersedia.")
         try:
             client = Tron()
             balance_sun = await asyncio.to_thread(client.get_account_balance, self.wallet_address)
             return float(balance_sun)
         except Exception as e:
-            if e.__class__.__name__ != "AddressNotFound":
-                logger.warning(f"Tronpy get_balance error: {e}")
-            return 0.0
+            if e.__class__.__name__ == "AddressNotFound":
+                return 0.0
+            raise RuntimeError("RPC TRON gagal membaca saldo TRX.") from e
 
     async def _get_trc20_balance(self, contract_address: str) -> float:
         """
         Mengambil saldo token TRC-20 (USDT) milik wallet bot.
         """
         if not self.wallet_address:
-            return 0.0
+            raise RuntimeError("TRX_WALLET_ADDRESS belum dikonfigurasi.")
 
         # Coba via TronGrid REST API
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0) as client:
                 res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
-                if res.status_code == 200:
-                    data = res.json().get("data", [])
-                    if data:
-                        trc20_list = data[0].get("trc20", [])
-                        for item in trc20_list:
-                            if contract_address in item:
-                                raw_val = int(item[contract_address])
-                                return float(raw_val / 1e6)
-                        return 0.0
-                    return 0.0
+                res.raise_for_status()
+                payload = res.json()
+                data = payload.get("data")
+                if payload.get("success") is False or not isinstance(data, list):
+                    raise ValueError("Respons saldo TRC20 tidak valid.")
+                if data:
+                    for item in data[0].get("trc20", []):
+                        if contract_address in item:
+                            return int(item[contract_address]) / 1e6
+                return 0.0
         except Exception as api_err:
             logger.warning(f"TronGrid REST API _get_trc20_balance gagal: {api_err}")
 
         if not TRONPY_AVAILABLE:
-            return 0.0
+            raise RuntimeError("RPC TRON gagal membaca saldo token dan SDK fallback tidak tersedia.")
         try:
             client = Tron(provider=HTTPProvider(timeout=20.0))
             contract = await asyncio.to_thread(client.get_contract, contract_address)
@@ -114,8 +119,7 @@ class TronSender(BaseCryptoSender):
                 decimals = 6
             return float(int(raw_balance) / (10 ** decimals))
         except Exception as e:
-            logger.warning(f"Tronpy _get_trc20_balance error: {e}")
-            return 0.0
+            raise RuntimeError("RPC TRON gagal membaca saldo token.") from e
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
         """Mengirim TRX native atau USDT TRC-20."""
@@ -124,21 +128,28 @@ class TronSender(BaseCryptoSender):
                 success=False,
                 error_message="Library tronpy tidak tersedia di server ini."
             )
+        tx_hash = ""
         try:
+            quantity = Decimal(str(amount))
+            if symbol.upper() not in ("TRX", "USDT") or not quantity.is_finite() or quantity <= 0:
+                return SendResult(False, error_message="MANUAL_REVIEW: Aset/nominal TRON tidak valid.")
             # Validasi input
             if not self.validate_address(to_address):
                 return SendResult(success=False, error_message="Alamat wallet TRON tidak valid.")
 
             # Load private key
             try:
-                priv_key = PrivateKey(bytes.fromhex(self.private_key_hex))
+                priv_key = PrivateKey(bytes.fromhex(self.private_key_hex.removeprefix("0x")))
             except Exception as key_err:
                 return SendResult(
                     success=False,
                     error_message=f"Gagal memuat TRON Private Key (pastikan format hex): {key_err}"
                 )
 
-            client = Tron(provider=HTTPProvider(timeout=20.0))
+            if priv_key.public_key.to_base58check_address() != self.wallet_address:
+                return SendResult(False, error_message="MANUAL_REVIEW: Key TRON tidak cocok dengan alamat stok.")
+            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC,
+                          api_key=settings.TRONGRID_API_KEY or None, timeout=20.0))
             symbol_upper = symbol.upper()
 
             if symbol_upper == "USDT":
@@ -196,7 +207,7 @@ class TronSender(BaseCryptoSender):
                 def _build_and_sign():
                     return (
                         contract.functions.transfer(
-                            to_address, int(amount * 1_000_000)
+                            to_address, int(quantity * 1_000_000)
                         )
                         .with_owner(self.wallet_address)
                         .fee_limit(10_000_000)
@@ -210,7 +221,7 @@ class TronSender(BaseCryptoSender):
                         success=False,
                         error_message=f"Saldo TRX tidak cukup. Saldo: {balance} TRX, Kebutuhan: {amount} TRX"
                     )
-                amount_sun = int(amount * 1_000_000)
+                amount_sun = int(quantity * 1_000_000)
 
                 def _build_and_sign():
                     return (
@@ -221,16 +232,20 @@ class TronSender(BaseCryptoSender):
 
             txn = await asyncio.to_thread(_build_and_sign)
 
-            # Broadcast transaksi
+            # Save the deterministic id before the one and only broadcast attempt.
+            tx_hash = txn.txid
+            if not tx_hash:
+                return SendResult(False, error_message="MANUAL_REVIEW: TXID TRON belum tersedia.")
             result = await asyncio.to_thread(txn.broadcast)
             
             # Cek hasil broadcast
-            tx_hash = result.get("txid", "")
-            if not tx_hash:
-                return SendResult(
-                    success=False,
-                    error_message=f"Gagal mendapatkan txid dari response broadcast: {result}"
-                )
+            if result.get("txid") != tx_hash:
+                raise RuntimeError("TXID broadcast tidak cocok.")
+            receipt = await asyncio.to_thread(result.wait, timeout=45, solid=True)
+            if receipt.get("id") != tx_hash or not receipt.get("blockNumber"):
+                raise RuntimeError("Receipt TRON belum solid.")
+            if receipt.get("result") == "FAILED" or receipt.get("receipt", {}).get("result") not in (None, "SUCCESS"):
+                raise RuntimeError("Transaksi TRON gagal on-chain.")
 
             # Tunggu konfirmasi transaksi
             # Di TRON, broadcast yang sukses biasanya langsung masuk mempool.
@@ -246,8 +261,10 @@ class TronSender(BaseCryptoSender):
             )
 
         except Exception as e:
-            logger.error(f"Error saat mengirim TRX: {e}", exc_info=True)
+            logger.warning("Pengiriman TRON belum selesai (%s)", type(e).__name__)
             return SendResult(
                 success=False,
-                error_message=f"Exception saat pengiriman TRON: {str(e)}"
+                tx_hash=tx_hash,
+                error_message=f"MANUAL_REVIEW: Pengiriman TRON belum terkonfirmasi ({type(e).__name__}); cek receipt sebelum kirim ulang.",
+                explorer_url=f"{self.explorer_base}/#/transaction/{tx_hash}" if tx_hash else ""
             )
