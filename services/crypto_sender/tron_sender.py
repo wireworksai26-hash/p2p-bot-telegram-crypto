@@ -75,7 +75,7 @@ class TronSender(BaseCryptoSender):
         if not TRONPY_AVAILABLE:
             raise RuntimeError("RPC TRON gagal membaca saldo dan SDK fallback tidak tersedia.")
         try:
-            client = Tron()
+            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC, timeout=20.0))
             balance_sun = await asyncio.to_thread(client.get_account_balance, self.wallet_address)
             return float(balance_sun)
         except Exception as e:
@@ -114,7 +114,7 @@ class TronSender(BaseCryptoSender):
         if not TRONPY_AVAILABLE:
             raise RuntimeError("RPC TRON gagal membaca saldo token dan SDK fallback tidak tersedia.")
         try:
-            client = Tron(provider=HTTPProvider(timeout=20.0))
+            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC, timeout=20.0))
             contract = await asyncio.to_thread(client.get_contract, contract_address)
             raw_balance = await asyncio.to_thread(
                 contract.functions.balanceOf, self.wallet_address
@@ -267,7 +267,7 @@ class TronSender(BaseCryptoSender):
             )
 
         except Exception as e:
-            logger.warning("Pengiriman TRON belum selesai (%s)", type(e).__name__)
+            logger.warning("Pengiriman TRON belum selesai: %s", e)
             return SendResult(
                 success=False,
                 tx_hash=tx_hash,

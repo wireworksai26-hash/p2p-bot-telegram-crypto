@@ -194,13 +194,13 @@ class SolanaSender(BaseCryptoSender):
                     response.raise_for_status()
                     data = response.json()
                 if data.get("error") or "result" not in data:
-                    raise RuntimeError("RPC Solana menolak/belum mengonfirmasi transaksi.")
+                    raise RuntimeError(f"RPC menolak: {data.get('error') or 'tanpa field result'}")
                 return data["result"]
             except Exception as exc:
                 last_error = exc
-                logger.warning("RPC Solana %s gagal via %s: %s", method, rpc, type(exc).__name__)
+                logger.warning("RPC Solana %s gagal via %s: %s", method, rpc, exc)
                 continue
-        raise RuntimeError(f"Semua RPC Solana gagal untuk {method}: {type(last_error).__name__}")
+        raise RuntimeError(f"Semua RPC Solana gagal untuk {method}: {last_error}")
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
         """Sign once; a signature exists before broadcast, and success needs finality."""
@@ -260,7 +260,7 @@ class SolanaSender(BaseCryptoSender):
                 await asyncio.sleep(1)
             raise RuntimeError("Receipt belum finalized.")
         except Exception as exc:
-            logger.warning("Payout Solana belum selesai (%s)", type(exc).__name__)
+            logger.warning("Payout Solana belum selesai: %s", exc)
             if broadcast_attempted:
                 return SendResult(False, tx_hash,
                     "MANUAL_REVIEW: Broadcast/receipt Solana belum pasti; jangan kirim ulang.",
