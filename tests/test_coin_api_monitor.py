@@ -266,7 +266,33 @@ class TestCoinAPIMonitor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["error_code"], "PRIMARY_DOWN")
         self.assertIn("fallback.invalid", res["error_detail"])
         self.assertIn("Block #16", res["block_info"])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
+
+    async def test_evm_half_broken_endpoint_reports_state_call_failed(self):
+        ep = {
+            "id": "EVM_KAIA",
+            "category": "EVM_RPC",
+            "network": "KAIA",
+            "name": "Kaia Mainnet",
+            "url": "https://half-broken.invalid",
+            "env_var": "KAIA_RPC",
+        }
+
+        async def fake_post(url, **kwargs):
+            method = kwargs.get("json", {}).get("method")
+            resp = MagicMock(status_code=200)
+            if method == "eth_blockNumber":
+                resp.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x10"}
+            else:
+                resp.json.return_value = {"jsonrpc": "2.0", "id": 2, "error": {"message": "Temporary"}}
+            return resp
+
+        with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)):
+            res = await self.monitor.check_single_endpoint(ep)
+
+        self.assertEqual(res["status"], "DOWN")
+        self.assertEqual(res["error_code"], "STATE_CALL_FAILED")
+        self.assertIn("eth_gasPrice", res["error_detail"])
 
     async def test_check_nonevm_aptos_success(self):
         ep = {

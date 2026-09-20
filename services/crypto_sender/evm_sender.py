@@ -58,7 +58,6 @@ class EVMSender(BaseCryptoSender):
                 "https://ethereum-rpc.publicnode.com",
                 "https://1rpc.io/eth",
                 "https://eth.drpc.org",
-                "https://cloudflare-eth.com",
             ],
             "chain_id": 1,
             "explorer": "https://etherscan.io",
@@ -73,11 +72,10 @@ class EVMSender(BaseCryptoSender):
                 settings.BSC_RPC,
                 "https://bsc-dataseed.bnbchain.org",
                 "https://bsc-dataseed1.bnbchain.org",
-                "https://bsc-rpc.publicnode.com",
-                "https://bsc.meowrpc.com",
-                "https://bsc.drpc.org",
                 "https://bsc.blockrazor.xyz",
                 "https://1rpc.io/bnb",
+                "https://bsc-rpc.publicnode.com",
+                "https://bsc.drpc.org",
             ],
             "chain_id": 56,
             "explorer": "https://bscscan.com",
@@ -97,16 +95,13 @@ class EVMSender(BaseCryptoSender):
             "chain_id": 43114,
             "explorer": "https://snowscan.xyz",
             "native_symbol": "AVAX",
-            "tokens": {
-                "USDT": "0x97082348230b92f14910e17d061f37fa62241f8c"
-            }
+            "tokens": {}
         },
         "POLYGON": {
             "rpc_list": [
                 settings.POLYGON_RPC,
                 "https://polygon-bor-rpc.publicnode.com",
                 "https://polygon.drpc.org",
-                "https://polygon-rpc.com",
                 "https://1rpc.io/matic",
             ],
             "chain_id": 137,
@@ -162,8 +157,8 @@ class EVMSender(BaseCryptoSender):
         "ROBINHOOD": {
             "rpc_list": [
                 settings.ROBINHOOD_RPC,
-                "https://rpc.mainnet.chain.robinhood.com",
                 "https://robinhood-rpc.publicnode.com",
+                "https://rpc.mainnet.chain.robinhood.com",
             ],
             "chain_id": 4663,
             "explorer": "https://robinhoodchain.blockscout.com",
@@ -174,7 +169,7 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.KAIA_RPC,
                 "https://public-en.node.kaia.io",
-                "https://klaytn.drpc.org",
+                "https://1rpc.io/klay",
             ],
             "chain_id": 8217,
             "explorer": "https://kaiascan.io",
@@ -211,9 +206,7 @@ class EVMSender(BaseCryptoSender):
             "chain_id": 1625,
             "explorer": "https://gravityscan.com",
             "native_symbol": "G",
-            "tokens": {
-                "USDT": "0x2cBE28e83344199aa567DDe9F6e33E0b1A7f3aB8"
-            }
+            "tokens": {}
         }
     }
 

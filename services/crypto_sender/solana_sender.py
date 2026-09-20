@@ -184,14 +184,23 @@ class SolanaSender(BaseCryptoSender):
             return 0.0
 
     async def _rpc(self, method, params):
-        async with httpx.AsyncClient(timeout=12) as client:
-            response = await client.post(self.rpc_url, json={
-                "jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-            response.raise_for_status()
-            data = response.json()
-            if data.get("error") or "result" not in data:
-                raise RuntimeError("RPC Solana menolak/belum mengonfirmasi transaksi.")
-            return data["result"]
+        """Panggil JSON-RPC Solana dengan rotasi endpoint bila salah satu gagal."""
+        last_error = None
+        for rpc in self.rpc_list:
+            try:
+                async with httpx.AsyncClient(timeout=12) as client:
+                    response = await client.post(rpc, json={
+                        "jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+                    response.raise_for_status()
+                    data = response.json()
+                if data.get("error") or "result" not in data:
+                    raise RuntimeError("RPC Solana menolak/belum mengonfirmasi transaksi.")
+                return data["result"]
+            except Exception as exc:
+                last_error = exc
+                logger.warning("RPC Solana %s gagal via %s: %s", method, rpc, type(exc).__name__)
+                continue
+        raise RuntimeError(f"Semua RPC Solana gagal untuk {method}: {type(last_error).__name__}")
 
     async def send(self, to_address: str, amount: float, symbol: str) -> SendResult:
         """Sign once; a signature exists before broadcast, and success needs finality."""

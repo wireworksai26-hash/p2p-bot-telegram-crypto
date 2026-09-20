@@ -115,13 +115,27 @@ class AptosSender(BaseCryptoSender):
         from services.crypto_sender.evm_sender import _get_network_send_lock
 
         async with _get_network_send_lock("APTOS"):
-            client = RestClient(
-                self.rpc_list[0],
-                client_config=ClientConfig(transaction_wait_in_seconds=40),
-            )
+            client = None
+            last_error = None
+            for rpc in self.rpc_list:
+                candidate = RestClient(
+                    rpc, client_config=ClientConfig(transaction_wait_in_seconds=40))
+                try:
+                    onchain = await candidate.account_balance(account.address())
+                    client = candidate
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning("RPC Aptos %s gagal (%s)", rpc, type(exc).__name__)
+                    await candidate.close()
+            if client is None:
+                return SendResult(
+                    success=False,
+                    error_message=f"MANUAL_REVIEW: RPC Aptos tidak dapat dihubungi ({type(last_error).__name__}).",
+                )
+
             tx_hash = ""
             try:
-                onchain = await client.account_balance(account.address())
                 cfg = client.client_config
                 fee_buffer = cfg.max_gas_amount * cfg.gas_unit_price
                 if onchain < units + fee_buffer:

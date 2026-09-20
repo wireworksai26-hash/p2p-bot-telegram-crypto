@@ -32,21 +32,21 @@ class Settings:
     EVM_WALLET_ADDRESS = (os.getenv("EVM_WALLET_ADDRESS") or "").strip()
     
     # EVM RPC Endpoints
-    BSC_RPC = (os.getenv("BSC_RPC", "https://bsc-rpc.publicnode.com") or "").strip()
+    BSC_RPC = (os.getenv("BSC_RPC", "https://bsc-dataseed.bnbchain.org") or "").strip()
     ETH_RPC = (os.getenv("ETH_RPC", "https://ethereum-rpc.publicnode.com") or "").strip()
     AVAX_RPC = (os.getenv("AVAX_RPC", "https://avalanche-c-chain-rpc.publicnode.com") or "").strip()
     POLYGON_RPC = (os.getenv("POLYGON_RPC", "https://polygon-bor-rpc.publicnode.com") or "").strip()
     BASE_RPC = (os.getenv("BASE_RPC", "https://base-rpc.publicnode.com") or "").strip()
     ARB_RPC = (os.getenv("ARB_RPC", "https://arbitrum-one-rpc.publicnode.com") or "").strip()
     OPTIMISM_RPC = (os.getenv("OPTIMISM_RPC", "https://optimism-rpc.publicnode.com") or "").strip()
-    ROBINHOOD_RPC = (os.getenv("ROBINHOOD_RPC", "https://rpc.mainnet.chain.robinhood.com") or "").strip()
-    KAIA_RPC = (os.getenv("KAIA_RPC", "https://klaytn.drpc.org") or "").strip()
+    ROBINHOOD_RPC = (os.getenv("ROBINHOOD_RPC", "https://robinhood-rpc.publicnode.com") or "").strip()
+    KAIA_RPC = (os.getenv("KAIA_RPC", "https://public-en.node.kaia.io") or "").strip()
     BERA_RPC = (os.getenv("BERA_RPC", "https://berachain.drpc.org") or "").strip()
     HYPEREVM_RPC = (os.getenv("HYPEREVM_RPC", "https://rpc.hyperliquid.xyz/evm") or "").strip()
     GRAVITY_RPC = (os.getenv("GRAVITY_RPC", "https://rpc.gravity.xyz") or "").strip()
 
     # Non-EVM RPCs & Wallets
-    SOL_RPC = (os.getenv("SOL_RPC", "https://solana-rpc.publicnode.com") or "").strip()
+    SOL_RPC = (os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com") or "").strip()
     SOL_PRIVATE_KEY = (os.getenv("SOL_PRIVATE_KEY") or "").strip()
     SOL_WALLET_ADDRESS = (os.getenv("SOL_WALLET_ADDRESS") or "").strip()
 

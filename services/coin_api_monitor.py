@@ -417,8 +417,20 @@ class CoinAPIMonitor:
                     data = resp.json()
                     if "result" in data and data["result"]:
                         block_num = int(data["result"], 16)
-                        result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
-                        result["block_info"] = f"Block #{block_num:,}"
+                        # Sebagian endpoint menjawab eth_blockNumber tetapi gagal untuk state call
+                        # (contoh nyata: KAIA drpc) -> probe eth_gasPrice sebelum bilang OK.
+                        gas = await client.post(url, json={
+                            "jsonrpc": "2.0", "method": "eth_gasPrice", "params": [], "id": 2})
+                        gas_data = gas.json() if gas.status_code == 200 else {}
+                        if gas.status_code != 200 or not gas_data.get("result"):
+                            result["error_code"] = "STATE_CALL_FAILED"
+                            result["error_detail"] = (
+                                "Endpoint menjawab eth_blockNumber tetapi gagal eth_gasPrice "
+                                f"(HTTP {gas.status_code}); endpoint kemungkinan paruh-rusak."
+                            )
+                        else:
+                            result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
+                            result["block_info"] = f"Block #{block_num:,}"
                     elif "error" in data:
                         result["error_code"] = "RPC_ERROR"
                         result["error_detail"] = str(data["error"].get("message", data["error"]))
