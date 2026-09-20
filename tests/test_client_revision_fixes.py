@@ -44,6 +44,7 @@ from bot.handlers.buy import (
     handle_network_selection,
     handle_amount_input,
     handle_order_confirmation,
+    finalize_gopay_buy_payment,
     SELECT_NETWORK,
     INPUT_AMOUNT,
 )
@@ -226,6 +227,15 @@ class TestSwapStockNullSafety(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Stok tujuan tidak cukup atau belum terverifikasi", call_text)
 
 
+class TestSolanaMainnetGuard(unittest.TestCase):
+    """Genesis hash terpotong akan menolak semua payout Solana di preflight."""
+
+    def test_genesis_hash_is_full_44_characters(self):
+        from services.crypto_sender.solana_sender import SOLANA_MAINNET_GENESIS_HASH
+        self.assertEqual(SOLANA_MAINNET_GENESIS_HASH, "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d")
+        self.assertEqual(len(SOLANA_MAINNET_GENESIS_HASH), 44)
+
+
 class TestBuyFlowStockValidation(unittest.IsolatedAsyncioTestCase):
     """Test buy flow pre-payment stock checks and manual network checks."""
 
@@ -289,6 +299,78 @@ class TestBuyFlowStockValidation(unittest.IsolatedAsyncioTestCase):
             message.reply_text.assert_called_once()
             call_text = message.reply_text.call_args.kwargs.get("text", "")
             self.assertIn("Stok HYPE (HYPEREVM) Tidak Mencukupi", call_text)
+
+    async def test_paid_order_refreshes_stale_stock_before_manual_review(self):
+        """Pesanan yang sudah dibayar tidak boleh ke manual review hanya karena baris stok basi."""
+        import os
+        import tempfile
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        stock_engine = create_engine(f"sqlite:///{os.path.join(tempfile.mkdtemp(), 'stock.db')}")
+        Base.metadata.create_all(bind=stock_engine)
+        StockSession = sessionmaker(bind=stock_engine, autoflush=False, expire_on_commit=False)
+
+        seed = StockSession()
+        seed.add(Order(
+            order_id="BUY-STALE-1",
+            telegram_id=777,
+            order_type="buy",
+            crypto_symbol="HYPE",
+            network="HYPEREVM",
+            crypto_amount=Decimal("0.01"),
+            price_per_unit=140000,
+            nominal_idr=50000,
+            fee_idr=3000,
+            total_idr=50000,
+            buyer_wallet="0x" + "3" * 40,
+            payment_method="GOPAY_QRIS",
+            status="paid",
+        ))
+        seed.add(WalletBalance(
+            network="HYPEREVM",
+            symbol="HYPE",
+            address="0x" + "1" * 40,
+            balance=Decimal("0.03197"),
+            reserved_balance=Decimal("0"),
+            sync_status="ERROR",
+            last_error="Pembacaan saldo HYPE/HYPEREVM gagal (RuntimeError).",
+            last_success_at=datetime.utcnow() - timedelta(hours=2),
+            last_checked_at=datetime.utcnow() - timedelta(hours=2),
+        ))
+        seed.commit()
+        seed.close()
+
+        async def fake_sync(assets=None):
+            other = StockSession()
+            try:
+                row = other.query(WalletBalance).filter_by(network="HYPEREVM", symbol="HYPE").first()
+                row.balance = Decimal("1")
+                row.sync_status = "OK"
+                row.last_error = None
+                row.last_success_at = datetime.utcnow()
+                other.commit()
+            finally:
+                other.close()
+            return {"success": ["HYPE (HYPEREVM)"], "failed": []}
+
+        db = StockSession()
+        try:
+            order = db.query(Order).filter_by(order_id="BUY-STALE-1").first()
+            payout = AsyncMock(return_value={
+                "success": True, "tx_hash": "0xfeed", "explorer_url": "", "error_message": "",
+            })
+            with patch("services.wallet_sync.sync_wallet_balances", new=AsyncMock(side_effect=fake_sync)), \
+                 patch("services.payout_service.send_order_payout", new=payout), \
+                 patch("bot.handlers.buy.safe_send_message", new=AsyncMock()), \
+                 patch("bot.handlers.buy.notify_admins", new=AsyncMock()):
+                await finalize_gopay_buy_payment(db, order, bot=AsyncMock())
+
+            self.assertEqual(order.status, "completed")
+            self.assertEqual(order.payout_tx_hash, "0xfeed")
+            payout.assert_awaited_once()
+        finally:
+            db.close()
 
     async def test_buy_order_confirmation_rejects_if_stock_unavailable(self):
         """Confirmation step must reject order creation if stock is insufficient."""

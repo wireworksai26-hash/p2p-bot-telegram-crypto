@@ -175,16 +175,19 @@ class TonSender(BaseCryptoSender):
         return int(result["stack"][0][1], 16)
 
     async def _send_boc(self, boc_bytes: bytes) -> bool:
+        if not self.api_key:
+            raise RuntimeError("TON_API_KEY belum di-set; Toncenter menolak broadcast dengan ratelimit 429.")
         boc_b64 = base64.b64encode(boc_bytes).decode()
         # One broadcast attempt only. A timeout may already have sent the BOC.
         async with httpx.AsyncClient(timeout=12) as client:
             response = await client.post(self.rpc_url, json={
                 "jsonrpc": "2.0", "id": 1, "method": "sendBoc", "params": {"boc": boc_b64}},
-                headers={"X-API-Key": self.api_key} if self.api_key else {})
-            response.raise_for_status()
+                headers={"X-API-Key": self.api_key})
+            if response.status_code != 200:
+                raise RuntimeError(f"Toncenter HTTP {response.status_code}: {response.text[:200]}")
             data = response.json()
             if data.get("ok") is not True:
-                raise RuntimeError("Broadcast TON belum terkonfirmasi.")
+                raise RuntimeError(f"Toncenter menolak BOC: {str(data.get('error') or data.get('result'))[:200]}")
         return True
 
     async def _broadcast_transfer(self, transfer, to_address, amount, symbol):
@@ -192,8 +195,10 @@ class TonSender(BaseCryptoSender):
         message_hash = transfer["message"].bytes_hash().hex()
         # This is a message identifier, NOT a confirmed transaction hash.
         reference = "msg:" + message_hash
+        boc_sent = False
         try:
             await self._send_boc(transfer["message"].to_boc(False))
+            boc_sent = True
             for _ in range(12):
                 data = await _ton_get("transactionsByMessage", {"msg_hash": message_hash, "direction": "in", "limit": 10})
                 for row in data.get("transactions", []):
@@ -204,7 +209,10 @@ class TonSender(BaseCryptoSender):
                         return SendResult(True, tx_hash, explorer_url=f"{self.explorer_base}/transaction/{tx_hash}")
                 await asyncio.sleep(2)
         except Exception as exc:
-            logger.warning("Receipt TON belum pasti (%s)", type(exc).__name__)
+            logger.warning("Broadcast/receipt TON gagal (%s): %s", type(exc).__name__, str(exc)[:200])
+            if not boc_sent:
+                # Toncenter menolak sebelum BOC diterima, jadi belum ada hash on-chain yang bisa dilaporkan.
+                return SendResult(False, "", f"MANUAL_REVIEW: Broadcast TON ditolak. {str(exc)[:250]}")
         return SendResult(False, reference,
             "MANUAL_REVIEW: Periksa receipt/trace TON sebelum kirim ulang; broadcast sudah dicoba.",
             "" if reference.startswith("msg:") else f"{self.explorer_base}/transaction/{reference}")

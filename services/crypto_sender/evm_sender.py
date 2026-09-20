@@ -157,6 +157,7 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.ROBINHOOD_RPC,
                 "https://rpc.mainnet.chain.robinhood.com",
+                "https://robinhood-rpc.publicnode.com",
             ],
             "chain_id": 4663,
             "explorer": "https://robinhoodchain.blockscout.com",
@@ -189,6 +190,7 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.HYPEREVM_RPC,
                 "https://rpc.hyperliquid.xyz/evm",
+                "https://hyperliquid.drpc.org",
             ],
             "chain_id": 999,
             "explorer": "https://hyperevm.cloud",

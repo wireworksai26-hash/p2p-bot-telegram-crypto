@@ -43,6 +43,10 @@ SPL_TOKENS = {
     "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
 }
 
+# Harus 44 karakter penuh; nilai terpotong menolak semua payout mainnet.
+SOLANA_MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+
+
 class SolanaSender(BaseCryptoSender):
     def __init__(self):
         raw_rpcs = [
@@ -167,7 +171,7 @@ class SolanaSender(BaseCryptoSender):
             if str(owner) != self.wallet_address:
                 return SendResult(False, error_message="MANUAL_REVIEW: Key Solana tidak cocok dengan alamat stok.")
             # Reject a accidentally configured devnet/testnet RPC before signing.
-            if await self._rpc("getGenesisHash", []) != "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp":
+            if await self._rpc("getGenesisHash", []) != SOLANA_MAINNET_GENESIS_HASH:
                 return SendResult(False, error_message="MANUAL_REVIEW: RPC bukan Solana mainnet.")
             instructions = []
             decimals = 9 if sym == "SOL" else 6

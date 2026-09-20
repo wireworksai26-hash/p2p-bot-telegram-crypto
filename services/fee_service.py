@@ -82,6 +82,17 @@ CONVERT_FEE_TIERS = [
     (940001, 1010000, 18000),
 ]
 
+# Tambahan biaya pengiriman koin keluar di jaringan ETH L1.
+ETH_NETWORK_SURCHARGE_IDR = 2000
+
+
+def eth_surcharge_note(network: str) -> str:
+    """Keterangan surcharge ETH untuk pembeli; string kosong bila jaringan lain."""
+    if (network or "").upper() != "ETH":
+        return ""
+    surcharge = f"{ETH_NETWORK_SURCHARGE_IDR:,}".replace(",", ".")
+    return f"\n⛽ <i>Fee sudah termasuk tambahan Rp {surcharge} untuk biaya kirim jaringan ETH.</i>"
+
 
 def _tier_fee(nominal_idr: int, tiers: list, category: str, min_nominal: int, max_nominal: int) -> int:
     """Cari fee fixed dari list tier (min, max, fee). Raise jika di luar rentang."""
@@ -133,7 +144,7 @@ def calculate_fee_idr(
 
     # Tambahan fee jaringan ETH (ERC20 / ETH L1) sebesar Rp 2.000 untuk transaksi pengiriman koin keluar
     if network and network.upper() == "ETH" and is_outgoing:
-        base_fee += 2000
+        base_fee += ETH_NETWORK_SURCHARGE_IDR
 
     return base_fee
 

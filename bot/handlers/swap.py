@@ -33,7 +33,7 @@ from config.assets import MANUAL_PAYOUT_NETWORKS
 from database.connection import SessionLocal
 from database.models import User, Order, AuditLog
 from services.price_service import price_service
-from services.fee_service import calculate_fee_idr
+from services.fee_service import calculate_fee_idr, eth_surcharge_note
 from services.crypto_sender import CryptoSenderFactory
 from services import tx_verifier
 from services.detector import deposit_detector
@@ -428,7 +428,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 <b>[INPUT WALLET TUJUAN]</b>\n\n"
         f"Kamu akan menukar:\n"
         f"<b>{src_amount:.6f} {src_sym} ({src_net})</b> (~Rp {nominal_idr:,})\n"
-        f"Fee Convert: <b>Rp {fee_idr:,}</b>\n"
+        f"Fee Convert: <b>Rp {fee_idr:,}</b>{eth_surcharge_note(tgt_net)}\n"
         f"Estimasi yang diterima: <b>{tgt_amount:.6f} {tgt_sym} ({tgt_net})</b>\n\n"
         f"Silakan masukkan <b>Alamat Wallet {tgt_sym} ({tgt_net})</b> tujuan milikmu:",
         parse_mode="HTML",
@@ -480,7 +480,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<i>Masa berlaku quote: 30 Menit</i>\n\n"
         f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net})\n"
         f"<b>Nilai IDR:</b> Rp {nominal_idr:,}\n"
-        f"<b>Fee Convert:</b> Rp {fee_idr:,}\n"
+        f"<b>Fee Convert:</b> Rp {fee_idr:,}{eth_surcharge_note(tgt_net)}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
         f"<b>Wallet Tujuan:</b> <code>{target_addr}</code>\n\n"
         f"Apakah data di atas sudah sesuai?",

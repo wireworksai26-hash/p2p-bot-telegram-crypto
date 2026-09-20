@@ -43,7 +43,7 @@ from database.crud import (
     release_order_inventory,
 )
 from services.price_service import price_service, quote_source_text
-from services.fee_service import calculate_fee_idr, get_fee_category
+from services.fee_service import calculate_fee_idr, get_fee_category, eth_surcharge_note
 from services.gopay_service import gopay_service
 from bot.keyboards.crypto_select import (
     get_buy_symbol_keyboard,
@@ -304,7 +304,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
                 f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>"
-                f"{quote_info}\n\n"
+                f"{quote_info}"
+                f"{eth_surcharge_note(network)}\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
                 f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
@@ -448,6 +449,7 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     # Tambahkan baris informasi metode pembayaran
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
     summary_text += f"\n💳 <b>Metode Pembayaran:</b> {method_label}"
+    summary_text += eth_surcharge_note(network)
     if method_code == "GOPAY_QRIS":
         summary_text += (
             "\nℹ️ <i>Kode unik (1-999) akan ditambahkan ke total bayar "
@@ -612,7 +614,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"📝 <b>ID Order:</b> <code>{order_id}</code>\n"
                 f"🪙 <b>Aset:</b> {format_crypto(crypto_amount, symbol)} ({network})\n"
                 f"💵 <b>Nominal Bayar:</b> {format_idr(total_idr)} (Saldo Bot)\n"
-                f"🔌 <b>Fee Layanan (dipotong):</b> -{format_idr(fee_idr)}\n"
+                f"🔌 <b>Fee Layanan (dipotong):</b> -{format_idr(fee_idr)}"
+                f"{eth_surcharge_note(network)}\n"
                 f"💰 <b>Nilai Koin Diterima:</b> {format_idr(received_idr)}\n"
                 f"📍 <b>Wallet Tujuan:</b> <code>{buyer_wallet}</code>\n\n"
                 f"✅ Pembayaran menggunakan Saldo Bot lunas! Koin crypto sedang diproses untuk dikirimkan ke wallet Anda."
@@ -655,7 +658,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"{E_CARD()} <b>BAYAR VIA QRIS DINAMIS</b>\n\n"
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
                 f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>\n"
-                f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}\n"
+                f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}"
+                f"{eth_surcharge_note(network)}\n"
                 f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
                 f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
                 f"📌 <b>Cara Bayar:</b>\n"
@@ -805,13 +809,23 @@ async def finalize_gopay_buy_payment(
             return
 
         # 1. Pesan Progres: Pembayaran Diterima & Proses Pengiriman Koin
-        if order.order_type == "buy" and not reserve_order_inventory(
-            db,
-            order.order_id,
-            order.network,
-            order.crypto_symbol,
-            Decimal(str(order.crypto_amount)),
-        ):
+        if order.order_type != "buy":
+            reserved = True
+        else:
+            order_amount = Decimal(str(order.crypto_amount))
+            reserved = reserve_order_inventory(
+                db, order.order_id, order.network, order.crypto_symbol, order_amount,
+            )
+            if not reserved:
+                # Pesanan sudah dibayar: segarkan stok basi sekali sebelum menolak dan minta admin kirim manual.
+                from services.wallet_sync import sync_wallet_balances
+                stock_sym = "MATIC" if order.network.upper() == "POLYGON" and order.crypto_symbol.upper() == "POL" else order.crypto_symbol
+                await sync_wallet_balances([(stock_sym, order.network)])
+                reserved = reserve_order_inventory(
+                    db, order.order_id, order.network, order.crypto_symbol, order_amount,
+                )
+
+        if not reserved:
             result = {
                 "success": False,
                 "tx_hash": "",
