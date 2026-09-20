@@ -78,6 +78,10 @@ class Settings:
 
     # App logic configurations
     ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 30))
+    # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
+    SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
+    # Kunci explorer (Etherscan V2, multichain) untuk fallback verifikasi bila RPC publik kena limit.
+    ETHERSCAN_API_KEY = (os.getenv("ETHERSCAN_API_KEY") or "").strip()
     DEFAULT_SPREAD_PCT = float(os.getenv("DEFAULT_SPREAD_PCT", 0.0))
     ENABLE_LOW_BALANCE_ALERT = os.getenv("ENABLE_LOW_BALANCE_ALERT", "false").lower() in ("true", "1", "yes")
     LOW_BALANCE_ALERT_HOURS = int(os.getenv("LOW_BALANCE_ALERT_HOURS", 6))

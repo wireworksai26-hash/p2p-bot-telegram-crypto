@@ -6,7 +6,7 @@ Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfi
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
@@ -931,6 +931,57 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         db.close()
 
 
+async def _reverify_sell_deposit(db, order):
+    """Verifikasi ulang deposit sell dengan jendela resmi (default 24 jam)."""
+    from services import tx_verifier
+
+    tx_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
+    if not tx_hash or tx_hash.startswith("PHOTO:"):
+        return None
+    base = order.created_at or datetime.utcnow()
+    return await tx_verifier.verify_deposit(
+        network=order.network,
+        symbol=order.crypto_symbol,
+        tx_hash=tx_hash,
+        expected_wallet=order.deposit_wallet or "",
+        expected_amount=order.crypto_amount,
+        not_before=order.created_at,
+        not_after=base + timedelta(minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES),
+    )
+
+
+async def _finish_sell_order(db, order, query, bot) -> None:
+    """Selesaikan order sell: status completed, notifikasi user, tanda di pesan admin."""
+    from bot.utils.telegram_utils import safe_send_message
+    from bot.utils.messages import build_sell_completion_message
+
+    was_already_completed = order.status.lower() == "completed"
+    if not was_already_completed:
+        crud.update_order_status(db, order.order_id, new_status="completed", completed_at=datetime.utcnow())
+        crud.release_order_inventory(db, order.order_id)
+
+    menu_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Menu Utama", callback_data="menu_back",
+                             icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+    ]])
+    sent = await safe_send_message(
+        bot, order.telegram_id, build_sell_completion_message(order), reply_markup=menu_keyboard)
+
+    alert_text = ("✅ Berhasil konfirmasi & notifikasi terkirim ke user!" if sent
+                  else "⚠️ Order COMPLETED namun gagal mengirim notifikasi ke user.")
+    if was_already_completed:
+        alert_text = ("ℹ️ Order sudah COMPLETED. Notifikasi dikirim ulang ke user." if sent
+                      else "ℹ️ Order sudah COMPLETED.")
+    await query.answer(alert_text, show_alert=True)
+
+    msg = query.message
+    completion_tag = "\n\n✅ <b>RUPIAH SUDAH DITRANSFER OLEH ADMIN (COMPLETED)</b>"
+    if msg.caption and completion_tag not in msg.caption:
+        await query.edit_message_caption(caption=f"{msg.caption}{completion_tag}", parse_mode="HTML")
+    elif msg.text and completion_tag not in msg.text:
+        await query.edit_message_text(text=f"{msg.text}{completion_tag}", parse_mode="HTML")
+
+
 async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Callback tombol Admin: Konfirmasi transfer Rupiah untuk order Sell."""
     query = update.callback_query
@@ -947,51 +998,133 @@ async def admin_confirm_sell_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("❌ Order tidak ditemukan.", show_alert=True)
             return
 
-        if order.order_type != "sell" or order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
-            await query.answer("Deposit belum terverifikasi; penyelesaian diblokir.", show_alert=True)
+        if order.order_type != "sell":
+            await query.answer("❌ Order ini bukan order jual.", show_alert=True)
             return
-        was_already_completed = order.status.lower() == "completed"
 
-        if not was_already_completed:
-            # Update status order ke completed
-            crud.update_order_status(
-                db, 
-                order_id, 
-                new_status="completed", 
-                completed_at=datetime.utcnow()
-            )
-            crud.release_order_inventory(db, order_id)
+        if order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
+            # Coba verifikasi ulang dengan jendela resmi sebelum menolak.
+            verified = await _reverify_sell_deposit(db, order)
+            if verified and verified.get("verified"):
+                crud.update_order_status(db, order_id, new_status="CRYPTO_CONFIRMED")
+                db.refresh(order)
+            else:
+                reason = (verified or {}).get("reason") or "Tidak ada TX hash yang bisa diverifikasi on-chain."
+                await query.message.reply_text(
+                    (
+                        f"⛔ <b>Belum bisa diselesaikan otomatis</b>\n\n"
+                        f"Order: <code>{order_id}</code>\n"
+                        f"Status: <b>{order.status}</b>\n"
+                        f"TX Hash: <code>{order.deposit_tx_hash or order.tx_hash or '-'}</code>\n"
+                        f"Alasan verifikasi: <i>{reason}</i>\n\n"
+                        f"Periksa mutasi wallet. Bila koin benar-benar sudah masuk, gunakan tombol "
+                        f"<b>Selesaikan Manual</b> (tercatat di audit log)."
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⚠️ Selesaikan Manual (Admin)", callback_data=f"admin_force_sell_{order_id}")
+                    ]]),
+                    parse_mode="HTML",
+                )
+                await query.answer("Deposit belum terverifikasi otomatis.", show_alert=True)
+                return
 
-        # Kirim notifikasi sukses ke user
-        from bot.utils.telegram_utils import safe_send_message
-        from bot.utils.messages import build_sell_completion_message
-        user_msg = build_sell_completion_message(order)
-        
-        menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
-        sent = await safe_send_message(context.bot, order.telegram_id, user_msg, reply_markup=menu_keyboard)
-
-        alert_text = "✅ Berhasil konfirmasi & notifikasi terkirim ke user!" if sent else "⚠️ Order COMPLETED namun gagal mengirim notifikasi ke user."
-        if was_already_completed:
-            alert_text = "ℹ️ Order sudah COMPLETED. Notifikasi dikirim ulang ke user." if sent else "ℹ️ Order sudah COMPLETED."
-        await query.answer(alert_text, show_alert=True)
-
-        msg = query.message
-        completion_tag = "\n\n✅ <b>RUPIAH SUDAH DITRANSFER OLEH ADMIN (COMPLETED)</b>"
-        if msg.caption and completion_tag not in msg.caption:
-            caption_now = msg.caption or ""
-            await query.edit_message_caption(
-                caption=f"{caption_now}{completion_tag}",
-                parse_mode="HTML"
-            )
-        elif msg.text and completion_tag not in msg.text:
-            text_now = msg.text or ""
-            await query.edit_message_text(
-                text=f"{text_now}{completion_tag}",
-                parse_mode="HTML"
-            )
+        await _finish_sell_order(db, order, query, context.bot)
     except Exception as e:
         logger.error(f"Error admin_confirm_sell_callback {order_id}: {e}", exc_info=True)
         await query.answer("❌ Gagal memproses konfirmasi.", show_alert=True)
+    finally:
+        db.close()
+
+
+async def admin_force_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin menandai deposit sell terverifikasi manual (override tercatat di audit log)."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+
+    order_id = query.data.replace("admin_force_sell_", "").strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order or order.order_type != "sell":
+            await query.answer("❌ Order jual tidak ditemukan.", show_alert=True)
+            return
+        if order.status.lower() == "completed":
+            await query.answer("ℹ️ Order sudah COMPLETED.", show_alert=True)
+            return
+
+        old_status = order.status
+        crud.update_order_status(db, order_id, new_status="CRYPTO_CONFIRMED")
+        db.add(AuditLog(
+            telegram_id=order.telegram_id,
+            action="SELL_MANUAL_OVERRIDE",
+            order_id=order_id,
+            from_status=old_status,
+            to_status="CRYPTO_CONFIRMED",
+            details=(
+                f"Admin {user_id} menandai deposit terverifikasi manual. "
+                f"TX hash: {order.deposit_tx_hash or order.tx_hash or '-'}"
+            ),
+        ))
+        db.commit()
+        db.refresh(order)
+        await query.answer("✅ Deposit ditandai terverifikasi manual.", show_alert=False)
+        await _finish_sell_order(db, order, query, context.bot)
+    except Exception as e:
+        logger.error(f"Error admin_force_sell_callback {order_id}: {e}", exc_info=True)
+        await query.answer("❌ Gagal memproses override manual.", show_alert=True)
+    finally:
+        db.close()
+
+
+async def verifysell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /verifysell <order_id>: verifikasi ulang deposit order jual (admin)."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Format: <code>/verifysell &lt;order_id&gt;</code>", parse_mode="HTML")
+        return
+
+    order_id = context.args[0].strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order:
+            await update.message.reply_text(f"❌ Order <code>{order_id}</code> tidak ditemukan.", parse_mode="HTML")
+            return
+
+        verified = await _reverify_sell_deposit(db, order)
+        if verified and verified.get("verified"):
+            if order.status.lower() != "crypto_confirmed":
+                crud.update_order_status(db, order_id, new_status="CRYPTO_CONFIRMED")
+            await update.message.reply_text(
+                (
+                    f"✅ <b>Deposit terverifikasi</b>\n\n"
+                    f"Order: <code>{order_id}</code>\n"
+                    f"Nominal: {verified.get('amount')} {order.crypto_symbol} ({order.network})\n"
+                    f"Status sekarang: <b>CRYPTO_CONFIRMED</b> — silakan klik tombol "
+                    f"<b>Sudah Ditransfer</b> untuk menyelesaikan order."
+                ),
+                parse_mode="HTML",
+            )
+        else:
+            reason = (verified or {}).get("reason") or "Tidak ada TX hash yang bisa diverifikasi on-chain."
+            await update.message.reply_text(
+                (
+                    f"⚠️ <b>Belum terverifikasi otomatis</b>\n\n"
+                    f"Order: <code>{order_id}</code>\n"
+                    f"Status: <b>{order.status}</b>\n"
+                    f"Alasan: <i>{reason}</i>\n\n"
+                    f"Jika dana sudah masuk, gunakan tombol <b>Selesaikan Manual (Admin)</b> pada "
+                    f"notifikasi order (tercatat di audit log)."
+                ),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"Error verifysell {order_id}: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memverifikasi order.")
     finally:
         db.close()
 

@@ -57,7 +57,10 @@ class TronSender(BaseCryptoSender):
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0) as client:
-                res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
+                res = await client.get(
+                    f"https://api.trongrid.io/v1/accounts/{self.wallet_address}",
+                    headers={"TRON-PRO-API-KEY": settings.TRONGRID_API_KEY} if settings.TRONGRID_API_KEY else {},
+                )
                 res.raise_for_status()
                 payload = res.json()
                 data = payload.get("data")
@@ -91,7 +94,10 @@ class TronSender(BaseCryptoSender):
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0) as client:
-                res = await client.get(f"https://api.trongrid.io/v1/accounts/{self.wallet_address}")
+                res = await client.get(
+                    f"https://api.trongrid.io/v1/accounts/{self.wallet_address}",
+                    headers={"TRON-PRO-API-KEY": settings.TRONGRID_API_KEY} if settings.TRONGRID_API_KEY else {},
+                )
                 res.raise_for_status()
                 payload = res.json()
                 data = payload.get("data")

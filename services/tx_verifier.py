@@ -154,6 +154,86 @@ async def _ton_get(path, params):
             _ton_last_request = loop.time()
 
 
+EXPLORER_V2_API = "https://api.etherscan.io/v2/api"
+EXPLORER_CHAIN_IDS = {
+    "ETH": 1, "BSC": 56, "POLYGON": 137, "BASE": 8453,
+    "ARB": 42161, "OPTIMISM": 10, "AVAX": 43114,
+}
+# Decimals cadangan bila eth_call tidak tersedia saat fallback explorer dipakai.
+EXPLORER_TOKEN_DECIMALS = {
+    ("BSC", "USDT"): 18, ("BSC", "USDC"): 18,
+    ("ETH", "USDT"): 6, ("ETH", "USDC"): 6,
+    ("POLYGON", "USDT"): 6, ("POLYGON", "USDC"): 6,
+    ("BASE", "USDC"): 6, ("ARB", "USDT"): 6, ("ARB", "USDC"): 6,
+    ("OPTIMISM", "USDC"): 6, ("AVAX", "USDT"): 6,
+}
+
+
+async def _explorer_proxy(chain_id, action, **params):
+    """Panggil Etherscan V2 (multichain) sebagai fallback verifikasi."""
+    if not settings.ETHERSCAN_API_KEY:
+        return None
+    data = await _json("GET", EXPLORER_V2_API, params={
+        "chainid": chain_id, "module": "proxy", "action": action,
+        "apikey": settings.ETHERSCAN_API_KEY, **params})
+    if str(data.get("status")) != "1":
+        raise RuntimeError(str(data.get("result"))[:140])
+    return data.get("result")
+
+
+async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
+    """Fallback bila semua RPC publik gagal (kuota/arsip). None bila tidak tersedia."""
+    chain_id = EXPLORER_CHAIN_IDS.get(network)
+    if not chain_id or not settings.ETHERSCAN_API_KEY:
+        return None
+    sender = CryptoSenderFactory.get_sender(network)
+    try:
+        receipt = await _explorer_proxy(chain_id, "eth_getTransactionReceipt", txhash=tx_hash)
+        if not isinstance(receipt, dict) or not receipt.get("blockNumber"):
+            return None
+        if int(receipt.get("status", "0x0"), 16) != 1:
+            return _fail("Transaksi gagal atau belum confirmed.")
+        block_no = int(receipt["blockNumber"], 16)
+        latest_raw = await _explorer_proxy(chain_id, "eth_blockNumber")
+        if latest_raw and int(latest_raw, 16) - block_no + 1 < settings.EVM_DEPOSIT_CONFIRMATIONS:
+            return _fail("Menunggu konfirmasi blockchain.")
+        block = await _explorer_proxy(
+            chain_id, "eth_getBlockByNumber", tag=receipt["blockNumber"], boolean="false")
+        timestamp = int(block["timestamp"], 16)
+
+        amount = Decimal(0)
+        if symbol == sender.config["native_symbol"]:
+            tx = await _explorer_proxy(chain_id, "eth_getTransactionByHash", txhash=tx_hash)
+            if (tx.get("to") or "").lower() != wallet.lower():
+                return _fail("Penerima tidak cocok.")
+            if (tx.get("from") or "").lower() == wallet.lower():
+                return _fail("Transfer ke diri sendiri bukan deposit.")
+            amount = Decimal(int(tx["value"], 16)) / 10**18
+        else:
+            token = sender.config["tokens"].get(symbol)
+            if not token:
+                return _fail("Token tidak terdaftar.")
+            decimals = EXPLORER_TOKEN_DECIMALS.get((network, symbol))
+            if decimals is None:
+                from services.crypto_sender.evm_sender import ERC20_ABI
+                w3 = sender.w3
+                contract = w3.eth.contract(address=w3.to_checksum_address(token), abi=ERC20_ABI)
+                decimals = await asyncio.to_thread(contract.functions.decimals().call)
+            for log in receipt.get("logs", []):
+                topics = log.get("topics", [])
+                if (log.get("address") or "").lower() != token.lower() or len(topics) != 3:
+                    continue
+                if _hex(topics[0]) != TRANSFER_TOPIC or "0x" + _hex(topics[2])[-40:] != wallet.lower():
+                    continue
+                if "0x" + _hex(topics[1])[-40:] == wallet.lower():
+                    continue
+                amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
+        return _ok(amount, timestamp, tx_hash)
+    except Exception as exc:
+        logger.warning("Verifikasi explorer %s gagal (%s)", network, type(exc).__name__)
+        return None
+
+
 async def _verify_evm(network, symbol, tx_hash, wallet):
     sender = CryptoSenderFactory.get_sender(network)
     symbol = "MATIC" if network == "POLYGON" and symbol == "POL" else symbol
@@ -199,6 +279,9 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
         except Exception:
             if attempt + 1 < len(sender.rpc_list):
                 sender._rotate_rpc()
+    fallback = await _verify_evm_via_explorer(network, symbol, tx_hash, wallet)
+    if fallback is not None:
+        return fallback
     return _fail("RPC EVM gagal memverifikasi receipt/chain.")
 
 

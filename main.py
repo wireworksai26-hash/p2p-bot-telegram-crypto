@@ -52,6 +52,7 @@ from bot.handlers.admin import (
     unban_handler,
     stats_handler,
     refreshwallet_handler,
+    verifysell_handler,
     getemoji_handler,
     syncpack_handler,
     setemoji_handler,
@@ -330,6 +331,7 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("unban", unban_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
     application.add_handler(CommandHandler("refreshwallet", refreshwallet_handler))
+    application.add_handler(CommandHandler("verifysell", verifysell_handler))
     application.add_handler(CommandHandler("getemoji", getemoji_handler))
     application.add_handler(CommandHandler("syncpack", syncpack_handler))
     application.add_handler(CommandHandler("setemoji", setemoji_handler))

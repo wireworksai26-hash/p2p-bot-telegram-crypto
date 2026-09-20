@@ -378,13 +378,25 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         }
         create_order(db, order_data)
         
+        token_hint = ""
+        try:
+            token_address = CryptoSenderFactory.get_sender(network).config.get("tokens", {}).get(symbol.upper())
+            if token_address:
+                token_hint = f"Token: <b>{symbol}</b> — kontrak <code>{token_address}</code>\n"
+        except Exception:
+            token_hint = ""
+
         waiting_text = (
             f"📥 <b>ORDER PENJUALAN DIBUAT</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
             f"Harap kirimkan tepat <b>{format_crypto(crypto_amount, symbol)}</b> ke alamat Hot Wallet kami di bawah ini:\n\n"
             f"Network: <b>{network}</b>\n"
+            f"{token_hint}"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
-            f"⏳ <b>Batas Waktu:</b> 15 Menit\n\n"
+            f"⏳ <b>Batas Waktu Quote:</b> 15 Menit\n"
+            f"• Koin yang masuk tetap dicek otomatis hingga <b>24 jam</b> setelah order dibuat.\n"
+            f"• Kirim <b>hanya {symbol} di jaringan {network}</b>. Koin lain atau native coin "
+            f"(mis. ETH/BNB/POL) tidak dapat diverifikasi otomatis dan harus diproses admin.\n\n"
             f"⏰ <b>Catatan Layanan:</b>\n"
             f"• Pengecekan koin masuk <b>otomatis 24 jam</b>.\n"
             f"• Pencairan dana ke rekening/e-wallet Anda dilayani <b>08.00 - 22.00 WIB</b> (diproses manual saat admin online).\n\n"

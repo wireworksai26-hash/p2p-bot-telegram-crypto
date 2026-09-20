@@ -8,6 +8,7 @@ POLYGON, BASE, ARB, dan GRAVITY menggunakan Web3.py.
 import logging
 import asyncio
 from decimal import Decimal
+import httpx
 from web3 import Web3
 from config.settings import settings
 from services.crypto_sender import BaseCryptoSender, SendResult
@@ -73,6 +74,9 @@ class EVMSender(BaseCryptoSender):
                 "https://bsc-dataseed.bnbchain.org",
                 "https://bsc-dataseed1.bnbchain.org",
                 "https://bsc-rpc.publicnode.com",
+                "https://bsc.meowrpc.com",
+                "https://bsc.drpc.org",
+                "https://bsc.blockrazor.xyz",
                 "https://1rpc.io/bnb",
             ],
             "chain_id": 56,
@@ -101,6 +105,8 @@ class EVMSender(BaseCryptoSender):
             "rpc_list": [
                 settings.POLYGON_RPC,
                 "https://polygon-bor-rpc.publicnode.com",
+                "https://polygon.drpc.org",
+                "https://polygon-rpc.com",
                 "https://1rpc.io/matic",
             ],
             "chain_id": 137,
@@ -298,10 +304,52 @@ class EVMSender(BaseCryptoSender):
                     logger.warning(f"Gagal mengambil saldo {symbol} di {self.network} via {self.rpc_list[self.current_rpc_index]}: {e}")
                 if attempt < len(self.rpc_list) - 1:
                     self._rotate_rpc()
+        explorer_balance = await self._explorer_balance(symbol_upper, native_sym, token_address)
+        if explorer_balance is not None:
+            return explorer_balance
         raise RuntimeError(
             f"Semua RPC {self.network} gagal membaca saldo {symbol_upper or native_sym}: "
             f"{last_error or 'respons tidak valid'}"
         )
+
+    async def _explorer_balance(self, symbol_upper: str, native_sym: str, token_address: str | None):
+        """Fallback saldo via Etherscan V2 bila RPC publik kena limit. None bila tidak tersedia."""
+        from services.tx_verifier import EXPLORER_CHAIN_IDS, EXPLORER_TOKEN_DECIMALS
+
+        chain_id = EXPLORER_CHAIN_IDS.get(self.network)
+        if not chain_id or not settings.ETHERSCAN_API_KEY:
+            return None
+        try:
+            if not symbol_upper or symbol_upper == native_sym:
+                raw = await self._explorer_account_balance(chain_id, native=True)
+                return float(Decimal(raw) / Decimal(10**18))
+            decimals = EXPLORER_TOKEN_DECIMALS.get((self.network, symbol_upper))
+            if decimals is None:
+                raise RuntimeError("decimals token belum terdaftar untuk fallback explorer.")
+            raw = await self._explorer_account_balance(
+                chain_id, native=False, token_address=token_address or "")
+            return float(Decimal(raw) / Decimal(10**decimals))
+        except Exception as exc:
+            logger.warning(
+                "Fallback explorer saldo %s/%s gagal (%s)", self.network, symbol_upper, type(exc).__name__)
+            return None
+
+    async def _explorer_account_balance(self, chain_id: int, native: bool, token_address: str = "") -> str:
+        params = {
+            "chainid": chain_id, "module": "account", "address": self.wallet_address,
+            "apikey": settings.ETHERSCAN_API_KEY,
+        }
+        if native:
+            params.update({"action": "balance", "tag": "latest"})
+        else:
+            params.update({"action": "tokenbalance", "contractaddress": token_address, "tag": "latest"})
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get("https://api.etherscan.io/v2/api", params=params)
+            res.raise_for_status()
+            data = res.json()
+        if str(data.get("status")) != "1":
+            raise RuntimeError(str(data.get("result"))[:120])
+        return str(data["result"])
 
     async def _gas_review_reason(self, gas_limit: int, gas_price: int) -> str:
         """Return alasan manual review jika estimasi gas ETH L1 melewati batas."""

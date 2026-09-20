@@ -16,11 +16,12 @@ Alur (bypass verifikasi admin -> full otomatis):
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from weakref import WeakValueDictionary
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from config.settings import settings
 from database.connection import SessionLocal
 from database.models import Order, AuditLog, DepositClaim
 from sqlalchemy.exc import IntegrityError
@@ -49,8 +50,15 @@ class DepositDetector:
         """
         db = SessionLocal()
         try:
+            deposit_window_start = datetime.utcnow() - timedelta(
+                minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES)
             pending_orders = db.query(Order).filter(
                 Order.status.in_(["WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"])
+                | (
+                    (Order.status == "expired")
+                    & (Order.order_type == "sell")
+                    & (Order.created_at >= deposit_window_start)
+                )
             ).all()
 
             if not pending_orders:
@@ -97,8 +105,19 @@ class DepositDetector:
         await asyncio.gather(*(_proc(oid) for oid in orders_to_process))
 
     # ---------------- Per order ----------------
+    @staticmethod
+    def deposit_deadline(order) -> datetime:
+        """Batas verifikasi deposit: created_at + jendela (default 24 jam, sesuai info bot ke user)."""
+        base = order.created_at or datetime.utcnow()
+        return base + timedelta(minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES)
+
+    @staticmethod
+    def is_recoverable_expired(order) -> bool:
+        """Order sell yang sudah 'expired' tetap boleh diverifikasi selama depositnya sah."""
+        return order.status == "expired" and order.order_type == "sell"
+
     async def _process_order(self, db, order, bot_app):
-        if order.status not in ("WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"):
+        if order.status not in ("WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED") and not self.is_recoverable_expired(order):
             return
         expected_wallet = order.deposit_wallet or ""
         expected_amount = float(order.crypto_amount or 0)
@@ -126,7 +145,7 @@ class DepositDetector:
                 expected_wallet=expected_wallet,
                 expected_amount=expected_amount,
                 not_before=order.created_at,
-                not_after=order.quote_expires_at or order.expired_at,
+                not_after=self.deposit_deadline(order),
             )
 
         # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi)
@@ -139,7 +158,7 @@ class DepositDetector:
                     min_amount=expected_amount,
                     limit=20,
                     not_before=order.created_at,
-                    not_after=order.quote_expires_at or order.expired_at,
+                    not_after=self.deposit_deadline(order),
                 )
                 # Equal quotes on a shared address cannot be attributed safely.
                 competing = db.query(Order).filter(
@@ -165,7 +184,7 @@ class DepositDetector:
                         expected_wallet=expected_wallet,
                         expected_amount=expected_amount,
                         not_before=order.created_at,
-                        not_after=order.quote_expires_at or order.expired_at,
+                        not_after=self.deposit_deadline(order),
                     )
                     if ver.get("verified"):
                         tx_hash = ver["tx_hash"]
@@ -173,9 +192,10 @@ class DepositDetector:
                         break
 
         if not verified or not verified.get("verified"):
+            reason = (verified or {}).get("reason") or "-"
             logger.info(
-                "Order %s: deposit belum terverifikasi (hash=%s)",
-                order.order_id, tx_hash or "-",
+                "Order %s: deposit belum terverifikasi (hash=%s, alasan=%s)",
+                order.order_id, tx_hash or "-", reason,
             )
             return
 
@@ -195,15 +215,16 @@ class DepositDetector:
 
     # ---------------- Confirm & Payout ----------------
     async def _confirm_order(self, db, order, tx_hash, verified, bot_app):
-        if order.status != "WAITING_CRYPTO_DEPOSIT":
+        claimable = ("WAITING_CRYPTO_DEPOSIT", "expired") if self.is_recoverable_expired(order) else ("WAITING_CRYPTO_DEPOSIT",)
+        if order.status not in claimable:
             return
         # The direct user hash path and the background scanner share these guards.
         if not verified.get("verified") or not verified.get("timestamp") or not order.created_at:
             return
         if verified["timestamp"] < int(tx_verifier._timestamp(order.created_at)):
             return
-        deadline = order.quote_expires_at or order.expired_at
-        if deadline and verified["timestamp"] > tx_verifier._timestamp(deadline):
+        deadline = self.deposit_deadline(order)
+        if verified["timestamp"] > tx_verifier._timestamp(deadline):
             return
         if not tx_verifier._amount_matches(verified.get("amount", 0), order.crypto_amount):
             return
@@ -214,7 +235,7 @@ class DepositDetector:
             db.add(DepositClaim(network=order.network.upper(), tx_hash=tx_hash, order_id=order.order_id))
             db.flush()
             changed = db.query(Order).filter(Order.order_id == order.order_id,
-                Order.status == "WAITING_CRYPTO_DEPOSIT").update({"status": "CRYPTO_CONFIRMED"}, synchronize_session=False)
+                Order.status.in_(claimable)).update({"status": "CRYPTO_CONFIRMED"}, synchronize_session=False)
             if changed != 1:
                 db.rollback()
                 return
