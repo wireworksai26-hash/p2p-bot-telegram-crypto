@@ -248,17 +248,30 @@ class TestBuyFlowStockValidation(unittest.IsolatedAsyncioTestCase):
         Base.metadata.drop_all(bind=engine)
 
     async def test_buy_manual_payout_network_blocked(self):
-        """Selecting a network in MANUAL_PAYOUT_NETWORKS (e.g. SUI / APTOS) must block auto-purchase."""
+        """Emergency brake: jaringan yang didaftarkan manual tetap diblok di alur beli."""
         query = AsyncMock()
         query.data = "buy_net_SUI_SUI"
         update = SimpleNamespace(callback_query=query)
         context = SimpleNamespace(user_data={})
 
-        state = await handle_network_selection(update, context)
+        with patch("bot.handlers.buy.MANUAL_PAYOUT_NETWORKS", {"SUI"}):
+            state = await handle_network_selection(update, context)
         self.assertEqual(state, SELECT_NETWORK)
         query.edit_message_text.assert_called_once()
         text = query.edit_message_text.call_args.kwargs.get("text", "")
         self.assertIn("Pengiriman Otomatis Belum Tersedia", text)
+
+    async def test_buy_sui_and_aptos_allow_auto_payout(self):
+        """SUI dan APTOS sudah auto-payout: pilihan jaringan lanjut ke input nominal."""
+        for callback_data in ("buy_net_SUI_SUI", "buy_net_APT_APTOS"):
+            query = AsyncMock()
+            query.data = callback_data
+            update = SimpleNamespace(callback_query=query)
+            context = SimpleNamespace(user_data={})
+            state = await handle_network_selection(update, context)
+            self.assertEqual(state, INPUT_AMOUNT, callback_data)
+            text = query.edit_message_text.call_args.kwargs.get("text", "")
+            self.assertIn("Berapa nominal Rupiah", text)
 
     async def test_buy_amount_input_warns_if_stock_insufficient(self):
         """Entering an amount that exceeds available stock must reject early at INPUT_AMOUNT."""

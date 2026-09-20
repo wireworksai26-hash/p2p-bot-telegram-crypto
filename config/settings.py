@@ -1,11 +1,14 @@
 import os
 from dotenv import load_dotenv
 
-# Load .env file only if exists without overriding container environment
-if os.path.exists(".env"):
-    load_dotenv(".env", override=False)
-elif os.path.exists("../.env"):
-    load_dotenv("../.env", override=False)
+# Load .env file only if exists without overriding container environment.
+# Test suite menyalakan PYTHON_DOTENV_DISABLED agar key produksi di .env tidak
+# terpakai test (test pernah ikut mem-broadcast payout nyata karena hal ini).
+if os.getenv("PYTHON_DOTENV_DISABLED") != "1":
+    if os.path.exists(".env"):
+        load_dotenv(".env", override=False)
+    elif os.path.exists("../.env"):
+        load_dotenv("../.env", override=False)
 
 class Settings:
     # Telegram settings

@@ -9,7 +9,9 @@ stoknya muncul dengan nominal asli di fitur "Cek Stok".
 import os
 
 STOCK_MAX_AGE_SECONDS = 15 * 60
-MANUAL_PAYOUT_NETWORKS = {"SUI", "APTOS"}
+# Emergency brake: jaringan di sini ditolak di alur beli/convert dan payout-nya
+# manual. SUI dan APTOS sudah auto-payout (sender-nya aktif dan teruji).
+MANUAL_PAYOUT_NETWORKS: set[str] = set()
 
 
 def get_wallet_address(network: str) -> str:

@@ -37,6 +37,7 @@ from services.crypto_sender.ton_sender import TonSender
 from services.crypto_sender.tron_sender import TronSender
 from services.payout_service import send_crypto_with_retry
 from services import wallet_sync
+from bot.handlers import stocks
 from bot.handlers.stocks import build_stock_pages, format_crypto_qty, show_stocks
 from bot.utils import emojis
 from bot.utils.formatter import format_datetime
@@ -265,8 +266,12 @@ class SyncIntegration(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("0.0257 SOL", text)
                 self.assertIn("3.27 APT", text)
                 self.assertIn("Gagal membaca saldo", text)
-                self.assertIn("pengiriman admin", text)
                 self.assertNotIn("(Kosong)", text)
+                # Label "pengiriman admin" hanya untuk jaringan di emergency brake.
+                self.assertNotIn("pengiriman admin", text)
+                with patch.object(stocks, "MANUAL_PAYOUT_NETWORKS", {"APTOS"}):
+                    manual_text = "\n".join(build_stock_pages(rows, {}))
+                self.assertIn("pengiriman admin", manual_text)
             finally:
                 db.close()
         finally:
