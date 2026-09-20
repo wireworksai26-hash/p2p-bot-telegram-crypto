@@ -141,6 +141,26 @@ class TestTonW5Send(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(transfer.info.value.grams, int(0.5 * 10**9))
 
+    async def test_jetton_transfer_target_builds_valid_body(self):
+        """tonsdk butuh objek Address (bukan string) dan BOC dikonversi ke cell pytoniq."""
+        from decimal import Decimal
+
+        jetton_wallet = "0:" + "ab" * 32
+        fake_v3 = AsyncMock(return_value={"jetton_wallets": [{
+            "owner": self.sender.wallet_address,
+            "jetton": "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs",
+            "address": jetton_wallet,
+        }]})
+        with patch("services.tx_verifier._ton_get", new=fake_v3):
+            destination, value, body = await self.sender._jetton_transfer_target(RECIPIENT, Decimal("0.01"))
+
+        self.assertEqual(destination, jetton_wallet)
+        self.assertEqual(value, 50_000_000)
+        body_slice = body.begin_parse()
+        self.assertEqual(body_slice.load_uint(32), 0xF8A7EA5)
+        self.assertEqual(body_slice.load_uint(64), 0)
+        self.assertEqual(body_slice.load_coins(), 10_000)
+
     async def test_rejected_broadcast_is_not_reported_as_success(self):
         self.sender.get_balance = AsyncMock(return_value=10.0)
         self.sender._get_seqno = AsyncMock(return_value=1)

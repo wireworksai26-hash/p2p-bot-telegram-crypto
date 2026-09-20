@@ -515,6 +515,7 @@ class TonSender(BaseCryptoSender):
         """Kembalikan (alamat jetton wallet, nilai GRAM pesan, body transfer jetton)."""
         from pytoniq_core.boc import Cell as PyCell
         from tonsdk.contract.token.ft import JettonWallet
+        from tonsdk.utils import Address as TonAddress
         from services.tx_verifier import _ton_get, ton_address
 
         data = await _ton_get("jetton/wallets", {
@@ -529,12 +530,12 @@ class TonSender(BaseCryptoSender):
             raise RuntimeError("Wallet Jetton USDT belum terverifikasi.")
 
         body = JettonWallet().create_transfer_body(
-            to_address=to_address,
+            to_address=TonAddress(to_address),
             jetton_amount=int(quantity * 10**6),
             forward_amount=10_000_000,
-            response_address=self.wallet_address,
+            response_address=TonAddress(self.wallet_address),
         )
-        return matching[0]["address"], JETTON_MESSAGE_NANO, PyCell.one_from_boc(body.to_boc())
+        return matching[0]["address"], JETTON_MESSAGE_NANO, PyCell.one_from_boc(bytes(body.to_boc()))
 
     async def _broadcast_transfer(self, transfer, to_address, amount, symbol, jetton_wallet=""):
         """Broadcast transfer tonsdk (v4r2) lalu tunggu bukti on-chain."""
@@ -568,6 +569,7 @@ class TonSender(BaseCryptoSender):
 
     async def _send_jetton(self, to_address: str, amount: float) -> SendResult:
         from tonsdk.contract.token.ft import JettonWallet
+        from tonsdk.utils import Address as TonAddress
         from services.tx_verifier import _ton_get, ton_address
         wallet = self._load_wallet()
         data = await _ton_get("jetton/wallets", {
@@ -579,8 +581,8 @@ class TonSender(BaseCryptoSender):
             raise RuntimeError("Wallet Jetton USDT belum terverifikasi.")
         seqno = await self._get_seqno(self.wallet_address)
         body = JettonWallet().create_transfer_body(
-            to_address=to_address, jetton_amount=int(Decimal(str(amount)) * 10**6),
-            forward_amount=10_000_000, response_address=self.wallet_address)
+            to_address=TonAddress(to_address), jetton_amount=int(Decimal(str(amount)) * 10**6),
+            forward_amount=10_000_000, response_address=TonAddress(self.wallet_address))
         transfer = wallet.create_transfer_message(
             to_addr=matching[0]["address"], amount=JETTON_MESSAGE_NANO, seqno=seqno, payload=body)
         return await self._broadcast_transfer(
