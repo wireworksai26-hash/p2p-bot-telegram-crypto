@@ -409,7 +409,10 @@ def get_coin_emoji_id(symbol: str) -> str | None:
 
 
 def coin_button_text(symbol: str) -> str:
-    return symbol if get_coin_emoji_id(symbol) else f"🪙 {symbol}"
+    from bot.utils.formatter import display_symbol
+
+    label = display_symbol(symbol)
+    return label if get_coin_emoji_id(symbol) else f"🪙 {label}"
 
 
 def network_button_text(network: str) -> str:

@@ -23,7 +23,7 @@ COIN_ORDER = [
 COIN_FULL_NAMES = {
     "USDT": "Tether (USDT)", "USDC": "USD Coin (USDC)", "ETH": "Ethereum (ETH)",
     "SOL": "Solana (SOL)", "BNB": "BNB Chain (BNB)", "TRX": "TRON (TRX)",
-    "TON": "Toncoin (TON)", "SUI": "Sui (SUI)", "APT": "Aptos (APT)",
+    "TON": "Gram (GRAM)", "SUI": "Sui (SUI)", "APT": "Aptos (APT)",
     "MATIC": "Polygon (MATIC / POL)", "POL": "Polygon (POL)",
     "ARB": "Arbitrum (ARB)", "AVAX": "Avalanche (AVAX)", "KAIA": "Kaia (KAIA)",
     "BERA": "Berachain (BERA)", "HYPE": "Hyperliquid (HYPE)", "G": "Gravity (G)",
@@ -39,13 +39,16 @@ NETWORK_LABELS = {
 
 
 def format_crypto_qty(balance: float, symbol: str) -> str:
+    from bot.utils.formatter import display_symbol
+
+    ticker = display_symbol(symbol)
     if balance == 0:
-        return f"0 {symbol}"
+        return f"0 {ticker}"
     precision = 6 if symbol in ("USDT", "USDC") else 9
     quantity = f"{balance:,.{precision}f}".rstrip("0").rstrip(".")
     if balance > 0 and quantity == "0":
         quantity = f"{balance:.4g}"
-    return f"{quantity} {symbol}"
+    return f"{quantity} {ticker}"
 
 
 async def fetch_usd_prices(symbols: list[str]) -> dict[str, float]:

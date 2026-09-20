@@ -286,15 +286,15 @@ class CoinAPIMonitor:
             {
                 "id": "NONEVM_TON",
                 "category": "NONEVM_RPC",
-                "name": "The Open Network (TON)",
-                "symbol": "TON / USDT",
+                "name": "The Open Network (TON / GRAM)",
+                "symbol": "GRAM / USDT",
                 "network": "TON",
                 "url": settings.TON_RPC,
                 "env_var": "TON_RPC",
                 "fallback_urls": [
                     "https://toncenter.com/api/v2/jsonRPC",
                 ],
-                "impact": "Transaksi koin TON dan USDT di The Open Network tidak dapat diproses.",
+                "impact": "Transaksi koin GRAM dan USDT di The Open Network tidak dapat diproses.",
             },
             {
                 "id": "NONEVM_SUI",

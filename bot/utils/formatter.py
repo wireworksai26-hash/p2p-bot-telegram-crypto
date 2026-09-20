@@ -22,6 +22,17 @@ def format_idr(amount: int) -> str:
         return f"Rp {amount}"
 
 
+# Token yang sudah rebrand resmi: tampilkan ticker pasar, simbol internal lama tetap dipakai
+# untuk harga, saldo, dan record order.
+DISPLAY_SYMBOLS = {"TON": "GRAM"}
+
+
+def display_symbol(symbol: str) -> str:
+    """Ticker yang ditampilkan ke user (mis. TON -> GRAM setelah rebrand 15 Juni 2026)."""
+    sym = (symbol or "").upper()
+    return DISPLAY_SYMBOLS.get(sym, sym)
+
+
 def format_crypto(amount: float, symbol: str) -> str:
     """
     Format jumlah cryptocurrency dengan presisi yang sesuai.
@@ -29,11 +40,11 @@ def format_crypto(amount: float, symbol: str) -> str:
     """
     try:
         if amount is None:
-            return f"0.0000 {symbol.upper()}"
+            return f"0.0000 {display_symbol(symbol)}"
         
         # Atur presisi berdasarkan jenis koin
         sym = symbol.upper()
-        if sym in ["USDT", "G"]:
+        if sym in ["USDT", "G", "TON"]:
             precision = 4
         elif sym in ["BNB", "SOL", "AVAX", "POLYGON", "MATIC"]:
             precision = 6
@@ -41,7 +52,7 @@ def format_crypto(amount: float, symbol: str) -> str:
             precision = 8
             
         formatted_amount = f"{amount:.{precision}f}"
-        return f"{formatted_amount} {sym}"
+        return f"{formatted_amount} {display_symbol(sym)}"
     except Exception:
         return f"{amount} {symbol}"
 
