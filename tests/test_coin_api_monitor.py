@@ -239,6 +239,35 @@ class TestCoinAPIMonitor(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res["status"], "OK")
             self.assertIn("Checkpoint #59,201,882", res["block_info"])
 
+    async def test_primary_down_reports_degraded_when_fallback_works(self):
+        ep = {
+            "id": "EVM_TEST",
+            "category": "EVM_RPC",
+            "network": "TEST",
+            "name": "Test Chain",
+            "url": "https://primary.invalid",
+            "env_var": "TEST_RPC",
+            "fallback_urls": ["https://fallback.invalid"],
+        }
+        ok_resp = MagicMock(status_code=200)
+        ok_resp.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x10"}
+        calls = []
+
+        async def fake_post(url, **kwargs):
+            calls.append(str(url))
+            if "primary" in str(url):
+                raise httpx.ConnectError("primary down")
+            return ok_resp
+
+        with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)):
+            res = await self.monitor.check_single_endpoint(ep)
+
+        self.assertEqual(res["status"], "DEGRADED")
+        self.assertEqual(res["error_code"], "PRIMARY_DOWN")
+        self.assertIn("fallback.invalid", res["error_detail"])
+        self.assertIn("Block #16", res["block_info"])
+        self.assertEqual(len(calls), 2)
+
     async def test_check_nonevm_aptos_success(self):
         ep = {
             "id": "NONEVM_APTOS",

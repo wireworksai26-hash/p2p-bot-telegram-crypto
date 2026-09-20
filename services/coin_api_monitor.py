@@ -208,6 +208,7 @@ class CoinAPIMonitor:
                 "env_var": "ROBINHOOD_RPC",
                 "fallback_urls": [
                     "https://rpc.mainnet.chain.robinhood.com",
+                    "https://robinhood-rpc.publicnode.com",
                 ],
                 "impact": "Transaksi ETH jaringan Robinhood tidak dapat diproses.",
             },
@@ -326,16 +327,13 @@ class CoinAPIMonitor:
         ]
 
     async def check_single_endpoint(self, ep: Dict[str, Any]) -> Dict[str, Any]:
-        """Melakukan ping & diagnosa kesehatan pada satu endpoint."""
+        """Cek URL utama; bila DOWN, coba fallback sebelum melaporkan DOWN."""
         client = await self._get_client()
         url = ep["url"]
-        category = ep["category"]
-        start_time = time.time()
-
         result = {
             "id": ep["id"],
             "name": ep["name"],
-            "category": category,
+            "category": ep["category"],
             "network": ep.get("network", ""),
             "symbol": ep.get("symbol", ""),
             "url": url,
@@ -354,6 +352,34 @@ class CoinAPIMonitor:
             result["error_code"] = "URL_EMPTY"
             result["error_detail"] = f"Variabel environment {ep['env_var']} kosong."
             return result
+
+        result.update(await self._probe(client, url, ep))
+
+        if result["status"] == "DOWN" and ep.get("fallback_urls"):
+            for fallback in ep["fallback_urls"]:
+                if not fallback or fallback == url:
+                    continue
+                fallback_result = await self._probe(client, fallback, ep)
+                if fallback_result["status"] in ("OK", "DEGRADED"):
+                    result.update(fallback_result)
+                    result["status"] = "DEGRADED"
+                    result["error_code"] = "PRIMARY_DOWN"
+                    result["error_detail"] = f"URL utama tidak terjangkau; fallback aktif: {fallback}"
+                    break
+
+        return result
+
+    async def _probe(self, client, url: str, ep: Dict[str, Any]) -> Dict[str, Any]:
+        """Ping satu URL dan kembalikan status, latensi, serta detail kesalahan."""
+        category = ep["category"]
+        start_time = time.time()
+        result = {
+            "status": "DOWN",
+            "latency_ms": 0,
+            "block_info": "",
+            "error_code": None,
+            "error_detail": "",
+        }
 
         try:
             # 1. Price API Check
@@ -458,7 +484,7 @@ class CoinAPIMonitor:
                         self._parse_http_error(resp.status_code, result)
 
                 elif net == "SUI":
-                    payload = {"jsonrpc": "2.0", "method": "suix_getLatestCheckpointSequenceNumber", "params": [], "id": 1}
+                    payload = {"jsonrpc": "2.0", "method": "sui_getLatestCheckpointSequenceNumber", "params": [], "id": 1}
                     resp = await client.post(url, json=payload)
                     latency = int((time.time() - start_time) * 1000)
                     result["latency_ms"] = latency

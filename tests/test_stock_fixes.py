@@ -45,6 +45,9 @@ from config.assets import STOCK_ASSETS
 
 REAL_ASYNC_CLIENT = httpx.AsyncClient
 
+# Pubkey valid (wrapped SOL mint) hanya untuk derivasi ATA di tes, bukan wallet siapa pun.
+SYSTEM_PUBKEY = "So11111111111111111111111111111111111111112"
+
 
 def mock_http(handler):
     transport = httpx.MockTransport(handler)
@@ -65,26 +68,61 @@ class Readers(unittest.IsolatedAsyncioTestCase):
 
     async def test_sol_http_200_rpc_error_tries_next_endpoint(self):
         sender = SolanaSender()
-        sender.wallet_address = "PublicAddress"
+        sender.wallet_address = SYSTEM_PUBKEY
         sender.rpc_list = ["https://bad.invalid", "https://good.invalid"]
         seen = []
         def handler(request):
             seen.append(request.url.host)
             if request.url.host == "bad.invalid":
                 return httpx.Response(200, json={"error": {"code": -32005}})
-            return httpx.Response(200, json={"result": {"value": []}})
+            if "api.mainnet-beta" in request.url.host:
+                return httpx.Response(200, json={"result": {"value": []}})
+            return httpx.Response(200, json={"result": {"value": None}})
         with mock_http(handler):
             self.assertEqual(await sender.get_balance("USDT"), 0)
-        self.assertEqual(seen, ["bad.invalid", "good.invalid"])
+        self.assertEqual(seen[:2], ["bad.invalid", "good.invalid"])
 
-    async def test_spl_sums_raw_units_when_ui_amount_is_null(self):
+    async def test_spl_reads_ata_amount_without_indexed_query(self):
+        from services.crypto_sender.solana_sender import SPL_TOKENS
+
         sender = SolanaSender()
-        sender.wallet_address = "PublicAddress"
-        accounts = [{"account": {"data": {"parsed": {"info": {"tokenAmount": {
-            "amount": amount, "decimals": 6, "uiAmount": None,
-        }}}}}} for amount in ("1250000", "750000")]
-        with mock_http(lambda req: httpx.Response(200, json={"result": {"value": accounts}})):
-            self.assertEqual(await sender.get_balance("USDC"), 2)
+        sender.wallet_address = SYSTEM_PUBKEY
+        methods = []
+        def handler(request):
+            body = json.loads(request.content)
+            methods.append(body["method"])
+            return httpx.Response(200, json={"result": {"value": {"data": {"parsed": {"info": {
+                "mint": SPL_TOKENS["USDC"],
+                "tokenAmount": {"amount": "1250000", "decimals": 6, "uiAmount": None},
+            }}}}}})
+        with mock_http(handler):
+            self.assertEqual(await sender.get_balance("USDC"), 1.25)
+        self.assertEqual(methods, ["getAccountInfo"])
+
+    async def test_spl_missing_ata_falls_back_to_mint_crosscheck(self):
+        sender = SolanaSender()
+        sender.wallet_address = SYSTEM_PUBKEY
+        def handler(request):
+            body = json.loads(request.content)
+            if body["method"] == "getAccountInfo":
+                return httpx.Response(200, json={"result": {"value": None}})
+            info = {"tokenAmount": {"amount": "2000000", "decimals": 6}}
+            account = {"account": {"data": {"parsed": {"info": info}}}}
+            return httpx.Response(200, json={"result": {"value": [account]}})
+        with mock_http(handler):
+            self.assertEqual(await sender.get_balance("USDT"), 2)
+
+    async def test_spl_wrong_mint_is_error_not_zero(self):
+        sender = SolanaSender()
+        sender.wallet_address = SYSTEM_PUBKEY
+        def handler(request):
+            return httpx.Response(200, json={"result": {"value": {"data": {"parsed": {"info": {
+                "mint": SYSTEM_PUBKEY,
+                "tokenAmount": {"amount": "1000", "decimals": 6},
+            }}}}}})
+        with mock_http(handler):
+            with self.assertRaises(RuntimeError):
+                await sender.get_balance("USDC")
 
     async def test_spl_malformed_response_is_not_zero(self):
         sender = SolanaSender()
@@ -139,6 +177,7 @@ class Readers(unittest.IsolatedAsyncioTestCase):
     async def test_ton_rpc_failure_is_not_zero(self):
         sender = TonSender()
         sender.wallet_address = "public"
+        sender._tonapi_get = AsyncMock(side_effect=RuntimeError("tonapi down"))
         sender._rpc = AsyncMock(return_value=None)
         with self.assertRaises(RuntimeError):
             await sender.get_balance("TON")

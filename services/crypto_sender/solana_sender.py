@@ -106,19 +106,29 @@ class SolanaSender(BaseCryptoSender):
 
     async def _get_spl_token_balance(self, mint_address: str) -> float:
         """
-        Mengambil saldo token SPL milik wallet bot via RPC getTokenAccountsByOwner.
+        Mengambil saldo token SPL milik wallet bot.
+
+        Memakai akun ATA + getAccountInfo (bukan query indexed yang diblok di
+        sebagian RPC gratis). Bila ATA melaporkan 0, diverifikasi silang dengan
+        query mint di endpoint resmi agar tidak ada "0 palsu" yang memblokir stok.
         """
         if not self.wallet_address:
             raise RuntimeError("SOL_WALLET_ADDRESS belum dikonfigurasi.")
+
+        try:
+            from solders.pubkey import Pubkey
+            from spl.token.instructions import get_associated_token_address
+
+            ata = str(get_associated_token_address(
+                Pubkey.from_string(self.wallet_address), Pubkey.from_string(mint_address)))
+        except Exception as exc:
+            raise RuntimeError(f"Gagal menurunkan alamat ATA SPL: {type(exc).__name__}")
+
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "getTokenAccountsByOwner",
-            "params": [
-                self.wallet_address,
-                {"mint": mint_address},
-                {"encoding": "jsonParsed"},
-            ],
+            "method": "getAccountInfo",
+            "params": [ata, {"encoding": "jsonParsed"}],
         }
         last_error = None
         for rpc in self.rpc_list:
@@ -129,19 +139,49 @@ class SolanaSender(BaseCryptoSender):
                     data = res.json()
                     if data.get("error") or "result" not in data:
                         raise RuntimeError(str(data.get("error") or "result kosong"))
-                    total = 0.0
-                    accounts = data["result"]["value"]
-                    if not isinstance(accounts, list):
-                        raise ValueError("Daftar akun SPL tidak valid.")
-                    for item in accounts:
-                        token_amount = item["account"]["data"]["parsed"]["info"]["tokenAmount"]
-                        total += int(token_amount["amount"]) / (10 ** int(token_amount["decimals"]))
-                    return total
+                    value = data["result"]["value"]
+                    if value is None:
+                        cross_check = await self._spl_balance_by_mint(mint_address)
+                        return cross_check
+                    parsed = value["data"]["parsed"]["info"]
+                    if parsed.get("mint") != mint_address:
+                        raise ValueError("Mint akun token tidak sesuai permintaan.")
+                    token_amount = parsed["tokenAmount"]
+                    return float(int(token_amount["amount"]) / (10 ** int(token_amount["decimals"])))
             except Exception as e:
                 last_error = e
                 logger.warning(f"Gagal mengambil saldo SPL token via {rpc}: {e}")
                 continue
         raise RuntimeError(f"Semua RPC Solana gagal membaca saldo SPL: {last_error}")
+
+    async def _spl_balance_by_mint(self, mint_address: str) -> float:
+        """Verifikasi silang saldo token lewat query mint (endpoint resmi, rate-limit ketat)."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTokenAccountsByOwner",
+            "params": [
+                self.wallet_address,
+                {"mint": mint_address},
+                {"encoding": "jsonParsed"},
+            ],
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.post("https://api.mainnet-beta.solana.com", json=payload)
+                res.raise_for_status()
+                data = res.json()
+                if data.get("error") or "result" not in data:
+                    raise RuntimeError(str(data.get("error") or "result kosong"))
+                total = 0.0
+                for item in data["result"]["value"]:
+                    token_amount = item["account"]["data"]["parsed"]["info"]["tokenAmount"]
+                    total += int(token_amount["amount"]) / (10 ** int(token_amount["decimals"]))
+                return total
+        except Exception as exc:
+            logger.warning("Verifikasi silang saldo SPL gagal (%s); saldo ATA dipakai apa adanya.",
+                           type(exc).__name__)
+            return 0.0
 
     async def _rpc(self, method, params):
         async with httpx.AsyncClient(timeout=12) as client:
