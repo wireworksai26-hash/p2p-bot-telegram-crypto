@@ -257,9 +257,8 @@ async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
 async def _verify_evm(network, symbol, tx_hash, wallet):
     sender = CryptoSenderFactory.get_sender(network)
     symbol = "MATIC" if network == "POLYGON" and symbol == "POL" else symbol
-    for attempt in range(len(sender.rpc_list)):
-        # Capture this provider: another task may rotate the cached sender.
-        w3 = sender.w3
+    for rpc_url in sender.rpc_list:
+        w3 = _scan_web3(rpc_url)
         try:
             if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
                 raise ValueError("Chain ID tidak sesuai.")
@@ -296,9 +295,8 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                         continue
                     amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
             return _ok(amount, block["timestamp"], tx_hash)
-        except Exception:
-            if attempt + 1 < len(sender.rpc_list):
-                sender._rotate_rpc()
+        except Exception as exc:
+            logger.warning("Verifikasi RPC %s via %s gagal: %s", network, rpc_url, exc)
     fallback = await _verify_evm_via_explorer(network, symbol, tx_hash, wallet)
     if fallback is not None:
         return fallback
