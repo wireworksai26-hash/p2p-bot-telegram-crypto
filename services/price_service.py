@@ -20,7 +20,7 @@ COINGECKO_IDS = {
     "MATIC": "polygon-ecosystem-token", "POL": "polygon-ecosystem-token",
     "ARB": "arbitrum", "SUI": "sui", "TON": "the-open-network", "KAIA": "kaia",
     "BERA": "berachain-bera", "APT": "aptos", "OP": "optimism", "HYPE": "hyperliquid",
-    "G": "g-token", "BASE": "ethereum", "ETH_ROBINHOOD": "ethereum",
+    "BASE": "ethereum", "ETH_ROBINHOOD": "ethereum", "USDG": "global-dollar",
 }
 
 

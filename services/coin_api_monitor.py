@@ -243,35 +243,6 @@ class CoinAPIMonitor:
                 "impact": "Transaksi koin BERA jaringan Berachain tidak dapat diproses.",
             },
             {
-                "id": "EVM_GRAVITY",
-                "category": "EVM_RPC",
-                "name": "Gravity Network",
-                "symbol": "G",
-                "network": "GRAVITY",
-                "chain_id": 1625,
-                "url": settings.GRAVITY_RPC,
-                "env_var": "GRAVITY_RPC",
-                "fallback_urls": [
-                    "https://rpc.gravity.xyz",
-                ],
-                "impact": "Transaksi koin G jaringan Gravity tidak dapat diproses.",
-            },
-            # 3. Non-EVM Blockchain RPCs
-            {
-                "id": "NONEVM_SOLANA",
-                "category": "NONEVM_RPC",
-                "name": "Solana Mainnet",
-                "symbol": "SOL / USDT",
-                "network": "SOLANA",
-                "url": settings.SOL_RPC,
-                "env_var": "SOL_RPC",
-                "fallback_urls": [
-                    "https://solana-rpc.publicnode.com",
-                    "https://api.mainnet-beta.solana.com",
-                ],
-                "impact": "Transaksi koin SOL, USDT, USDC di Solana tidak dapat diproses.",
-            },
-            {
                 "id": "NONEVM_TRON",
                 "category": "NONEVM_RPC",
                 "name": "TronGrid (TRON)",

@@ -63,7 +63,7 @@ class CryptoSenderFactory:
     def get_sender(cls, network: str) -> BaseCryptoSender:
         """
         Factory method untuk mendapatkan instance sender berdasarkan nama network.
-        Network yang didukung: BSC, ETH, AVAX, POLYGON, BASE, ARB, GRAVITY, SOLANA, TRON, TON, SUI, APTOS.
+        Network yang didukung: BSC, ETH, AVAX, POLYGON, BASE, ARB, ROBINHOOD, KAIA, BERA, HYPEREVM, SOLANA, TRON, TON, SUI, APTOS.
         """
         net_upper = network.upper()
         
@@ -71,7 +71,7 @@ class CryptoSenderFactory:
             return cls._instances[net_upper]
 
         # EVM-based networks
-        evm_networks = ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM", "GRAVITY"]
+        evm_networks = ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]
         
         if net_upper in evm_networks:
             from services.crypto_sender.evm_sender import EVMSender

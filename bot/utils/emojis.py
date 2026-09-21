@@ -73,6 +73,7 @@ DEFAULT_EMOJI_IDS = {
     # universal coin until an admin selects a visually verified custom logo.
     "COIN_USDT": "5309929258443874898",
     "COIN_USDC": "5309929258443874898",
+    "COIN_USDG": "5309929258443874898",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -125,7 +126,7 @@ DEFAULT_EMOJI_ALTS = {
     "COIN_BERA": "🐻",
     "COIN_APT":  "⚫",
     "COIN_HYPE": "🟢",
-    "COIN_G":    "🪙",
+    "COIN_USDG": "💲",
     "COIN_BASE": "🔵",
 
     # Networks
@@ -145,8 +146,7 @@ DEFAULT_EMOJI_ALTS = {
     "NET_BERA":       "🐻",
     "NET_APTOS":      "⚫",
     "NET_HYPEREVM":   "🟢",
-    "NET_GRAVITY":    "🪙",
-}
+    }
 
 # Retire historical unverified IDs even when an old saved config contains them.
 LEGACY_ASSET_IDS = {

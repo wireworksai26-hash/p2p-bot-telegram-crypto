@@ -2,7 +2,7 @@
 services/crypto_sender/evm_sender.py — Sender untuk Rantai EVM.
 ============================================================
 Mengintegrasikan pengiriman token native & ERC20 (USDT) di BSC, ETH, AVAX,
-POLYGON, BASE, ARB, dan GRAVITY menggunakan Web3.py.
+POLYGON, BASE, ARB, ROBINHOOD, KAIA, BERA, dan HYPEREVM menggunakan Web3.py.
 """
 
 import logging
@@ -49,7 +49,7 @@ def _get_network_send_lock(network: str) -> asyncio.Lock:
 
 
 class EVMSender(BaseCryptoSender):
-    GAS_REVIEW_LIMIT_IDR = 15000
+    GAS_REVIEW_LIMIT_IDR = 250000
     # Konfigurasi tiap chain EVM beserta daftar RPC Fallback
     EVM_CHAINS = {
         "ETH": {
@@ -163,7 +163,7 @@ class EVMSender(BaseCryptoSender):
             "chain_id": 4663,
             "explorer": "https://robinhoodchain.blockscout.com",
             "native_symbol": "ETH",
-            "tokens": {}
+            "tokens": {"USDG": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"}
         },
         "KAIA": {
             "rpc_list": [
@@ -196,16 +196,6 @@ class EVMSender(BaseCryptoSender):
             "chain_id": 999,
             "explorer": "https://hyperevm.cloud",
             "native_symbol": "HYPE",
-            "tokens": {}
-        },
-        "GRAVITY": {
-            "rpc_list": [
-                settings.GRAVITY_RPC,
-                "https://rpc.gravity.xyz",
-            ],
-            "chain_id": 1625,
-            "explorer": "https://gravityscan.com",
-            "native_symbol": "G",
             "tokens": {}
         }
     }

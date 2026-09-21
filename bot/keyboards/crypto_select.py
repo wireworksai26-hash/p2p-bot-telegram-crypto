@@ -28,6 +28,7 @@ BUY_NETWORKS_BY_SYMBOL = {
     "BERA": ["BERA"],
     "APT": ["APTOS"],
     "HYPE": ["HYPEREVM"],
+    "USDG": ["ROBINHOOD"],
 }
 
 

@@ -1,0 +1,11 @@
+.env
+.env.*
+.testdeps
+.testdeps.off
+.venv
+__pycache__
+*.pyc
+*.db
+*.sqlite3
+.git
+railway-env-raw.txt

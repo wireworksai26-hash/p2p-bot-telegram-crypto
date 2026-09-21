@@ -155,6 +155,6 @@ def get_fee_category(symbol: str) -> str:
     USDT dan USDC -> 'USD', selainnya -> 'ALTCOIN'.
     """
     sym_upper = symbol.upper()
-    if sym_upper in ["USDT", "USDC"]:
+    if sym_upper in ["USDT", "USDC", "USDG"]:
         return "USD"
     return "ALTCOIN"

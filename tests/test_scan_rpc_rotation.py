@@ -11,7 +11,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -25,6 +25,7 @@ os.environ.update({
     "ADMIN_CHAT_IDS": "123456",
     "EVM_WALLET_ADDRESS": "0x" + "1" * 40,
     "EVM_PRIVATE_KEY": "0x" + "1" * 64,
+    "ETHERSCAN_API_KEY": "TESTKEY",
 })
 
 from services import tx_verifier
@@ -105,6 +106,50 @@ class TestScanRpcRotation(unittest.TestCase):
 
         w3 = tx_verifier._scan_web3("https://rpc.invalid")
         self.assertIn(ExtraDataToPOAMiddleware, w3.middleware_onion)
+
+
+class TestExplorerIncomingScan(unittest.TestCase):
+    def setUp(self):
+        tx_verifier._incoming_cache.clear()
+
+    def _sender(self, tokens=None):
+        return SimpleNamespace(
+            rpc_list=["https://rpc.invalid"],
+            config={"chain_id": 56, "native_symbol": "BNB",
+                    "tokens": tokens if tokens is not None else {
+                        "USDT": "0x55d398326f99059ff775485246999027b3197955"}},
+        )
+
+    def test_ambil_hash_dari_riwayat_alamat(self):
+        wallet = "0x" + "a" * 40
+        rows = [
+            {"to": wallet, "timeStamp": "1790000000", "hash": "0x" + "b" * 64},
+            {"to": "0x" + "c" * 40, "timeStamp": "1790000000", "hash": "0x" + "d" * 64},
+            {"to": wallet, "timeStamp": "100", "hash": "0x" + "e" * 64},
+        ]
+        with patch.object(tx_verifier.settings, "ETHERSCAN_API_KEY", "TESTKEY"), \
+                patch.object(tx_verifier.CryptoSenderFactory, "get_sender", return_value=self._sender()), \
+                patch.object(tx_verifier, "_json", new=AsyncMock(return_value={"status": "1", "result": rows})):
+            hasil = asyncio.run(tx_verifier._explorer_incoming_hashes("BSC", "USDT", wallet, 1789999000))
+
+        self.assertEqual(hasil, ["0x" + "b" * 64])
+
+    def test_riwayat_kosong_tidak_error(self):
+        wallet = "0x" + "a" * 40
+        with patch.object(tx_verifier.settings, "ETHERSCAN_API_KEY", "TESTKEY"), \
+                patch.object(tx_verifier.CryptoSenderFactory, "get_sender", return_value=self._sender()), \
+                patch.object(tx_verifier, "_json", new=AsyncMock(return_value={"status": "0", "result": "No transactions found"})):
+            hasil = asyncio.run(tx_verifier._explorer_incoming_hashes("BSC", "USDT", wallet, 0))
+
+        self.assertEqual(hasil, [])
+
+    def test_tanpa_api_key_tidak_memanggil_explorer(self):
+        wallet = "0x" + "a" * 40
+        with patch.object(tx_verifier.settings, "ETHERSCAN_API_KEY", ""), \
+                patch.object(tx_verifier, "_json", new=AsyncMock(side_effect=AssertionError("tidak boleh dipanggil"))):
+            hasil = asyncio.run(tx_verifier._explorer_incoming_hashes("BSC", "USDT", wallet, 0))
+
+        self.assertEqual(hasil, [])
 
 
 if __name__ == "__main__":

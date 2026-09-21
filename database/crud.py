@@ -413,14 +413,14 @@ def update_wallet_balance(
         if not symbol:
             symbol_map = {
                 "BSC": "USDT", "ETH": "USDT", "AVAX": "USDT", "POLYGON": "USDT",
-                "BASE": "USDT", "ARB": "USDT", "GRAVITY": "USDT",
+                "BASE": "USDT", "ARB": "USDT", "ROBINHOOD": "USDG",
                 "SOLANA": "SOL", "TRON": "TRX",
             }
             symbol_upper = symbol_map.get(network_upper, "USDT").upper()
 
         if not address:
             from config.settings import settings
-            if network_upper in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "GRAVITY",
+            if network_upper in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB",
                                  "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]:
                 address = settings.EVM_WALLET_ADDRESS
             elif network_upper == "SOLANA":
@@ -489,7 +489,7 @@ def mark_wallet_balance_error(
     if not address:
         from config.settings import settings
         if network_upper in {
-            "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "GRAVITY",
+            "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB",
             "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM",
         }:
             address = settings.EVM_WALLET_ADDRESS
@@ -708,7 +708,7 @@ def get_low_balance_wallets(db: Session) -> list[WalletBalance]:
             "SUI": 1.0,
             "APT": 0.2,
             "HYPE": 0.1,
-            "G": 10.0,
+            "USDG": 5.0,
             "ARB": 5.0,
         }
         

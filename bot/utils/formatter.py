@@ -44,7 +44,7 @@ def format_crypto(amount: float, symbol: str) -> str:
         
         # Atur presisi berdasarkan jenis koin
         sym = symbol.upper()
-        if sym in ["USDT", "G", "TON"]:
+        if sym in ["USDT", "USDG", "TON"]:
             precision = 4
         elif sym in ["BNB", "SOL", "AVAX", "POLYGON", "MATIC"]:
             precision = 6

@@ -287,7 +287,7 @@ def _seed_price_configs(db):
     symbols = {
         "USDT": 0.0, "ETH": 0.0, "BNB": 0.0, "SOL": 0.0,
         "AVAX": 0.0, "TRX": 0.0, "MATIC": 0.0, "LTC": 0.0,
-        "G": 0.0,
+        "USDG": 0.0,
         "BASE": 0.0, "ARB": 0.0,
     }
     configs = [

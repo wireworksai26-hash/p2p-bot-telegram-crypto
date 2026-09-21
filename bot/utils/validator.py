@@ -14,7 +14,7 @@ def validate_wallet_address(address: str, network: str) -> bool:
     Validasi alamat wallet berdasarkan network.
     
     Networks:
-      - BSC, ETH, AVAX, POLYGON, BASE, ARB, GRAVITY (EVM)
+      - BSC, ETH, AVAX, POLYGON, BASE, ARB, ROBINHOOD (EVM)
       - SOLANA
       - TRON
     """
@@ -26,7 +26,7 @@ def validate_wallet_address(address: str, network: str) -> bool:
 
     # --- 1. EVM Chains ---
     evm_chains = [
-        "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "GRAVITY",
+        "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB",
         "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM", "ERC20", "BEP20",
     ]
     if net in evm_chains:

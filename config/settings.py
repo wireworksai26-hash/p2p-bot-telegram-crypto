@@ -43,8 +43,7 @@ class Settings:
     KAIA_RPC = (os.getenv("KAIA_RPC", "https://public-en.node.kaia.io") or "").strip()
     BERA_RPC = (os.getenv("BERA_RPC", "https://berachain.drpc.org") or "").strip()
     HYPEREVM_RPC = (os.getenv("HYPEREVM_RPC", "https://rpc.hyperliquid.xyz/evm") or "").strip()
-    GRAVITY_RPC = (os.getenv("GRAVITY_RPC", "https://rpc.gravity.xyz") or "").strip()
-
+    
     # Non-EVM RPCs & Wallets
     SOL_RPC = (os.getenv("SOL_RPC", "https://api.mainnet-beta.solana.com") or "").strip()
     SOL_PRIVATE_KEY = (os.getenv("SOL_PRIVATE_KEY") or "").strip()

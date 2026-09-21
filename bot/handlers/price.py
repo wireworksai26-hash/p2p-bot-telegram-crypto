@@ -41,7 +41,7 @@ CURATED_PRICE_ASSETS = [
     ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
     ("TRX", "TRON", "🔴", "TRX (TRON)"),
     ("MATIC", "POLYGON", "🟪", "MATIC (POLYGON)"),
-    ("G", "GRAVITY", "🌌", "G (GRAVITY)"),
+    ("USDG", "ROBINHOOD", "🏹", "USDG (ROBINHOOD)"),
     ("BASE", "EVM", "🔵", "BASE (EVM)"),
     ("ARB", "ARB", "🔷", "ARB (ARB)"),
 ]

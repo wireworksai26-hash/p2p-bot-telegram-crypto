@@ -18,7 +18,7 @@ from bot.utils.emojis import get_coin_emoji, get_network_emoji
 logger = logging.getLogger(__name__)
 COIN_ORDER = [
     "USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "TON", "SUI", "APT",
-    "MATIC", "POL", "ARB", "AVAX", "KAIA", "BERA", "HYPE", "G",
+    "MATIC", "POL", "ARB", "AVAX", "KAIA", "BERA", "HYPE", "USDG",
 ]
 COIN_FULL_NAMES = {
     "USDT": "Tether (USDT)", "USDC": "USD Coin (USDC)", "ETH": "Ethereum (ETH)",
@@ -26,7 +26,7 @@ COIN_FULL_NAMES = {
     "TON": "Gram (GRAM)", "SUI": "Sui (SUI)", "APT": "Aptos (APT)",
     "MATIC": "Polygon (MATIC / POL)", "POL": "Polygon (POL)",
     "ARB": "Arbitrum (ARB)", "AVAX": "Avalanche (AVAX)", "KAIA": "Kaia (KAIA)",
-    "BERA": "Berachain (BERA)", "HYPE": "Hyperliquid (HYPE)", "G": "Gravity (G)",
+    "BERA": "Berachain (BERA)", "HYPE": "Hyperliquid (HYPE)", "USDG": "Global Dollar (USDG)",
 }
 NETWORK_LABELS = {
     "BSC": "BNB Smart Chain (BEP20)", "BASE": "Base Mainnet", "ARB": "Arbitrum One",
@@ -34,7 +34,7 @@ NETWORK_LABELS = {
     "TRON": "TRON (TRC20)", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
     "ROBINHOOD": "Robinhood", "SUI": "Sui Mainnet", "APTOS": "Aptos Mainnet",
     "AVAX": "Avalanche C-Chain", "KAIA": "Kaia Network", "BERA": "Berachain",
-    "HYPEREVM": "HyperEVM", "GRAVITY": "Gravity Alpha",
+    "HYPEREVM": "HyperEVM",
 }
 
 

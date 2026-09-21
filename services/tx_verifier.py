@@ -4,6 +4,7 @@ import base64
 import binascii
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlparse, unquote
@@ -17,7 +18,7 @@ from services.crypto_sender import CryptoSenderFactory
 
 logger = logging.getLogger(__name__)
 EVM_NETWORKS = {"BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM",
-                "ROBINHOOD", "KAIA", "BERA", "HYPEREVM", "GRAVITY"}
+                "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"}
 TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 SOLANA_RPCS = list(dict.fromkeys([settings.SOL_RPC, "https://solana-rpc.publicnode.com",
                                  "https://api.mainnet-beta.solana.com"]))
@@ -184,7 +185,7 @@ EXPLORER_TOKEN_DECIMALS = {
     ("ETH", "USDT"): 6, ("ETH", "USDC"): 6,
     ("POLYGON", "USDT"): 6, ("POLYGON", "USDC"): 6,
     ("BASE", "USDC"): 6, ("ARB", "USDT"): 6, ("ARB", "USDC"): 6,
-    ("OPTIMISM", "USDC"): 6, ("AVAX", "USDT"): 6,
+    ("OPTIMISM", "USDC"): 6, ("AVAX", "USDT"): 6, ("ROBINHOOD", "USDG"): 6,
 }
 
 
@@ -610,19 +611,84 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                 yield w3.to_hex(log["transactionHash"])
 
 
+_incoming_cache: dict = {}
+_INCOMING_CACHE_TTL = 300.0
+
+
+async def _explorer_incoming_hashes(network, symbol, wallet, since):
+    """Riwayat transfer masuk via Etherscan V2 (tokentx/txlist).
+
+    Deposit yang lebih tua dari jendela blok RPC publik tidak bisa dipindai
+    dengan eth_getLogs; riwayat alamat explorer tetap menyimpannya.
+    """
+    chain_id = EXPLORER_CHAIN_IDS.get(network)
+    if not chain_id or not settings.ETHERSCAN_API_KEY:
+        return []
+    sender = CryptoSenderFactory.get_sender(network)
+    token = sender.config["tokens"].get(symbol)
+    if symbol == sender.config["native_symbol"] or (network == "POLYGON" and symbol == "POL"):
+        action, extra = "txlist", {}
+    elif token:
+        action, extra = "tokentx", {"contractaddress": token}
+    else:
+        return []
+
+    key = (network, symbol, wallet.lower())
+    now = time.time()
+    cached = _incoming_cache.get(key)
+    if cached and now - cached[0] < _INCOMING_CACHE_TTL:
+        rows = cached[1]
+    else:
+        data = await _json("GET", EXPLORER_V2_API, params={
+            "chainid": chain_id, "module": "account", "action": action,
+            "address": wallet, "sort": "desc", "page": "1", "offset": "100",
+            "apikey": settings.ETHERSCAN_API_KEY, **extra})
+        rows = data.get("result") if str(data.get("status")) == "1" else []
+        if not isinstance(rows, list):
+            rows = []
+        _incoming_cache[key] = (now, rows)
+
+    hashes = []
+    for row in rows:
+        try:
+            if str(row.get("to", "")).lower() != wallet.lower():
+                continue
+            if int(row.get("timeStamp", 0)) < since:
+                continue
+        except Exception:
+            continue
+        if row.get("hash"):
+            hashes.append(row["hash"])
+    return hashes
+
+
 async def get_recent_incoming(network, symbol, wallet, min_amount=0.0, limit=20,
                               not_before=None, not_after=None):
-    results, seen = [], set()
+    net, sym = network.upper(), symbol.upper()
+    hashes = []
     try:
-        async for tx_hash in _scan_hashes(network.upper(), symbol.upper(), wallet, limit, not_before):
-            if not tx_hash or tx_hash in seen:
-                continue
-            seen.add(tx_hash)
-            result = await verify_deposit(network, symbol, tx_hash, wallet, min_amount, not_before, not_after)
-            if result["verified"] and automatic_amount_matches(result["amount"], min_amount):
-                results.append(result)
-            if len(results) >= limit:
-                break
+        async for tx_hash in _scan_hashes(net, sym, wallet, limit, not_before):
+            hashes.append(tx_hash)
     except Exception as exc:
         logger.warning("Scan %s/%s gagal (%s): %s", network, symbol, type(exc).__name__, exc)
+
+    if net in EVM_NETWORKS:
+        try:
+            since = _timestamp(not_before) if not_before is not None else 0
+            hashes += await _explorer_incoming_hashes(net, sym, wallet, max(0, since - 120))
+        except Exception as exc:
+            logger.warning("Scan explorer %s/%s gagal (%s): %s",
+                           network, symbol, type(exc).__name__, exc)
+
+    results, seen = [], set()
+    for tx_hash in hashes:
+        if not tx_hash or tx_hash in seen:
+            continue
+        seen.add(tx_hash)
+        result = await verify_deposit(network, symbol, tx_hash, wallet, min_amount,
+                                      not_before, not_after)
+        if result["verified"] and automatic_amount_matches(result["amount"], min_amount):
+            results.append(result)
+        if len(results) >= limit:
+            break
     return results

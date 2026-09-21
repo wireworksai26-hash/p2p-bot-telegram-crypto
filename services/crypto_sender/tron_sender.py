@@ -195,12 +195,12 @@ class TronSender(BaseCryptoSender):
                             error_message="MANUAL_REVIEW: Harga TRX tidak tersedia untuk estimasi gas.",
                         )
                     gas_idr = trx_cost * float(price["buy_price_idr"])
-                    if gas_idr > 2000:
+                    if gas_idr > 10000:
                         return SendResult(
                             success=False,
                             error_message=(
                                 "MANUAL_REVIEW: Estimasi biaya energi TRON "
-                                f"{gas_idr:,.0f} IDR melebihi batas 2.000 IDR."
+                                f"{gas_idr:,.0f} IDR melebihi batas 10.000 IDR."
                             ),
                         )
                 except Exception as gas_err:

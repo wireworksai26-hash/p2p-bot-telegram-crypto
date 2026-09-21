@@ -53,9 +53,11 @@ class TestRpcListsPhase0(unittest.TestCase):
             robinhood.index("https://rpc.mainnet.chain.robinhood.com"),
         )
 
-    def test_token_usdt_avax_gravity_dihapus(self):
+    def test_token_usdt_avax_dihapus_dan_gravity_tidak_ada(self):
         self.assertEqual(EVMSender.EVM_CHAINS["AVAX"]["tokens"], {})
-        self.assertEqual(EVMSender.EVM_CHAINS["GRAVITY"]["tokens"], {})
+        self.assertNotIn("GRAVITY", EVMSender.EVM_CHAINS)
+        self.assertEqual(EVMSender.EVM_CHAINS["ROBINHOOD"]["tokens"]["USDG"],
+                         "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168")
 
 
 class TestSolanaRpcRotation(unittest.TestCase):

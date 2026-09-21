@@ -50,7 +50,7 @@ STOCK_ASSETS = [
     ("KAIA", "KAIA"),
     ("BERA", "BERA"),
     ("HYPE", "HYPEREVM"),
-    ("G", "GRAVITY"),
+    ("USDG", "ROBINHOOD"),
     # --- Non-EVM: native + token ---
     ("SOL", "SOLANA"),
     ("USDT", "SOLANA"),

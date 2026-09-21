@@ -62,7 +62,7 @@ def get_hot_wallet_address(network: str) -> str:
         logger.warning(f"Gagal mengambil wallet address untuk {network}: {e}")
         
     net = network.upper()
-    if net in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "GRAVITY", "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]:
+    if net in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]:
         return settings.EVM_WALLET_ADDRESS or "0x0000000000000000000000000000000000000000"
     elif net == "SOLANA":
         return settings.SOL_WALLET_ADDRESS or "SolanaWalletAddressPlaceholder"
