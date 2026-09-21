@@ -257,7 +257,7 @@ async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
 async def _verify_evm(network, symbol, tx_hash, wallet):
     sender = CryptoSenderFactory.get_sender(network)
     symbol = "MATIC" if network == "POLYGON" and symbol == "POL" else symbol
-    for rpc_url in sender.rpc_list:
+    for rpc_url in _ordered_rpcs(network, sender.rpc_list):
         w3 = _scan_web3(rpc_url)
         try:
             if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
@@ -294,6 +294,7 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                     if "0x" + _hex(topics[1])[-40:] == wallet.lower():
                         continue
                     amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
+            _scan_rpc_cache[network] = rpc_url
             return _ok(amount, block["timestamp"], tx_hash)
         except Exception as exc:
             logger.warning("Verifikasi RPC %s via %s gagal: %s", network, rpc_url, exc)
@@ -594,11 +595,12 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                                                  "0x" + wallet.lower()[2:].zfill(64)]}
             logs = None
             last_error = None
-            for rpc in sender.rpc_list:
+            for rpc in _ordered_rpcs(network, sender.rpc_list):
                 try:
                     scan_w3 = _scan_web3(rpc)
                     query["address"] = scan_w3.to_checksum_address(token)
                     logs = await asyncio.to_thread(scan_w3.eth.get_logs, query)
+                    _scan_rpc_cache[network] = rpc
                     break
                 except Exception as exc:
                     last_error = exc
@@ -611,6 +613,17 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
 
 _incoming_cache: dict = {}
 _INCOMING_CACHE_TTL = 300.0
+_scan_rpc_cache: dict = {}
+
+
+def _ordered_rpcs(network, rpc_list):
+    """RPC yang terakhir berhasil dicoba lebih dulu (hindari spam RPC yang menolak)."""
+    rpcs = list(rpc_list)
+    cached = _scan_rpc_cache.get(network)
+    if cached in rpcs:
+        rpcs.remove(cached)
+        rpcs.insert(0, cached)
+    return rpcs
 
 
 async def _explorer_incoming_hashes(network, symbol, wallet, since):

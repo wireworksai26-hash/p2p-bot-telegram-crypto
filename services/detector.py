@@ -51,12 +51,12 @@ class DepositDetector:
         db = SessionLocal()
         try:
             deposit_window_start = datetime.utcnow() - timedelta(
-                minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES)
+                minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES + 60)
             pending_orders = db.query(Order).filter(
                 Order.status.in_(["WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"])
                 | (
                     (Order.status == "expired")
-                    & (Order.order_type == "sell")
+                    & (Order.order_type.in_(["sell", "swap"]))
                     & (Order.created_at >= deposit_window_start)
                 )
             ).all()

@@ -101,6 +101,16 @@ class TestScanRpcRotation(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self._collect("BSC", "USDT", "0x" + "a" * 40)
 
+    def test_rpc_yang_berhasil_dicoba_dulu(self):
+        tx_verifier._scan_rpc_cache.clear()
+        rpcs = ["https://a.invalid", "https://b.invalid", "https://c.invalid"]
+        self.assertEqual(tx_verifier._ordered_rpcs("BSC", rpcs), rpcs)
+
+        tx_verifier._scan_rpc_cache["BSC"] = "https://c.invalid"
+        urutan = tx_verifier._ordered_rpcs("BSC", rpcs)
+        self.assertEqual(urutan[0], "https://c.invalid")
+        self.assertEqual(len(urutan), 3)
+
     def test_scan_web3_pakai_middleware_poa(self):
         from web3.middleware import ExtraDataToPOAMiddleware
 
