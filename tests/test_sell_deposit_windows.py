@@ -79,11 +79,31 @@ class TestSellDepositWindow(unittest.TestCase):
         deadline = self.detector.deposit_deadline(order)
         self.assertGreater(deadline, datetime.utcnow() + timedelta(hours=20))
 
-    def test_expired_sell_order_is_recoverable_not_swap(self):
+    def test_expired_sell_and_swap_orders_are_recoverable(self):
         sell = self._order(status="expired", age_minutes=20)
         swap = self._order(status="expired", age_minutes=20, order_type="swap")
         self.assertTrue(self.detector.is_recoverable_expired(sell))
-        self.assertFalse(self.detector.is_recoverable_expired(swap))
+        self.assertTrue(self.detector.is_recoverable_expired(swap))
+
+    def test_late_deposit_confirms_expired_swap_order(self):
+        order = self._order(status="expired", age_minutes=20, order_type="swap")
+        order.target_crypto_symbol = "USDC"
+        order.target_network = "POLYGON"
+        order.target_crypto_amount = Decimal("1.0")
+        self.db.commit()
+        verified = {
+            "verified": True,
+            "amount": Decimal("1.2"),
+            "timestamp": int(tx_verifier._timestamp(order.created_at)) + 20 * 60,
+            "tx_hash": "0x" + "c" * 64,
+        }
+        with patch("services.detector.notify_admins", new=AsyncMock()), \
+             patch("services.detector.safe_send_message", new=AsyncMock()), \
+             patch.object(self.detector, "_execute_payout", new=AsyncMock()):
+            asyncio.run(self.detector._confirm_order(
+                self.db, order, verified["tx_hash"], verified, None))
+        self.db.refresh(order)
+        self.assertEqual(order.status, "CRYPTO_CONFIRMED")
 
     def test_late_deposit_confirms_expired_sell_order(self):
         order = self._order(status="expired", age_minutes=20)

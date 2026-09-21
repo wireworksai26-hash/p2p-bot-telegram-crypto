@@ -27,6 +27,25 @@ _ton_lock = asyncio.Lock()
 _ton_last_request = 0.0
 
 
+def _scan_web3(rpc_url: str):
+    """Web3 khusus scan deposit: endpoint bisa dipilih + middleware PoA (BSC/AVAX dll).
+
+    Tanpa middleware PoA, web3 menolak blok BSC dengan ExtraDataLengthError.
+    """
+    from web3 import Web3
+    try:
+        from web3.middleware import ExtraDataToPOAMiddleware as poa_middleware
+    except ImportError:
+        from web3.middleware import geth_poa_middleware as poa_middleware
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 12}))
+    try:
+        if poa_middleware not in w3.middleware_onion:
+            w3.middleware_onion.inject(poa_middleware, layer=0)
+    except Exception:
+        pass
+    return w3
+
+
 def normalize_tx_hash(network, value):
     value = (value or "").strip()
     if "://" in value:
@@ -553,7 +572,7 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                 yield tx["hash"]
     elif network in EVM_NETWORKS:
         sender = CryptoSenderFactory.get_sender(network)
-        w3 = sender.w3
+        w3 = _scan_web3(sender.rpc_list[0])
         if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
             raise ValueError("Chain ID tidak sesuai.")
         latest = await asyncio.to_thread(lambda: w3.eth.block_number)
@@ -571,9 +590,22 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
             token = sender.config["tokens"].get(symbol)
             if not token:
                 return
-            logs = await asyncio.to_thread(w3.eth.get_logs, {"fromBlock": max(0, latest - 2000),
-                "toBlock": "latest", "address": w3.to_checksum_address(token),
-                "topics": ["0x" + TRANSFER_TOPIC, None, "0x" + wallet.lower()[2:].zfill(64)]})
+            query = {"fromBlock": max(0, latest - 2000), "toBlock": "latest",
+                     "address": None, "topics": ["0x" + TRANSFER_TOPIC, None,
+                                                 "0x" + wallet.lower()[2:].zfill(64)]}
+            logs = None
+            last_error = None
+            for rpc in sender.rpc_list:
+                try:
+                    scan_w3 = _scan_web3(rpc)
+                    query["address"] = scan_w3.to_checksum_address(token)
+                    logs = await asyncio.to_thread(scan_w3.eth.get_logs, query)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning("Scan %s/%s getLogs gagal via %s: %s", network, symbol, rpc, exc)
+            if logs is None:
+                raise RuntimeError(f"getLogs gagal di semua RPC {network}: {last_error}")
             for log in reversed(logs):
                 yield w3.to_hex(log["transactionHash"])
 
@@ -592,5 +624,5 @@ async def get_recent_incoming(network, symbol, wallet, min_amount=0.0, limit=20,
             if len(results) >= limit:
                 break
     except Exception as exc:
-        logger.warning("Scan %s/%s gagal (%s)", network, symbol, type(exc).__name__)
+        logger.warning("Scan %s/%s gagal (%s): %s", network, symbol, type(exc).__name__, exc)
     return results

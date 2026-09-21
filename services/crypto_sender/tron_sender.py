@@ -247,7 +247,7 @@ class TronSender(BaseCryptoSender):
             # Cek hasil broadcast
             if result.get("txid") != tx_hash:
                 raise RuntimeError("TXID broadcast tidak cocok.")
-            receipt = await asyncio.to_thread(result.wait, timeout=45, solid=True)
+            receipt = await asyncio.to_thread(result.wait, timeout=150, solid=True)
             if receipt.get("id") != tx_hash or not receipt.get("blockNumber"):
                 raise RuntimeError("Receipt TRON belum solid.")
             if receipt.get("result") == "FAILED" or receipt.get("receipt", {}).get("result") not in (None, "SUCCESS"):

@@ -113,8 +113,8 @@ class DepositDetector:
 
     @staticmethod
     def is_recoverable_expired(order) -> bool:
-        """Order sell yang sudah 'expired' tetap boleh diverifikasi selama depositnya sah."""
-        return order.status == "expired" and order.order_type == "sell"
+        """Order sell/swap yang sudah 'expired' tetap boleh diverifikasi selama depositnya sah."""
+        return order.status == "expired" and order.order_type in ("sell", "swap")
 
     async def _process_order(self, db, order, bot_app):
         if order.status not in ("WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED") and not self.is_recoverable_expired(order):
