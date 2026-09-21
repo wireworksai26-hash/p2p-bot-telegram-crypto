@@ -382,7 +382,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         try:
             token_address = CryptoSenderFactory.get_sender(network).config.get("tokens", {}).get(symbol.upper())
             if token_address:
-                token_hint = f"Token: <b>{symbol}</b> — kontrak <code>{token_address}</code>\n"
+                token_hint = f"Token: <b>{symbol}</b>, kontrak <code>{token_address}</code>\n"
         except Exception:
             token_hint = ""
 

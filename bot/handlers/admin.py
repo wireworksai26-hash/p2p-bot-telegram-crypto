@@ -532,7 +532,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             for key, cid in sorted(CUSTOM_EMOJI_IDS.items()):
                 alt = CUSTOM_EMOJI_ALTS.get(key, "✨")
                 preview = tg_emoji(key, alt)
-                lines.append(f"• <b>{key}:</b> {preview} — ID: <code>{cid}</code>")
+                lines.append(f"• <b>{key}:</b> {preview} (ID: <code>{cid}</code>)")
             lines.append("\n💡 <i>Gunakan <code>/setemoji [KEY] [EMOJI]</code> atau <code>/syncpack [PACK]</code> untuk mengubah.</i>")
             
             buttons = [
@@ -690,7 +690,7 @@ async def listemojis_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for key, cid in sorted(CUSTOM_EMOJI_IDS.items()):
         alt = CUSTOM_EMOJI_ALTS.get(key, "✨")
         preview = tg_emoji(key, alt)
-        lines.append(f"• <b>{key}:</b> {preview} — ID: <code>{cid}</code>")
+        lines.append(f"• <b>{key}:</b> {preview} (ID: <code>{cid}</code>)")
 
     lines.append("\n💡 <i>Gunakan <code>/setemoji [KEY] [EMOJI]</code> atau <code>/syncpack [PACK]</code> untuk mengubah.</i>")
     lines.append("🔄 <i>Gunakan <code>/resetemojis</code> untuk mereset ke default bawaan.</i>")
@@ -1104,7 +1104,7 @@ async def verifysell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"✅ <b>Deposit terverifikasi</b>\n\n"
                     f"Order: <code>{order_id}</code>\n"
                     f"Nominal: {verified.get('amount')} {order.crypto_symbol} ({order.network})\n"
-                    f"Status sekarang: <b>CRYPTO_CONFIRMED</b> — silakan klik tombol "
+                    f"Status sekarang: <b>CRYPTO_CONFIRMED</b>. Silakan klik tombol "
                     f"<b>Sudah Ditransfer</b> untuk menyelesaikan order."
                 ),
                 parse_mode="HTML",

@@ -845,7 +845,7 @@ async def _job_send_monthly_report():
                         period, report.order_count, format_idr(report.fee_idr))
 
             msg = (
-                f"📊 <b>LAPORAN KEUANGAN — {now.strftime('%B %Y')}</b>\n\n"
+                f"📊 <b>LAPORAN KEUANGAN: {now.strftime('%B %Y')}</b>\n\n"
                 f"✅ <b>Order Berhasil:</b> {report.order_count} "
                 f"(Beli {report.order_buy} · Jual {report.order_sell} · Swap {report.order_swap})\n"
                 f"💰 <b>Volume IDR:</b> {format_idr(report.volume_idr)}\n"

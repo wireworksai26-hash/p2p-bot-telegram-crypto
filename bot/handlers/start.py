@@ -57,7 +57,7 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
     return (
         f"{E_WAVE()} <b>Selamat {greeting}, {user_name}!</b>\n"
         f"{E_CALENDAR()} <i>{time_str}</i>\n\n"
-        f"Selamat Datang di <b>HSN STORE BOT</b> — P2P Crypto Trading Automation.\n\n"
+        f"Selamat Datang di <b>HSN STORE BOT</b>, P2P Crypto Trading Automation.\n\n"
         f"{E_CHART()} <b>STATISTIK AKUN</b>\n"
         f"├── {E_MONEY()} <b>Saldo Aktif</b>   : <b>{format_idr(user_bal)}</b>\n"
         f"└── {E_CART()} <b>Total Order</b>   : <b>{user_orders} Transaksi</b>\n\n"

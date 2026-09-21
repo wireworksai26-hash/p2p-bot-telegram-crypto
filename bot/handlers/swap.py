@@ -688,7 +688,7 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
                 f"(waktu mengikuti konfirmasi jaringan). Setelah terverifikasi, koin tujuan "
                 f"<b>{order.target_crypto_symbol} ({order.target_network})</b> "
-                f"akan langsung dikirim ke walletmu — <b>tanpa konfirmasi admin</b>.",
+                f"akan langsung dikirim ke walletmu, <b>tanpa konfirmasi admin</b>.",
                 parse_mode="HTML",
                 reply_markup=menu_keyboard
             )
