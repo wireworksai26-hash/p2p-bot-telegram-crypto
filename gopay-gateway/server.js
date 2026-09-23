@@ -115,25 +115,40 @@ function generateDynamicQRIS(staticTemplate, amount) {
     if (!staticTemplate) return null;
     let payload = staticTemplate.trim();
 
+    // Validasi CRC template: QR dengan TLV/CRC rusak ditolak e-wallet saat scan
+    const crcLama = payload.slice(-4);
+    const crcBaru = calculateCRC16(payload.slice(0, -4));
+    if (crcBaru !== crcLama) {
+        logActivity('WARNING', `QRIS_STATIC ditolak: CRC tidak cocok (terlampir ${crcLama}, seharusnya ${crcBaru})`);
+        return null;
+    }
+
     // Hapus Tag 63 (CRC) lama jika ada di akhir
     const idx63 = payload.indexOf('6304');
     if (idx63 !== -1) {
         payload = payload.substring(0, idx63);
     }
 
-    // Parse EMVCo TLV Tags
+    // Parse EMVCo TLV Tags (ketat: tidak boleh nyasar ke tengah nilai)
     const tags = [];
     let i = 0;
     try {
-        while (i < payload.length) {
+        while (i + 4 <= payload.length) {
             const tag = payload.substring(i, i + 2);
-            const length = parseInt(payload.substring(i + 2, i + 4), 10);
-            if (isNaN(length)) break;
+            const lenStr = payload.substring(i + 2, i + 4);
+            if (!/^\d{2}$/.test(lenStr)) {
+                throw new Error(`panjang tag ${tag} tidak valid di posisi ${i}`);
+            }
+            const length = parseInt(lenStr, 10);
             const val = payload.substring(i + 4, i + 4 + length);
+            if (val.length < length) {
+                throw new Error(`nilai tag ${tag} terpotong di posisi ${i}`);
+            }
             tags.push({ tag, val });
             i += 4 + length;
         }
     } catch (e) {
+        logActivity('WARNING', `QRIS_STATIC ditolak: ${e.message}`);
         return null;
     }
 
@@ -242,6 +257,12 @@ app.all('/create-qris', apiKeyAuth, (req, res) => {
     }
 
     const dynamicCode = generateDynamicQRIS(staticTemplate, amount);
+    if (!dynamicCode) {
+        return res.status(500).json({
+            success: false,
+            message: 'QRIS_STATIC tidak valid (TLV/CRC rusak); QR tidak diterbitkan.'
+        });
+    }
     const qrisId = Math.random().toString(36).substring(2, 10);
     // TRX-ID unik per payment — dipakai sebagai scope klaim agar tidak tabrakan dengan payment lain
     const trxId = 'TRX-' + Math.random().toString(36).substring(2, 10).toUpperCase();
