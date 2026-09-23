@@ -111,6 +111,22 @@ class DepositDetector:
         base = order.created_at or datetime.utcnow()
         return base + timedelta(minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES)
 
+    async def verifikasi_cepat(self, order_id, bot_app=None, attempts=12, interval=5):
+        """Ulangi verifikasi deposit tiap 5 detik (maks ~1 menit) supaya user cepat
+        dapat kabar. Notifikasi sukses tetap dikirim oleh _confirm_order."""
+        for _ in range(attempts):
+            await asyncio.sleep(interval)
+            db = SessionLocal()
+            try:
+                order = db.query(Order).filter(Order.order_id == order_id).first()
+                if not order or order.status != "WAITING_CRYPTO_DEPOSIT":
+                    return
+                await self._process_order(db, order, bot_app)
+            except Exception as exc:
+                logger.warning("Verifikasi cepat %s gagal: %s", order_id, exc)
+            finally:
+                db.close()
+
     @staticmethod
     def is_recoverable_expired(order) -> bool:
         """Order sell/swap yang sudah 'expired' tetap boleh diverifikasi selama depositnya sah."""

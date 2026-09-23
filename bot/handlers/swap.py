@@ -15,6 +15,7 @@ Alur Transaksi Convert/Swap (FULL OTOMATIS — tanpa verifikasi admin):
 9. Admin hanya menerima notifikasi informatif (tanpa tombol approve/reject).
 """
 
+import asyncio
 import logging
 import re
 from decimal import Decimal, ROUND_DOWN
@@ -679,19 +680,41 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 db, order, deposit_proof, verified_result, context.application
             )
         else:
-            # Belum terlihat di chain -> detector akan memverifikasi ulang otomatis
+            alasan = (verified_result or {}).get("reason") or ""
+            tertunda = (
+                deposit_proof.startswith("PHOTO:")
+                or not alasan
+                or alasan.startswith("Menunggu konfirmasi")
+                or "belum dapat diverifikasi" in alasan
+            )
+            if not tertunda:
+                await update.message.reply_text(
+                    f"❌ <b>Deposit Belum Bisa Diverifikasi</b>\n\n"
+                    f"ID Order: <code>{order.order_id}</code>\n"
+                    f"TX Hash: <code>{deposit_proof}</code>\n\n"
+                    f"Alasan: <b>{alasan}</b>\n\n"
+                    f"Silakan periksa kembali transaksimu (nominal tepat "
+                    f"<code>{float(order.crypto_amount):g} {order.crypto_symbol}</code>, alamat tujuan "
+                    f"<code>{order.deposit_wallet}</code>, jaringan {order.network}) lalu kirim bukti "
+                    f"yang benar, atau tekan Batal Order.",
+                    parse_mode="HTML",
+                    reply_markup=menu_keyboard
+                )
+                return ConversationHandler.END
+            # Belum terlihat di chain -> verifikasi cepat berulang sampai ~1 menit
             await _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, context)
             await update.message.reply_text(
                 f"📥 <b>Bukti Setoran Diterima!</b>\n\n"
                 f"ID Order: <code>{order.order_id}</code>\n"
                 f"TX Hash: <code>{deposit_proof}</code>\n\n"
                 f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
-                f"(waktu mengikuti konfirmasi jaringan). Setelah terverifikasi, koin tujuan "
-                f"<b>{order.target_crypto_symbol} ({order.target_network})</b> "
-                f"akan langsung dikirim ke walletmu, <b>tanpa konfirmasi admin</b>.",
+                f"(<b>biasanya di bawah 1 menit</b>). Kamu akan otomatis dapat kabar berikutnya: "
+                f"TERVERIFIKASI lalu koin tujuan <b>{order.target_crypto_symbol} ({order.target_network})</b> "
+                f"langsung dikirim ke walletmu, <b>tanpa konfirmasi admin</b>.",
                 parse_mode="HTML",
                 reply_markup=menu_keyboard
             )
+            asyncio.create_task(deposit_detector.verifikasi_cepat(order.order_id, context.application))
     except Exception as e:
         db.rollback()
         logger.error(f"Error handling deposit proof for swap: {e}", exc_info=True)

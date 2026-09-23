@@ -531,13 +531,42 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
             order.deposit_tx_hash = tx_hash
             db.commit()
 
-        # Picu scan verifikasi deposit langsung agar user tidak perlu menunggu jadwal scheduler berikutnya
+        # Verifikasi langsung + loop cepat agar user dapat kabar di bawah 1 menit
         try:
             import asyncio
+            from services import tx_verifier
             from services.detector import deposit_detector
-            asyncio.create_task(deposit_detector.scan_incoming_deposits(bot_app=context.application))
+            hasil = await tx_verifier.verify_deposit(
+                network=order.network,
+                symbol=order.crypto_symbol,
+                tx_hash=tx_hash,
+                expected_wallet=order.deposit_wallet,
+                expected_amount=float(order.crypto_amount),
+                not_before=order.created_at,
+                not_after=deposit_detector.deposit_deadline(order),
+            )
+            alasan = (hasil or {}).get("reason") or ""
+            tertunda = (not alasan or alasan.startswith("Menunggu konfirmasi")
+                        or "belum dapat diverifikasi" in alasan)
+            if not tertunda:
+                await update.message.reply_text(
+                    f"\u274c <b>Deposit Belum Bisa Diverifikasi</b>\n\n"
+                    f"Order ID: <code>{order_id}</code>\n"
+                    f"TX Hash: <code>{tx_hash}</code>\n\n"
+                    f"Alasan: <b>{alasan}</b>\n\n"
+                    f"Silakan periksa kembali transaksimu lalu kirim hash yang benar, "
+                    f"atau hubungi admin.",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Menu Utama", callback_data="menu_back",
+                         icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                        [get_owner_button()]
+                    ])
+                )
+                return ConversationHandler.END
+            asyncio.create_task(deposit_detector.verifikasi_cepat(order_id, context.application))
         except Exception as scan_err:
-            logger.debug(f"Gagal trigger scan deposit instan: {scan_err}")
+            logger.debug(f"Gagal trigger verifikasi deposit instan: {scan_err}")
 
         # Beritahu admin update TX Hash dengan action buttons
         admin_tx_alert = (
@@ -563,9 +592,9 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"✅ <b>TX Hash Diterima!</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
             f"TX Hash: <code>{tx_hash}</code>\n\n"
-            f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain. "
-            f"Setelah terverifikasi, admin akan segera mentransfer Rupiah "
-            f"ke rekening Anda dan kamu akan menerima notifikasi. 🙏"
+            f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
+            f"(<b>biasanya di bawah 1 menit</b>). Setelah terverifikasi, admin akan "
+            f"segera mentransfer Rupiah ke rekening Anda dan kamu akan menerima notifikasi. 🙏"
         )
         
         keyboard = [

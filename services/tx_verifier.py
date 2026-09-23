@@ -285,6 +285,7 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                 from services.crypto_sender.evm_sender import ERC20_ABI
                 contract = w3.eth.contract(address=w3.to_checksum_address(token), abi=ERC20_ABI)
                 decimals = await asyncio.to_thread(contract.functions.decimals().call)
+                self_send = False
                 for log in receipt.get("logs", []):
                     topics = log.get("topics", [])
                     if (log.get("address") or "").lower() != token.lower() or len(topics) != 3:
@@ -292,8 +293,13 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                     if _hex(topics[0]) != TRANSFER_TOPIC or "0x" + _hex(topics[2])[-40:] != wallet.lower():
                         continue
                     if "0x" + _hex(topics[1])[-40:] == wallet.lower():
+                        self_send = True
                         continue
                     amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
+                if amount == 0:
+                    if self_send:
+                        return _fail("Transfer ke diri sendiri bukan deposit.")
+                    return _fail("Tidak ada transfer token masuk ke wallet deposit pada transaksi ini.")
             _scan_rpc_cache[network] = rpc_url
             return _ok(amount, block["timestamp"], tx_hash)
         except Exception as exc:
@@ -512,7 +518,9 @@ async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amo
             if not_after is not None and stamp > (_timestamp(not_after) + 120):
                 return _fail("Transaksi melewati batas waktu order.")
             if not _amount_matches(result["amount"], expected_amount):
-                return _fail("Nominal deposit kurang/tidak sesuai.")
+                return _fail(
+                    f"Nominal deposit kurang: diterima {result['amount']} {symbol}, "
+                    f"dibutuhkan {Decimal(str(expected_amount))} {symbol}.")
         return result
     except Exception as exc:
         logger.warning("Verifikasi %s/%s gagal (%s)", net, symbol, type(exc).__name__)
