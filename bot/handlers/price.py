@@ -32,18 +32,24 @@ from bot.utils.emojis import (
 
 logger = logging.getLogger(__name__)
 
-# Daftar 10 koin terkurasi yang wajib ditampilkan saat Cek Harga
+# Seluruh simbol yang diperjualbelikan (menu Beli/Jual) ditampilkan saat Cek Harga.
 CURATED_PRICE_ASSETS = [
-    ("USDT", "TON", "💵", "USDT (TON)"),
+    ("USDT", "BSC", "💵", "USDT (BSC)"),
+    ("USDC", "BSC", "💲", "USDC (BSC)"),
     ("ETH", "ETH", "🔷", "ETH (ETH)"),
-    ("BNB", "BSC", "🟡", "BNB (BSC)"),
     ("SOL", "SOLANA", "🟣", "SOL (SOLANA)"),
-    ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
-    ("TRX", "TRON", "🔴", "TRX (TRON)"),
-    ("MATIC", "POLYGON", "🟪", "MATIC (POLYGON)"),
-    ("USDG", "ROBINHOOD", "🏹", "USDG (ROBINHOOD)"),
-    ("BASE", "EVM", "🔵", "BASE (EVM)"),
+    ("TRX", "TRON", "🔺", "TRX (TRON)"),
+    ("BNB", "BSC", "🟡", "BNB (BSC)"),
+    ("SUI", "SUI", "💧", "SUI (SUI)"),
+    ("TON", "TON", "💎", "TON (TON)"),
+    ("POL", "POLYGON", "🟪", "POL (POLYGON)"),
     ("ARB", "ARB", "🔷", "ARB (ARB)"),
+    ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
+    ("KAIA", "KAIA", "🌱", "KAIA (KAIA)"),
+    ("BERA", "BERA", "🐻", "BERA (BERA)"),
+    ("APT", "APTOS", "⚫", "APT (APTOS)"),
+    ("HYPE", "HYPEREVM", "🟢", "HYPE (HYPEREVM)"),
+    ("USDG", "ROBINHOOD", "🏹", "USDG (ROBINHOOD)"),
 ]
 
 

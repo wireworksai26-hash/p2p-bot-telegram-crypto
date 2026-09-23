@@ -241,7 +241,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Fetch harga buy terkini dari price service
         price_data = await price_service.get_price(symbol, db)
         if not price_data:
-            raise ValueError(f"Harga {symbol} tidak ditemukan")
+            raise ValueError(f"Harga {symbol} belum tersedia, coba lagi sebentar")
             
         # Hitung fee dinamis (termasuk tambahan fee gas Rp 2.000 untuk ETH/TRX jika berlaku)
         fee_category = get_fee_category(symbol)

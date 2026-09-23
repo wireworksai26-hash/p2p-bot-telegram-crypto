@@ -187,7 +187,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Fetch harga jual terkini (0% spread)
         price_data = await price_service.get_price(symbol, db)
         if not price_data:
-            raise ValueError("Gagal mengambil harga jual")
+            raise ValueError(f"Harga {symbol} belum tersedia, coba lagi sebentar")
             
         sell_price_idr = price_data["sell_price_idr"]
         

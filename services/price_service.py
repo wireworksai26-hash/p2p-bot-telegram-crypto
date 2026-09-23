@@ -13,7 +13,8 @@ from database import crud
 logger = logging.getLogger(__name__)
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
 CACHE_TTL_SECONDS = 30
-MAX_PRICE_AGE_SECONDS = 180
+MAX_PRICE_AGE_SECONDS = 600
+MAX_CLOCK_SKEW_SECONDS = 60
 COINGECKO_IDS = {
     "USDT": "tether", "USDC": "usd-coin", "ETH": "ethereum", "BNB": "binancecoin",
     "SOL": "solana", "AVAX": "avalanche-2", "TRX": "tron",
@@ -58,26 +59,44 @@ class PriceService:
             except Exception as exc:
                 logger.warning("CoinGecko tidak tersedia (%s)", type(exc).__name__)
 
-    def _valid(self, coin_id):
-        row = self._cache.get(coin_id) or {}
+    def _invalid_reason(self, coin_id):
+        """Alasan baris harga CoinGecko tidak layak dipakai; '' bila layak."""
+        row = self._cache.get(coin_id)
+        if not row:
+            return f"tidak ada data {coin_id} di cache"
+        now = time.time()
+        age_fetch = now - float(self._cache.get("_fetched_at") or 0)
+        if age_fetch > MAX_PRICE_AGE_SECONDS:
+            return f"harga gagal diperbarui {age_fetch:.0f} detik (CoinGecko tidak tersedia?)"
         try:
-            age = time.time() - float(row["last_updated_at"])
-            if not 0 <= age <= MAX_PRICE_AGE_SECONDS:
-                return None
-            if any(not math.isfinite(float(row[k])) or float(row[k]) <= 0 for k in ("idr", "usd")):
-                return None
-            return row
+            age = now - float(row["last_updated_at"])
         except (KeyError, TypeError, ValueError):
-            return None
+            return f"data {coin_id} tidak lengkap"
+        if age > MAX_PRICE_AGE_SECONDS:
+            return f"data CoinGecko {coin_id} berumur {age:.0f} detik"
+        if age < -MAX_CLOCK_SKEW_SECONDS:
+            return f"timestamp {coin_id} {-age:.0f} detik di masa depan"
+        try:
+            if any(not math.isfinite(float(row[k])) or float(row[k]) <= 0 for k in ("idr", "usd")):
+                return f"nilai harga {coin_id} tidak valid"
+        except (KeyError, TypeError, ValueError):
+            return f"data {coin_id} tidak lengkap"
+        return ""
+
+    def _valid(self, coin_id):
+        return None if self._invalid_reason(coin_id) else self._cache.get(coin_id)
 
     async def get_price(self, symbol, db=None):
         symbol = symbol.upper()
         coin_id = COINGECKO_IDS.get(symbol)
         if not coin_id:
+            logger.warning("Harga %s tidak tersedia: simbol belum punya id CoinGecko", symbol)
             return None
         await self._refresh()
         row, tether = self._valid(coin_id), self._valid("tether")
         if row is None or tether is None:
+            alasan = self._invalid_reason(coin_id) or self._invalid_reason("tether")
+            logger.warning("Harga %s tidak tersedia: %s", symbol, alasan or "-")
             return None
         own_session = db is None
         if own_session:
@@ -89,6 +108,7 @@ class PriceService:
                 config = crud.get_price_config(db, "MATIC")
             spread = float(config.spread_pct) if config else settings.DEFAULT_SPREAD_PCT
             if not math.isfinite(spread) or not 0 <= spread < 100:
+                logger.warning("Harga %s ditolak: spread_pct %r tidak valid", symbol, spread)
                 return None
             market = float(row["idr"])
             return {
