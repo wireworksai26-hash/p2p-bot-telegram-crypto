@@ -79,7 +79,8 @@ NETWORKS_BY_SYMBOL = {
     "KAIA": ["KAIA"],
     "BERA": ["BERA"],
     "APT": ["APTOS"],
-    "HYPE": ["HYPEREVM"]
+    "HYPE": ["HYPEREVM"],
+    "USDG": ["ROBINHOOD"],
 }
 
 
