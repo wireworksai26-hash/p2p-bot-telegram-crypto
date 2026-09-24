@@ -345,17 +345,13 @@ class Presentation(unittest.TestCase):
         self.assertNotEqual(format_crypto_qty(0.000000001, "SOL"), "0 SOL")
         self.assertEqual(format_crypto_qty(0, "SOL"), "0 SOL")
 
-    def test_aset_punya_emoji_sendiri_bukan_generik(self):
-        harapan = {"ETH": "🔷", "SOL": "🟣", "TRX": "🔻", "BNB": "🟡",
-                  "SUI": "💧", "TON": "💎", "POL": "🟪", "ARB": "🔹",
-                  "AVAX": "🔺", "KAIA": "🌱", "BERA": "🐻", "APT": "⚫",
-                  "HYPE": "🚀"}
-        for symbol, emoji in harapan.items():
-            self.assertEqual(emojis.get_coin_emoji(symbol), emoji, symbol)
-            self.assertNotEqual(emojis.get_coin_emoji(symbol), "🪙", symbol)
-            self.assertIn(emoji, emojis.coin_button_text(symbol), symbol)
-        for symbol in ("USDT", "USDC", "USDG"):
+    def test_aset_punya_logo_asli_bukan_koin_generik(self):
+        simbol = ("USDT", "USDC", "USDG", "ETH", "SOL", "TRX", "BNB", "SUI", "TON",
+                  "POL", "ARB", "AVAX", "KAIA", "BERA", "APT", "HYPE")
+        for symbol in simbol:
+            self.assertTrue(emojis.get_coin_emoji_id(symbol), f"{symbol} belum punya logo asli")
             self.assertIn("emoji-id=", emojis.get_coin_emoji(symbol), symbol)
+            self.assertNotIn("🪙", emojis.coin_button_text(symbol), symbol)
 
     def test_saved_legacy_emoji_migration_preserves_new_custom_choices(self):
         initial_ids, initial_alts = dict(emojis.CUSTOM_EMOJI_IDS), dict(emojis.CUSTOM_EMOJI_ALTS)
@@ -366,7 +362,7 @@ class Presentation(unittest.TestCase):
                 path.write_text(json.dumps(payload), encoding="utf8")
                 with patch.object(emojis, "CUSTOM_EMOJIS_FILE", str(path)):
                     emojis.load_custom_emojis()
-                self.assertIsNone(emojis.get_coin_emoji_id("ETH"))
+                self.assertNotEqual(emojis.get_coin_emoji_id("ETH"), "5309958691854754293")
                 self.assertEqual(emojis.get_coin_emoji_id("APT"), "1234567890123456789")
         finally:
             emojis.CUSTOM_EMOJI_IDS.clear()
