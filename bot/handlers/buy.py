@@ -708,7 +708,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"Metode: GOPAY_QRIS\n"
                 f"Wallet: <code>{buyer_wallet}</code>"
             )
-            await notify_admins(context.bot, admin_alert)
+            await notify_admins(context.bot, admin_alert, kind="beli")
 
             return ConversationHandler.END
 
@@ -884,7 +884,7 @@ async def finalize_gopay_buy_payment(
                 f"Error: {result['error_message']}\n\n"
                 f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual."
             )
-            await notify_admins(bot or bot_app, admin_msg)
+            await notify_admins(bot or bot_app, admin_msg, kind="error", butuh_tindakan=True)
 
             user_msg = (
                 f"⏳ <b>Pembayaran Diterima</b>\n\n"
@@ -1034,6 +1034,9 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
             ]
         ])
         if photo_file_id:
+            from bot.utils.telegram_utils import kirim_ke_topik
+            await kirim_ke_topik(context.bot, kind="beli", photo=photo_file_id,
+                                 text=admin_caption)
             for admin_id in settings.ADMIN_CHAT_IDS:
                 try:
                     await context.bot.send_photo(

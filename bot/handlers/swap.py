@@ -755,6 +755,9 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
                     reply_markup=admin_keyboard
                 )
             except Exception:
+                from bot.utils.telegram_utils import kirim_ke_topik
+                await kirim_ke_topik(context.bot, kind="convert", photo=photo_file_id,
+                                     text=admin_msg, reply_markup=admin_keyboard)
                 for admin_id in settings.ADMIN_CHAT_IDS:
                     try:
                         await context.bot.send_photo(
@@ -767,7 +770,7 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
                     except Exception:
                         pass
         else:
-            await notify_admins(context.bot, admin_msg, reply_markup=admin_keyboard)
+            await notify_admins(context.bot, admin_msg, reply_markup=admin_keyboard, kind="convert")
     except Exception as admin_err:
         logger.error(f"Error sending admin notification for swap proof: {admin_err}")
 

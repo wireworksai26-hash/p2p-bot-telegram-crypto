@@ -71,9 +71,22 @@ DEFAULT_EMOJI_IDS = {
 
     # Dollar emoji verified through Telegram metadata. Other assets use a
     # universal coin until an admin selects a visually verified custom logo.
-    "COIN_USDT": "5309929258443874898",
-    "COIN_USDC": "5309929258443874898",
-    "COIN_USDG": "5309929258443874898",
+    "COIN_USDT": "6172744164795490758",
+    "COIN_USDC": "6174895543978828561",
+    "COIN_USDG": "6172618403858096803",
+    "COIN_ETH": "6172549821820314286",
+    "COIN_SOL": "6174884922524704972",
+    "COIN_TRX": "6172417708626290057",
+    "COIN_BNB": "6172316600801174873",
+    "COIN_SUI": "6174843961421603180",
+    "COIN_TON": "6174948771508526787",
+    "COIN_POL": "6172552763872912767",
+    "COIN_ARB": "6172562114016715816",
+    "COIN_AVAX": "6174516186697441505",
+    "COIN_KAIA": "6172594807307772438",
+    "COIN_BERA": "6172202268771755427",
+    "COIN_APT": "6172708915998892901",
+    "COIN_HYPE": "6174885532410060780",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -110,22 +123,22 @@ DEFAULT_EMOJI_ALTS = {
     "PARTY": "🎉",
 
     # Coins
-    "COIN_USDT": "💵",
-    "COIN_USDC": "💲",
+    "COIN_USDT": "🟢",
+    "COIN_USDC": "🔵",
     "COIN_ETH":  "🔷",
     "COIN_SOL":  "🟣",
-    "COIN_TRX":  "🔺",
+    "COIN_TRX":  "🔻",
     "COIN_BNB":  "🟡",
     "COIN_SUI":  "💧",
     "COIN_TON":  "💎",
     "COIN_POL":  "🟪",
     "COIN_MATIC": "🟪",
-    "COIN_ARB":  "🔷",
-    "COIN_AVAX": "🔴",
+    "COIN_ARB":  "🔹",
+    "COIN_AVAX": "🔺",
     "COIN_KAIA": "🌱",
     "COIN_BERA": "🐻",
     "COIN_APT":  "⚫",
-    "COIN_HYPE": "🟢",
+    "COIN_HYPE": "🚀",
     "COIN_USDG": "💲",
     "COIN_BASE": "🔵",
 
@@ -156,9 +169,6 @@ LEGACY_ASSET_IDS = {
     "5379815450160943570", "5312016608254762256", "5203966320692969547",
     "5341683880103527632", "5978561005351865286",
 }
-for _key in DEFAULT_EMOJI_ALTS:
-    if _key.startswith(("COIN_", "NET_")):
-        DEFAULT_EMOJI_ALTS[_key] = "💵" if _key in ("COIN_USDT", "COIN_USDC") else "🪙"
 
 # In-memory working copies
 CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
@@ -374,16 +384,16 @@ E_COIN_USDT = lambda: tg_emoji("COIN_USDT", "🟢")
 E_COIN_USDC = lambda: tg_emoji("COIN_USDC", "🔵")
 E_COIN_ETH  = lambda: tg_emoji("COIN_ETH", "🔷")
 E_COIN_SOL  = lambda: tg_emoji("COIN_SOL", "🟣")
-E_COIN_TRX  = lambda: tg_emoji("COIN_TRX", "❤️")
+E_COIN_TRX  = lambda: tg_emoji("COIN_TRX", "🔻")
 E_COIN_BNB  = lambda: tg_emoji("COIN_BNB", "🟡")
 E_COIN_SUI  = lambda: tg_emoji("COIN_SUI", "💧")
 E_COIN_TON  = lambda: tg_emoji("COIN_TON", "💎")
 E_COIN_POL  = lambda: tg_emoji("COIN_POL", "🟪")
-E_COIN_ARB  = lambda: tg_emoji("COIN_ARB", "💎")
-E_COIN_AVAX = lambda: tg_emoji("COIN_AVAX", "🔴")
+E_COIN_ARB  = lambda: tg_emoji("COIN_ARB", "🔹")
+E_COIN_AVAX = lambda: tg_emoji("COIN_AVAX", "🔺")
 E_COIN_KAIA = lambda: tg_emoji("COIN_KAIA", "🌱")
 E_COIN_BERA = lambda: tg_emoji("COIN_BERA", "🐻")
-E_COIN_APT  = lambda: tg_emoji("COIN_APT", "⚡")
+E_COIN_APT  = lambda: tg_emoji("COIN_APT", "⚫")
 E_COIN_HYPE = lambda: tg_emoji("COIN_HYPE", "🚀")
 
 
@@ -412,11 +422,11 @@ def coin_button_text(symbol: str) -> str:
     from bot.utils.formatter import display_symbol
 
     label = display_symbol(symbol)
-    return label if get_coin_emoji_id(symbol) else f"🪙 {label}"
+    return label if get_coin_emoji_id(symbol) else f"{get_coin_emoji(symbol)} {label}"
 
 
 def network_button_text(network: str) -> str:
-    return network if get_network_emoji_id(network) else f"🪙 {network}"
+    return network if get_network_emoji_id(network) else f"{get_network_emoji(network)} {network}"
 
 
 def get_network_emoji_id(network: str) -> str | None:

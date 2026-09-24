@@ -585,7 +585,7 @@ class CoinAPIMonitor:
                 alert_text = self.format_alarm_message(res)
                 logger.error("ALARM DETEKSI DINI: Endpoint %s DOWN (%s)", res["name"], res["error_detail"])
                 try:
-                    await notify_admins(bot_sender, alert_text)
+                    await notify_admins(bot_sender, alert_text, kind="alarm", butuh_tindakan=True)
                 except Exception as exc:
                     logger.warning("Gagal mengirim alarm ke admin: %s", exc)
 
@@ -593,7 +593,7 @@ class CoinAPIMonitor:
                 recovery_text = self.format_recovery_message(res)
                 logger.info("RECOVERED: Endpoint %s kembali normal", res["name"])
                 try:
-                    await notify_admins(bot_sender, recovery_text)
+                    await notify_admins(bot_sender, recovery_text, kind="alarm")
                 except Exception as exc:
                     logger.warning("Gagal mengirim notif recovery ke admin: %s", exc)
 

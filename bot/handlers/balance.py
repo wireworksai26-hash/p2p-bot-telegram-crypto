@@ -362,6 +362,9 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
             ]
         ])
         if photo_file_id:
+            from bot.utils.telegram_utils import kirim_ke_topik
+            await kirim_ke_topik(context.bot, kind="topup", photo=photo_file_id,
+                                 text=admin_caption)
             for admin_id in settings.ADMIN_CHAT_IDS:
                 try:
                     await context.bot.send_photo(

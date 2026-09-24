@@ -455,7 +455,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
             ]
         ])
-        await notify_admins(context.bot, admin_alert, reply_markup=admin_keyboard)
+        await notify_admins(context.bot, admin_alert, reply_markup=admin_keyboard, kind="jual")
                 
     except Exception as e:
         logger.error(f"Error saat konfirmasi order sell: {e}", exc_info=True)
@@ -586,7 +586,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
             ]
         ])
-        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard, order_type="sell")
+        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard, order_type="sell", kind="jual")
 
         response_user = (
             f"✅ <b>TX Hash Diterima!</b>\n\n"
@@ -676,7 +676,7 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except Exception:
                 logger.warning("Gagal forward bukti sell ke tujuan admin.")
         if not delivered:
-            await notify_admins(context.bot, f"Bukti foto tersimpan untuk order {order.order_id}; penerusan foto gagal.", order_type="sell")
+            await notify_admins(context.bot, f"Bukti foto tersimpan untuk order {order.order_id}; penerusan foto gagal.", order_type="sell", kind="jual")
 
         keyboard = [
             [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],

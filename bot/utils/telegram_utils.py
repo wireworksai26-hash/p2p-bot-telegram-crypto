@@ -98,19 +98,84 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", 
         return False
 
 
-def admin_notification_targets(order_type=None):
-    from config.settings import settings
-    if order_type == "sell" and settings.SELL_ADMIN_CHAT_ID:
-        return [settings.SELL_ADMIN_CHAT_ID]
-    return list(dict.fromkeys(settings.ADMIN_CHAT_IDS))
+KIND_ALIAS = {"buy": "beli", "sell": "jual", "swap": "convert", "convert": "convert",
+              "ops": "ops", "error": "error", "alarm": "alarm", "topup": "topup"}
+KIND_RESMI = ("beli", "jual", "convert", "error", "alarm", "topup", "ops")
 
 
-async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None, order_type=None) -> None:
-    """Kirim pesan ke semua admin (ADMIN_CHAT_IDS) dengan aman."""
+def normalisasi_kind(kind):
+    kind = (kind or "ops").lower()
+    kind = KIND_ALIAS.get(kind, kind)
+    return kind if kind in KIND_RESMI else "ops"
+
+
+def _target_row(kind):
+    """Baris NotificationTarget untuk jenis; None bila belum dipasang."""
+    try:
+        from database.connection import SessionLocal
+        from database.models import NotificationTarget
+        db = SessionLocal()
+        try:
+            return db.query(NotificationTarget).filter(
+                NotificationTarget.kind == normalisasi_kind(kind)).first()
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def admin_notification_targets(kind=None):
+    """[(chat_id, thread_id), ...] tujuan notifikasi; fallback DM admin bila belum dipasang."""
     from config.settings import settings
-    delivered = False
-    for admin_id in admin_notification_targets(order_type):
-        delivered = await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup) or delivered
-    if order_type == "sell" and settings.SELL_ADMIN_CHAT_ID and not delivered:
-        for admin_id in settings.ADMIN_CHAT_IDS:
+    row = _target_row(kind)
+    if row:
+        return [(str(row.chat_id), int(row.thread_id) if row.thread_id else None)]
+    return [(str(a), None) for a in dict.fromkeys(settings.ADMIN_CHAT_IDS)]
+
+
+async def kirim_ke_topik(sender, kind=None, order_type=None, text=None, photo=None,
+                         parse_mode="HTML", reply_markup=None) -> bool:
+    """Kirim pesan/foto ke topik fitur yang sudah dipasang; no-op bila belum dipasang."""
+    kind = normalisasi_kind(kind or order_type)
+    row = _target_row(kind)
+    if not row:
+        return False
+    bot = getattr(sender, "bot", sender)
+    try:
+        if photo:
+            await bot.send_photo(chat_id=str(row.chat_id), photo=photo, caption=text,
+                                 parse_mode=parse_mode, reply_markup=reply_markup,
+                                 message_thread_id=int(row.thread_id) if row.thread_id else None)
+        else:
+            await bot.send_message(chat_id=str(row.chat_id), text=text, parse_mode=parse_mode,
+                                   reply_markup=reply_markup,
+                                   message_thread_id=int(row.thread_id) if row.thread_id else None)
+        return True
+    except Exception as exc:
+        logger.warning("Kirim ke topik %s gagal: %s", kind, exc)
+        return False
+
+
+async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None,
+                        order_type=None, kind=None, butuh_tindakan=False) -> None:
+    """Kirim notifikasi ke topik/grup sesuai jenis fitur.
+
+    Pesan yang butuh tindakan admin (ber-tombol/flag butuh_tindakan) juga disalin
+    ke DM masing-masing admin supaya bisa konfirmasi langsung dari HP.
+    """
+    from config.settings import settings
+    kind = normalisasi_kind(kind or order_type)
+    row = _target_row(kind)
+    tujuan = admin_notification_targets(kind)
+    bot = getattr(sender, "bot", sender)
+    for chat_id, thread_id in tujuan:
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode,
+                                   reply_markup=reply_markup,
+                                   message_thread_id=thread_id or None)
+        except Exception as exc:
+            logger.warning("Notifikasi %s ke %s gagal: %s", kind, chat_id, exc)
+            await safe_send_message(sender, chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    if row is not None and (butuh_tindakan or reply_markup is not None):
+        for admin_id in dict.fromkeys(settings.ADMIN_CHAT_IDS):
             await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup)

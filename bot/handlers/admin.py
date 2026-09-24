@@ -1638,3 +1638,97 @@ async def check_api_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ]
     await msg.edit_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
 
+
+
+async def settarget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: /settarget <jenis> - pasang topik grup sebagai tujuan notifikasi (ketik di dalam topik)."""
+    from bot.utils.telegram_utils import normalisasi_kind
+    from database.models import NotificationTarget
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Pakai: /settarget beli|jual|convert|error|alarm|topup|ops\n"
+            "Jalankan perintah ini di dalam topik tujuan (mis. topik 'Beli Crypto').")
+        return
+    kind = normalisasi_kind(context.args[0])
+    chat_id = str(update.effective_chat.id)
+    thread_id = update.message.message_thread_id
+    judul = update.effective_chat.title or "chat"
+    if thread_id:
+        judul = f"{judul} / thread {thread_id}"
+    db = SessionLocal()
+    try:
+        row = db.query(NotificationTarget).filter(NotificationTarget.kind == kind).first()
+        if row is None:
+            row = NotificationTarget(kind=kind, chat_id=chat_id,
+                                     thread_id=str(thread_id) if thread_id else None, title=judul)
+            db.add(row)
+        else:
+            row.chat_id = chat_id
+            row.thread_id = str(thread_id) if thread_id else None
+            row.title = judul
+        db.commit()
+    finally:
+        db.close()
+    await update.message.reply_text(
+        f"✅ Target notif <b>{kind}</b> dipasang di: {judul}\n"
+        f"chat <code>{chat_id}</code> | thread <code>{thread_id or '-'}</code>",
+        parse_mode="HTML")
+
+
+async def unsettarget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: /unsettarget <jenis> - lepas tujuan notifikasi (kembali ke DM admin)."""
+    from bot.utils.telegram_utils import normalisasi_kind
+    from database.models import NotificationTarget
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Pakai: /unsettarget beli|jual|convert|error|alarm|topup|ops")
+        return
+    kind = normalisasi_kind(context.args[0])
+    db = SessionLocal()
+    try:
+        n = db.query(NotificationTarget).filter(NotificationTarget.kind == kind).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+    await update.message.reply_text(
+        f"{'✅' if n else 'ℹ️'} Target <b>{kind}</b> {'dilepas' if n else 'memang belum dipasang'}; notif kembali ke DM admin.",
+        parse_mode="HTML")
+
+
+async def targets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: /targets - lihat status semua tujuan notifikasi."""
+    from bot.utils.telegram_utils import KIND_RESMI
+    from database.models import NotificationTarget
+    if not is_admin(update.effective_user.id):
+        return
+    db = SessionLocal()
+    try:
+        rows = {r.kind: r for r in db.query(NotificationTarget).all()}
+    finally:
+        db.close()
+    lines = ["📋 <b>TARGET NOTIFIKASI</b>\n"]
+    for kind in KIND_RESMI:
+        r = rows.get(kind)
+        if r:
+            tujuan = f"{r.title} (chat <code>{r.chat_id}</code>, thread <code>{r.thread_id or '-'}</code>)"
+        else:
+            tujuan = "belum dipasang (fallback DM admin)"
+        lines.append(f"• <b>{kind}</b>: {tujuan}")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: /chatid - tampilkan id chat & thread (untuk /settarget)."""
+    if not is_admin(update.effective_user.id):
+        return
+    chat = update.effective_chat
+    thread = update.message.message_thread_id
+    await update.message.reply_text(
+        f"Chat ID: <code>{chat.id}</code>\n"
+        f"Thread/Topic ID: <code>{thread if thread else '-'}</code>\n"
+        f"Judul: {chat.title or 'chat pribadi'}\n\n"
+        f"Jalankan /settarget beli (dll) di topik yang dituju.",
+        parse_mode="HTML")

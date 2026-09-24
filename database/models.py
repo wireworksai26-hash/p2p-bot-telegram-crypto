@@ -187,3 +187,14 @@ class GopaySession(Base):
     key = Column(String(100), primary_key=True, default='active_session')
     session_data = Column(String, nullable=False)  # JSON payload string
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NotificationTarget(Base):
+    """Tujuan notifikasi per jenis fitur (topik grup forum atau chat)."""
+    __tablename__ = 'notification_targets'
+
+    kind = Column(String(20), primary_key=True)  # beli/jual/convert/error/alarm/topup/ops
+    chat_id = Column(String(32), nullable=False)
+    thread_id = Column(String(32), nullable=True)  # id topik forum (None bila bukan forum)
+    title = Column(String(150), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -345,12 +345,17 @@ class Presentation(unittest.TestCase):
         self.assertNotEqual(format_crypto_qty(0.000000001, "SOL"), "0 SOL")
         self.assertEqual(format_crypto_qty(0, "SOL"), "0 SOL")
 
-    def test_unverified_asset_icons_use_universal_fallback(self):
-        for symbol in ("ETH", "ARB", "TRX", "APT", "HYPE", "SOL"):
-            self.assertEqual(emojis.get_coin_emoji(symbol), "🪙")
-            self.assertIsNone(emojis.get_coin_emoji_id(symbol))
-            self.assertEqual(emojis.coin_button_text(symbol), f"🪙 {symbol}")
-        self.assertIn('emoji-id="5309929258443874898"', emojis.get_coin_emoji("USDT"))
+    def test_aset_punya_emoji_sendiri_bukan_generik(self):
+        harapan = {"ETH": "🔷", "SOL": "🟣", "TRX": "🔻", "BNB": "🟡",
+                  "SUI": "💧", "TON": "💎", "POL": "🟪", "ARB": "🔹",
+                  "AVAX": "🔺", "KAIA": "🌱", "BERA": "🐻", "APT": "⚫",
+                  "HYPE": "🚀"}
+        for symbol, emoji in harapan.items():
+            self.assertEqual(emojis.get_coin_emoji(symbol), emoji, symbol)
+            self.assertNotEqual(emojis.get_coin_emoji(symbol), "🪙", symbol)
+            self.assertIn(emoji, emojis.coin_button_text(symbol), symbol)
+        for symbol in ("USDT", "USDC", "USDG"):
+            self.assertIn("emoji-id=", emojis.get_coin_emoji(symbol), symbol)
 
     def test_saved_legacy_emoji_migration_preserves_new_custom_choices(self):
         initial_ids, initial_alts = dict(emojis.CUSTOM_EMOJI_IDS), dict(emojis.CUSTOM_EMOJI_ALTS)

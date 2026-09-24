@@ -333,6 +333,11 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("stats", stats_handler))
     application.add_handler(CommandHandler("refreshwallet", refreshwallet_handler))
     application.add_handler(CommandHandler("verifysell", verifysell_handler))
+    from bot.handlers.admin import settarget_handler, unsettarget_handler, targets_handler, chatid_handler
+    application.add_handler(CommandHandler("settarget", settarget_handler))
+    application.add_handler(CommandHandler("unsettarget", unsettarget_handler))
+    application.add_handler(CommandHandler("targets", targets_handler))
+    application.add_handler(CommandHandler("chatid", chatid_handler))
     application.add_handler(CommandHandler("getemoji", getemoji_handler))
     application.add_handler(CommandHandler("syncpack", syncpack_handler))
     application.add_handler(CommandHandler("setemoji", setemoji_handler))
@@ -416,7 +421,8 @@ async def error_handler(update: object, context) -> None:
     try:
         await notify_admins(
             context.bot,
-            f"🚨 <b>Bot Error</b>\n\n<code>{context.error}</code>",
+            kind="error", butuh_tindakan=True,
+            text=f"🚨 <b>Bot Error</b>\n\n<code>{context.error}</code>",
         )
     except Exception:
         pass
@@ -652,7 +658,7 @@ async def _job_low_balance_alert():
                         )
                     alert_msg = "\n".join(msg_lines)
 
-                    await notify_admins(bot_app, alert_msg)
+                    await notify_admins(bot_app, alert_msg, kind="topup")
         finally:
             db.close()
     except Exception as exc:
@@ -857,7 +863,7 @@ async def _job_send_monthly_report():
             )
             from services.bot_runtime import bot_app
             if bot_app:
-                await notify_admins(bot_app, msg)
+                await notify_admins(bot_app, msg, kind="ops")
         finally:
             db.close()
     except Exception as exc:

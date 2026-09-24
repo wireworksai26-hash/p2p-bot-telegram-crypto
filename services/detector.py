@@ -321,7 +321,7 @@ class DepositDetector:
                             InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order.order_id}")
                         ]
                     ])
-                    await notify_admins(bot_app, admin_msg, reply_markup=admin_keyboard, order_type="sell")
+                    await notify_admins(bot_app, admin_msg, reply_markup=admin_keyboard, order_type="sell", kind="jual")
                 except Exception as exc:
                     logger.warning("Gagal notif admin sell: %s", exc)
 
@@ -432,7 +432,7 @@ class DepositDetector:
                             "Periksa receipt dan riwayat wallet terlebih dahulu. "
                             "Jangan kirim ulang jika status broadcast belum pasti."
                         )
-                        await notify_admins(bot_app, admin_msg)
+                        await notify_admins(bot_app, admin_msg, kind="convert")
                         await safe_send_message(
                             bot_app,
                             order.telegram_id,
