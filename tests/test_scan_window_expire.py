@@ -82,7 +82,11 @@ class TestJendelaScan(unittest.TestCase):
 
         self.assertTrue(w3.queries)
         for q in w3.queries:
-            self.assertEqual(q["fromBlock"], 1000 - 9)
+                    self.assertEqual(w3.queries[0]["fromBlock"], 1000 - 9)
+        self.assertEqual(w3.queries[0]["toBlock"], hex(1000))
+        for q in w3.queries:
+            self.assertLessEqual(int(q["toBlock"], 16), 1000)
+            self.assertGreaterEqual(q["fromBlock"], 1000 - 70)
 
 
 class TestOrderMacet(unittest.TestCase):

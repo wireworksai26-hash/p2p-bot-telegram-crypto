@@ -600,27 +600,34 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
             token = sender.config["tokens"].get(symbol)
             if not token:
                 return
-            # Jendela 10 blok (inklusif): batas Alchemy free tier getLogs. Deposit lebih tua
-            # ditangkap riwayat explorer (_explorer_incoming_hashes), bukan getLogs lebar.
-            query = {"fromBlock": max(0, latest - 9), "toBlock": "latest",
-                     "address": None, "topics": ["0x" + TRANSFER_TOPIC, None,
-                                                 "0x" + wallet.lower()[2:].zfill(64)]}
-            logs = None
+            # Jendela per chunk 10 blok (batas Alchemy free tier getLogs). toBlock harus
+            # absolut: Alchemy free tier menolak toBlock "latest" (range dihitung melebar).
+            # Jalan mundur beberapa chunk supaya scan gap / restart container tidak
+            # melewatkan deposit; deposit lebih tua ditangkap riwayat explorer bila ada.
             last_error = None
-            for rpc in _ordered_rpcs(network, sender.rpc_list):
-                try:
-                    scan_w3 = _scan_web3(rpc)
-                    query["address"] = scan_w3.to_checksum_address(token)
-                    logs = await asyncio.to_thread(scan_w3.eth.get_logs, query)
-                    _scan_rpc_cache[network] = rpc
+            chunk = 0
+            for to_block in range(latest, max(-1, latest - 70), -10):
+                query = {"fromBlock": max(0, to_block - 9), "toBlock": hex(to_block),
+                         "address": None, "topics": ["0x" + TRANSFER_TOPIC, None,
+                                                     "0x" + wallet.lower()[2:].zfill(64)]}
+                logs = None
+                for rpc in _ordered_rpcs(network, sender.rpc_list):
+                    try:
+                        scan_w3 = _scan_web3(rpc)
+                        query["address"] = scan_w3.to_checksum_address(token)
+                        logs = await asyncio.to_thread(scan_w3.eth.get_logs, query)
+                        _scan_rpc_cache[network] = rpc
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        logger.warning("Scan %s/%s getLogs gagal via %s: %s", network, symbol, rpc, exc)
+                if logs is None:
+                    raise RuntimeError(f"getLogs gagal di semua RPC {network}: {last_error}")
+                for log in reversed(logs):
+                    yield w3.to_hex(log["transactionHash"])
+                chunk += 1
+                if chunk >= 7:
                     break
-                except Exception as exc:
-                    last_error = exc
-                    logger.warning("Scan %s/%s getLogs gagal via %s: %s", network, symbol, rpc, exc)
-            if logs is None:
-                raise RuntimeError(f"getLogs gagal di semua RPC {network}: {last_error}")
-            for log in reversed(logs):
-                yield w3.to_hex(log["transactionHash"])
 
 
 _incoming_cache: dict = {}

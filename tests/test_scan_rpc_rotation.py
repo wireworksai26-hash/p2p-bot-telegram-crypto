@@ -82,7 +82,7 @@ class TestScanRpcRotation(unittest.TestCase):
         berhasil = FakeWeb3(logs=[FakeLog(hash_bytes)])
 
         with patch.object(tx_verifier.CryptoSenderFactory, "get_sender", return_value=sender), \
-                patch.object(tx_verifier, "_scan_web3", side_effect=[primary, ditolak, berhasil]):
+                patch.object(tx_verifier, "_scan_web3", side_effect=[primary, ditolak, berhasil] + [FakeWeb3(logs=[])] * 8):
             hasil = self._collect("BSC", "USDT", "0x" + "a" * 40)
 
         self.assertEqual(hasil, ["11" * 32])
