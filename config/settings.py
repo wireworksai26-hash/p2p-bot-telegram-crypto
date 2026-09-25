@@ -65,6 +65,7 @@ class Settings:
     EVM_DEPOSIT_CONFIRMATIONS = max(1, int(os.getenv("EVM_DEPOSIT_CONFIRMATIONS", "2")))
     SELL_ADMIN_CHAT_ID = int(os.getenv("SELL_ADMIN_CHAT_ID") or "0") or None
     COINGECKO_API_KEY = (os.getenv("COINGECKO_API_KEY") or "").strip()
+    COINMARKETCAP_API_KEY = (os.getenv("COINMARKETCAP_API_KEY") or "").strip()
     TON_PRIVATE_KEY = (os.getenv("TON_PRIVATE_KEY") or "").strip()
     TON_WALLET_ADDRESS = (os.getenv("TON_WALLET_ADDRESS") or "").strip()
 

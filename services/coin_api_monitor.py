@@ -69,7 +69,7 @@ class CoinAPIMonitor:
                 "network": "MARKET",
                 "url": "https://api.coingecko.com/api/v3/simple/price",
                 "env_var": "COINGECKO_API_KEY",
-                "fallback_urls": ["https://api.binance.com/api/v3/ticker/price"],
+                "fallback_urls": ["https://api.coinpaprika.com/v1/tickers?quotes=USD"],
                 "impact": "Seluruh perhitungan harga Beli, Jual, dan Swap IDR berhenti.",
             },
             # 2. EVM Blockchain RPCs
@@ -356,8 +356,8 @@ class CoinAPIMonitor:
                 headers = {}
                 if settings.COINGECKO_API_KEY:
                     headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
-                if "binance.com" in url:
-                    resp = await client.get(url, params={"symbols": '["USDTUSDC"]'})
+                if "coinpaprika.com" in url:
+                    resp = await client.get(url)
                 else:
                     resp = await client.get(
                         url,
@@ -369,9 +369,9 @@ class CoinAPIMonitor:
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    if isinstance(data, list) and data and "price" in data[0]:
+                    if isinstance(data, list) and data and isinstance(data[0], dict) and (data[0].get("quotes") or {}).get("USD"):
                         result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
-                        result["block_info"] = f"{data[0].get('symbol', 'USDTUSDC')}: {data[0]['price']}"
+                        result["block_info"] = f"CoinPaprika: {len(data)} ticker"
                     elif isinstance(data, dict) and "tether" in data and "idr" in data["tether"]:
                         result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
                         result["block_info"] = f"USDT: Rp {data['tether']['idr']:,}"

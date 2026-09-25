@@ -1,10 +1,9 @@
 """CoinGecko direct-IDR quotes, shared batch cache, explicit spread and freshness.
 
-Fallback saat CoinGecko kena limit: harga USDT Binance x kurs USD/IDR
-(open.er-api.com / frankfurter.app), tanpa API key.
+Fallback saat CoinGecko kena limit: harga USD CoinPaprika / CoinMarketCap x kurs
+USD/IDR (open.er-api.com / frankfurter.dev). Stablecoin dihitung 1 USD x kurs.
 """
 import asyncio
-import json
 import logging
 import math
 import time
@@ -17,10 +16,11 @@ from database import crud
 
 logger = logging.getLogger(__name__)
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
-BINANCE_PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
+PAPRIKA_TICKERS_URL = "https://api.coinpaprika.com/v1/tickers?quotes=USD"
+CMC_QUOTES_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
 FX_URLS = (
     "https://open.er-api.com/v6/latest/USD",
-    "https://api.frankfurter.app/latest?from=USD&to=IDR",
+    "https://api.frankfurter.dev/latest?from=USD&to=IDR",
 )
 CACHE_TTL_SECONDS = 30
 MAX_PRICE_AGE_SECONDS = 600
@@ -34,14 +34,26 @@ COINGECKO_IDS = {
     "BASE": "ethereum", "ETH_ROBINHOOD": "ethereum", "USDG": "global-dollar",
 }
 
-# coin_id CoinGecko -> pasangan Binance (fallback saat CoinGecko limit).
-BINANCE_SYMBOLS = {
-    "ethereum": "ETHUSDT", "binancecoin": "BNBUSDT", "solana": "SOLUSDT",
-    "avalanche-2": "AVAXUSDT", "tron": "TRXUSDT", "polygon-ecosystem-token": "POLUSDT",
-    "arbitrum": "ARBUSDT", "sui": "SUIUSDT", "the-open-network": "TONUSDT",
-    "kaia": "KAIAUSDT", "berachain-bera": "BERAUSDT", "aptos": "APTUSDT",
-    "optimism": "OPUSDT", "hyperliquid": "HYPEUSDT",
+# coin_id CoinGecko -> id CoinPaprika (fallback 1, tanpa API key).
+PAPRIKA_IDS = {
+    "ethereum": "eth-ethereum", "binancecoin": "bnb-binance-coin",
+    "solana": "sol-solana", "avalanche-2": "avax-avalanche", "tron": "trx-tron",
+    "polygon-ecosystem-token": "pol-polygon-ecosystem-token",
+    "arbitrum": "arb-arbitrum", "sui": "sui-sui", "the-open-network": "ton-tontoken",
+    "kaia": "kaia-kaia", "berachain-bera": "bera-berachain", "aptos": "apt-aptos",
+    "optimism": "op-optimism", "hyperliquid": "hype-hyperliquid",
+    "tether": "usdt-tether", "usd-coin": "usdc-usd-coin", "global-dollar": "usdg-global-dollar",
 }
+
+# coin_id CoinGecko -> simbol CoinMarketCap (fallback 2, hemat kuota).
+CMC_SYMBOLS = {
+    "ethereum": "ETH", "binancecoin": "BNB", "solana": "SOL", "avalanche-2": "AVAX",
+    "tron": "TRX", "polygon-ecosystem-token": "POL", "arbitrum": "ARB", "sui": "SUI",
+    "the-open-network": "TON", "kaia": "KAIA", "berachain-bera": "BERA", "aptos": "APT",
+    "optimism": "OP", "hyperliquid": "HYPE", "tether": "USDT", "usd-coin": "USDC",
+    "global-dollar": "USDG",
+}
+
 STABLE_COIN_IDS = {"tether", "usd-coin", "global-dollar"}
 
 
@@ -75,41 +87,80 @@ class PriceService:
             logger.warning("CoinGecko tidak tersedia (%s)", type(exc).__name__)
         return None
 
-    async def _fetch_binance(self):
-        """Fallback tanpa API key: harga USDT Binance x kurs USD->IDR."""
+    async def _fetch_fx(self):
+        """Kurs USD->IDR untuk fallback harga (tanpa API key)."""
         try:
             client = await self._get_client()
-            fx = None
             for url in FX_URLS:
                 try:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     fx = float(resp.json()["rates"]["IDR"])
                     if fx > 0:
-                        break
+                        return fx
                 except Exception:
                     continue
-            if not fx:
-                logger.warning("Kurs USD/IDR fallback tidak tersedia")
-                return None
-            resp = await client.get(BINANCE_PRICE_URL, params={
-                "symbols": json.dumps(sorted(set(BINANCE_SYMBOLS.values())), separators=(",", ":")),
-            })
-            resp.raise_for_status()
-            prices = {row["symbol"]: float(row["price"]) for row in resp.json()}
+            logger.warning("Kurs USD/IDR fallback tidak tersedia")
         except Exception as exc:
-            logger.warning("Fallback Binance tidak tersedia (%s)", type(exc).__name__)
-            return None
+            logger.warning("Kurs USD/IDR fallback tidak tersedia (%s)", type(exc).__name__)
+        return None
+
+    def _rows_from_usd(self, usd_by_coin_id, fx):
+        """Susun baris cache dari harga USD: stablecoin 1 USD x kurs."""
         stamp = int(time.time())
         data = {}
         for coin_id in set(COINGECKO_IDS.values()):
             if coin_id in STABLE_COIN_IDS:
                 data[coin_id] = {"idr": fx, "usd": 1.0, "last_updated_at": stamp}
                 continue
-            price_usd = prices.get(BINANCE_SYMBOLS.get(coin_id, ""))
+            price_usd = usd_by_coin_id.get(coin_id)
             if price_usd and price_usd > 0:
                 data[coin_id] = {"idr": price_usd * fx, "usd": price_usd, "last_updated_at": stamp}
         return data or None
+
+    async def _fetch_paprika(self, fx):
+        """Fallback 1 (tanpa key): satu call ticker CoinPaprika, harga USD x kurs."""
+        try:
+            client = await self._get_client()
+            resp = await client.get(PAPRIKA_TICKERS_URL)
+            resp.raise_for_status()
+            by_id = {row.get("id"): row for row in resp.json() if isinstance(row, dict)}
+            usd = {}
+            for coin_id, paprika_id in PAPRIKA_IDS.items():
+                row = by_id.get(paprika_id)
+                if row:
+                    price = ((row.get("quotes") or {}).get("USD") or {}).get("price")
+                    if price:
+                        usd[coin_id] = float(price)
+            return self._rows_from_usd(usd, fx)
+        except Exception as exc:
+            logger.warning("Fallback CoinPaprika tidak tersedia (%s)", type(exc).__name__)
+        return None
+
+    async def _fetch_cmc(self, fx):
+        """Fallback 2 (key CoinMarketCap): quotes USD x kurs, hemat kuota harian."""
+        if not settings.COINMARKETCAP_API_KEY:
+            return None
+        try:
+            client = await self._get_client()
+            resp = await client.get(CMC_QUOTES_URL, params={
+                "symbol": ",".join(sorted(set(CMC_SYMBOLS.values()))),
+                "convert": "USD",
+            }, headers={"X-CMC_PRO_API_KEY": settings.COINMARKETCAP_API_KEY})
+            resp.raise_for_status()
+            raw = (resp.json() or {}).get("data") or {}
+            by_symbol = {str(k).upper(): v for k, v in raw.items()}
+            usd = {}
+            for coin_id, symbol in CMC_SYMBOLS.items():
+                row = by_symbol.get(symbol.upper())
+                if row:
+                    price = ((row.get("quote") or {}).get("USD") or {}).get("price")
+                    if price:
+                        usd[coin_id] = float(price)
+            return self._rows_from_usd(usd, fx)
+        except Exception as exc:
+            logger.warning("Fallback CoinMarketCap tidak tersedia (%s)", type(exc).__name__)
+        return None
 
     async def _refresh(self, force=False):
         async with self._lock:
@@ -119,8 +170,13 @@ class PriceService:
             data = await self._fetch_coingecko()
             source = "CoinGecko IDR"
             if data is None:
-                data = await self._fetch_binance()
-                source = "Binance+FX"
+                fx = await self._fetch_fx()
+                if fx:
+                    data = await self._fetch_paprika(fx)
+                    source = "CoinPaprika+FX"
+                    if data is None:
+                        data = await self._fetch_cmc(fx)
+                        source = "CoinMarketCap+FX"
             if data is not None:
                 self._cache = {**data, "_fetched_at": now, "_source": source}
             else:
