@@ -18,6 +18,7 @@ Alur Transaksi Convert/Swap (FULL OTOMATIS — tanpa verifikasi admin):
 import asyncio
 import logging
 import re
+from html import escape as _esc
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -736,7 +737,7 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
             f"Deposit Asal: <b>{order.crypto_amount} {order.crypto_symbol}</b> ({order.network})\n"
             f"Koin Tujuan: <b>{order.target_crypto_amount} {order.target_crypto_symbol}</b> ({order.target_network})\n"
             f"Wallet Tujuan: <code>{order.buyer_wallet}</code>\n"
-            f"Bukti/TX Hash: <code>{deposit_proof}</code>\n\n"
+            f"Bukti/TX Hash: <code>{_esc(str(deposit_proof or '-'))}</code>\n\n"
             f"ℹ️ <i>Belum terverifikasi. Tombol admin hanya memeriksa ulang blockchain, bukan menyetujui foto sebagai deposit.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([

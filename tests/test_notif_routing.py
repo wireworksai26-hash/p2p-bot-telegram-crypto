@@ -29,6 +29,7 @@ from bot.utils.telegram_utils import (
     admin_notification_targets,
     normalisasi_kind,
     notify_admins,
+    safe_send_message,
 )
 
 engine = create_engine("sqlite:///:memory:")
@@ -99,6 +100,63 @@ class TestRoutingNotif(unittest.TestCase):
             asyncio.run(notify_admins(bot, "info", kind="beli", reply_markup="KB"))
         chat = [c for c, _, _ in bot.terkirim]
         self.assertEqual(sorted(set(chat)), ["6440006997", "8710049667"])
+
+
+class BotGagalThread:
+    """Gagal kirim ke satu thread (mis. topik dihapus); sukses ke chat lain."""
+
+    def __init__(self, gagal_thread):
+        self.gagal_thread = gagal_thread
+        self.terkirim = []
+
+    async def send_message(self, chat_id=None, text=None, parse_mode=None,
+                           reply_markup=None, message_thread_id=None, **kw):
+        if message_thread_id == self.gagal_thread:
+            raise RuntimeError("message thread not found")
+        self.terkirim.append((str(chat_id), message_thread_id, text))
+        return True
+
+
+class BotParseGagal:
+    """Tolak parse_mode apa pun; terima kirim tanpa parse_mode."""
+
+    def __init__(self):
+        self.panggilan = []
+
+    async def send_message(self, chat_id=None, text=None, parse_mode=None,
+                           reply_markup=None, message_thread_id=None, **kw):
+        self.panggilan.append((str(chat_id), message_thread_id, parse_mode))
+        if parse_mode:
+            raise RuntimeError("Can't parse entities")
+        return True
+
+
+class TestRoutingGagal(unittest.TestCase):
+    def setUp(self):
+        from config.settings import settings
+        self._lama = settings.ADMIN_CHAT_IDS
+        settings.ADMIN_CHAT_IDS = [6440006997, 8710049667]
+
+    def tearDown(self):
+        from config.settings import settings
+        settings.ADMIN_CHAT_IDS = self._lama
+
+    def test_topik_gagal_tidak_jatuh_ke_general(self):
+        bot = BotGagalThread(gagal_thread=55)
+        with patch("database.connection.SessionLocal", TestingSession):
+            asyncio.run(notify_admins(bot, "penting", kind="jual"))
+        pasangan = [(c, t) for c, t, _ in bot.terkirim]
+        self.assertNotIn(("-100123", None), pasangan)
+        self.assertIn(("6440006997", None), pasangan)
+        self.assertIn(("8710049667", None), pasangan)
+        self.assertTrue(any("gagal masuk topik" in t for _, _, t in bot.terkirim))
+
+    def test_safe_send_retry_parse_tetap_di_thread(self):
+        bot = BotParseGagal()
+        ok = asyncio.run(safe_send_message(bot, "-100123", "teks < rusak",
+                                           parse_mode="HTML", message_thread_id=55))
+        self.assertTrue(ok)
+        self.assertEqual(bot.panggilan, [("-100123", 55, "HTML"), ("-100123", 55, None)])
 
 
 if __name__ == "__main__":

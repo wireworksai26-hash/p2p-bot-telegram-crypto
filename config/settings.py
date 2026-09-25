@@ -53,7 +53,7 @@ class Settings:
     TRX_PRIVATE_KEY = (os.getenv("TRX_PRIVATE_KEY") or "").strip()
     TRX_WALLET_ADDRESS = (os.getenv("TRX_WALLET_ADDRESS") or "").strip()
 
-    SUI_RPC = (os.getenv("SUI_RPC", "https://sui-rpc.publicnode.com") or "").strip()
+    SUI_RPC = (os.getenv("SUI_RPC", "https://sui-mainnet-endpoint.blockvision.org") or "").strip()
     SUI_PRIVATE_KEY = (os.getenv("SUI_PRIVATE_KEY") or "").strip()
     SUI_WALLET_ADDRESS = (os.getenv("SUI_WALLET_ADDRESS") or "").strip()
 

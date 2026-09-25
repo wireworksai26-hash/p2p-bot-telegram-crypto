@@ -263,6 +263,9 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
             if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
                 raise ValueError("Chain ID tidak sesuai.")
             receipt = await asyncio.to_thread(w3.eth.get_transaction_receipt, tx_hash)
+            # RPC sudah menjawab benar (chain id cocok + receipt ada) meski hash
+            # nantinya ditolak secara semantik; simpan agar tidak dicoba ulang.
+            _scan_rpc_cache[network] = rpc_url
             if receipt.get("status") != 1:
                 return _fail("Transaksi gagal atau belum confirmed.")
             block_no = receipt["blockNumber"]
@@ -300,7 +303,6 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                     if self_send:
                         return _fail("Transfer ke diri sendiri bukan deposit.")
                     return _fail("Tidak ada transfer token masuk ke wallet deposit pada transaksi ini.")
-            _scan_rpc_cache[network] = rpc_url
             return _ok(amount, block["timestamp"], tx_hash)
         except Exception as exc:
             logger.warning("Verifikasi RPC %s via %s gagal: %s", network, rpc_url, exc)

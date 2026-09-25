@@ -47,9 +47,11 @@ async def safe_edit_message(query, text: str, reply_markup=None, parse_mode="HTM
             )
 
 
-async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", reply_markup=None) -> bool:
+async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML",
+                            reply_markup=None, message_thread_id=None) -> bool:
     """
     Kirim pesan Telegram dengan aman dan fallback otomatis jika parse HTML gagal.
+    message_thread_id dipertahankan saat retry agar pesan tidak jatuh ke topik General.
     Returns True jika berhasil, False jika gagal.
     """
     try:
@@ -74,12 +76,14 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", 
             logger.warning("Gagal kirim pesan ke %s: bot_obj tidak ditemukan", chat_id)
             return False
 
+        thread = int(message_thread_id) if message_thread_id else None
         try:
             await bot_obj.send_message(
                 chat_id=int(chat_id),
                 text=text,
                 parse_mode=parse_mode,
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
+                message_thread_id=thread
             )
             return True
         except Exception as send_err:
@@ -89,7 +93,8 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML", 
                     chat_id=int(chat_id),
                     text=text,
                     parse_mode=None,
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    message_thread_id=thread
                 )
                 return True
             raise send_err
@@ -162,20 +167,37 @@ async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None,
 
     Pesan yang butuh tindakan admin (ber-tombol/flag butuh_tindakan) juga disalin
     ke DM masing-masing admin supaya bisa konfirmasi langsung dari HP.
+    Jika pengiriman ke topik gagal, retry dengan thread yang sama lalu eskalasi
+    ke DM admin; tidak pernah diam-diam jatuh ke topik General.
     """
     from config.settings import settings
     kind = normalisasi_kind(kind or order_type)
     row = _target_row(kind)
     tujuan = admin_notification_targets(kind)
     bot = getattr(sender, "bot", sender)
+    gagal_topik = []
     for chat_id, thread_id in tujuan:
         try:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode,
                                    reply_markup=reply_markup,
                                    message_thread_id=thread_id or None)
         except Exception as exc:
-            logger.warning("Notifikasi %s ke %s gagal: %s", kind, chat_id, exc)
-            await safe_send_message(sender, chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            logger.warning("Notifikasi %s ke %s (thread %s) gagal: %s",
+                           kind, chat_id, thread_id or "-", exc)
+            ok = await safe_send_message(sender, chat_id, text, parse_mode=parse_mode,
+                                         reply_markup=reply_markup,
+                                         message_thread_id=thread_id or None)
+            if not ok and thread_id:
+                gagal_topik.append(thread_id)
     if row is not None and (butuh_tindakan or reply_markup is not None):
         for admin_id in dict.fromkeys(settings.ADMIN_CHAT_IDS):
             await safe_send_message(sender, admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    if gagal_topik:
+        alasan = ", ".join(f"thread {t}" for t in gagal_topik)
+        for admin_id in dict.fromkeys(settings.ADMIN_CHAT_IDS):
+            await safe_send_message(
+                sender, admin_id,
+                f"\u26a0\ufe0f Notifikasi <b>{kind}</b> gagal masuk topik ({alasan}); "
+                f"pesan dikirim ke sini. Jalankan ulang /settarget {kind} di topik tujuan "
+                f"bila topik sudah berubah.\n\n{text}",
+                parse_mode=parse_mode, reply_markup=reply_markup)

@@ -12,6 +12,7 @@ Mengelola percakapan multi-langkah (ConversationHandler) untuk pembelian crypto:
 import asyncio
 import logging
 import os
+from html import escape as _esc
 from weakref import WeakValueDictionary
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -702,7 +703,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             admin_alert = (
                 f"🔔 <b>ORDER BARU DIBUAT (BUY - GoPay QRIS)</b>\n\n"
                 f"Order ID: <code>{order_id}</code>\n"
-                f"User: {update.effective_user.name} (ID: {user_id})\n"
+                f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
                 f"Koin: {format_crypto(crypto_amount, symbol)} ({network})\n"
                 f"Total Pembayaran: <b>{format_idr(final_total_idr)}</b> (Kode Unik: {unique_code})\n"
                 f"Metode: GOPAY_QRIS\n"
@@ -1021,7 +1022,7 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
         admin_caption = (
             f"📸 <b>BUKTI TRANSFER DITERIMA (BUY)</b>\n\n"
             f"ID Order: <code>{order.order_id}</code>\n"
-            f"User: {update.effective_user.name} (ID: <code>{user_id}</code>)\n"
+            f"User: {_esc(update.effective_user.name)} (ID: <code>{user_id}</code>)\n"
             f"Total Nominal: <b>{format_idr(order.total_idr)}</b>\n"
             f"Koin: {format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({order.network})\n"
             f"Wallet Target: <code>{order.buyer_wallet}</code>\n\n"

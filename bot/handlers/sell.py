@@ -10,6 +10,7 @@ Mengelola percakapan multi-langkah (ConversationHandler) untuk penjualan crypto:
 """
 
 import logging
+from html import escape as _esc
 from datetime import datetime, timedelta
 from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -442,11 +443,11 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         admin_alert = (
             f"🔔 <b>ORDER BARU DIBUAT (SELL)</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"User: {update.effective_user.name} (ID: {user_id})\n"
+            f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
             f"Crypto Dijual: {format_crypto(crypto_amount, symbol)} ({network})\n"
             f"Rupiah Bersih Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
             f"Tujuan Rekening:\n"
-            f"• {context.user_data['sell_bank_name']} - {context.user_data['sell_bank_acc']} a/n {context.user_data['sell_bank_holder']}\n\n"
+            f"• {_esc(context.user_data['sell_bank_name'])} - {_esc(context.user_data['sell_bank_acc'])} a/n {_esc(context.user_data['sell_bank_holder'])}\n\n"
             f"<i>Menunggu deposit crypto dari user ke hot wallet.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([

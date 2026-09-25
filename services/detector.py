@@ -30,6 +30,17 @@ from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto, format_idr
 from bot.utils.telegram_utils import safe_send_message, notify_admins
 
+# Alasan verifikasi yang permanen: hash tidak akan pernah jadi deposit sah.
+# Hash seperti ini dilepas dari order (sekali) agar tidak diverifikasi ulang
+# terus-menerus oleh scan 20 detik.
+ALASAN_HASH_BATAL = (
+    "Transfer ke diri sendiri bukan deposit.",
+    "Penerima tidak cocok.",
+    "Tidak ada transfer token masuk ke wallet deposit pada transaksi ini.",
+    "Token tidak terdaftar.",
+    "Transaksi gagal atau belum confirmed.",
+)
+
 logger = logging.getLogger(__name__)
 
 _payout_locks = WeakValueDictionary()
@@ -163,6 +174,33 @@ class DepositDetector:
                 not_before=order.created_at,
                 not_after=self.deposit_deadline(order),
             )
+            if (verified and not verified.get("verified")
+                    and (verified.get("reason") or "") in ALASAN_HASH_BATAL):
+                alasan = verified.get("reason")
+                order.deposit_tx_hash = None
+                order.tx_hash = None
+                db.add(AuditLog(
+                    telegram_id=order.telegram_id,
+                    action="DEPOSIT_HASH_REJECTED",
+                    order_id=order.order_id,
+                    from_status=order.status,
+                    to_status=order.status,
+                    details=f"Hash {tx_hash} dilepas permanen: {alasan}",
+                ))
+                db.commit()
+                logger.warning("Order %s: hash deposit %s ditolak permanen (%s)",
+                               order.order_id, tx_hash, alasan)
+                if bot_app:
+                    await notify_admins(
+                        bot_app,
+                        f"\u26a0\ufe0f <b>HASH DEPOSIT DITOLAK</b>\n\n"
+                        f"Order: <code>{order.order_id}</code>\n"
+                        f"TX Hash: <code>{tx_hash}</code>\n"
+                        f"Alasan: {alasan}\n\n"
+                        f"Hash dilepas dari order; auto-scan tetap mencari deposit lain yang sah.",
+                        kind="error", butuh_tindakan=True)
+                tx_hash = ""
+                verified = None
 
         # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi)
         if not verified or not verified.get("verified"):
@@ -413,6 +451,20 @@ class DepositDetector:
                         await safe_send_message(bot_app, order.telegram_id, user_msg, reply_markup=menu_keyboard)
                     except Exception as exc:
                         logger.warning("Gagal notif payout sukses: %s", exc)
+                if bot_app:
+                    try:
+                        admin_msg = (
+                            f"\u2705 <b>CONVERT SELESAI (AUTO-PAYOUT)</b>\n\n"
+                            f"Order: <code>{order.order_id}</code>\n"
+                            f"User ID: <code>{order.telegram_id}</code>\n"
+                            f"Kirim: {format_crypto(float(order.crypto_amount or 0), order.crypto_symbol)} ({order.network})\n"
+                            f"Terima: {format_crypto(float(order.target_crypto_amount or 0), order.target_crypto_symbol)} ({order.target_network})\n"
+                            f"Wallet Tujuan: <code>{order.buyer_wallet}</code>\n"
+                            f"TX Payout: <code>{result.get('tx_hash')}</code>"
+                        )
+                        await notify_admins(bot_app, admin_msg, kind="convert")
+                    except Exception as exc:
+                        logger.warning("Gagal notif admin convert sukses: %s", exc)
             else:
                 order.status = "manual_review"
                 if result.get("tx_hash"):

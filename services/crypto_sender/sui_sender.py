@@ -30,11 +30,9 @@ class SuiSender(BaseCryptoSender):
         self.network = "SUI"
         raw_rpcs = [
             settings.SUI_RPC,
-            "https://sui-rpc.publicnode.com",
-            "https://mainnet.sui.rpcpool.com",
             "https://sui-mainnet-endpoint.blockvision.org",
         ]
-        self.rpc_list = [r.strip() for r in raw_rpcs if r and r.strip()]
+        self.rpc_list = list(dict.fromkeys(r.strip() for r in raw_rpcs if r and r.strip()))
         self.wallet_address = settings.SUI_WALLET_ADDRESS
         self.explorer_base = "https://suiscan.xyz"
 

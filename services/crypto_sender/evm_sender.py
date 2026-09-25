@@ -74,7 +74,6 @@ class EVMSender(BaseCryptoSender):
                 "https://bsc-dataseed1.bnbchain.org",
                 "https://bsc.blockrazor.xyz",
                 "https://1rpc.io/bnb",
-                "https://bsc-rpc.publicnode.com",
                 "https://bsc.drpc.org",
             ],
             "chain_id": 56,

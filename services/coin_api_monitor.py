@@ -69,7 +69,7 @@ class CoinAPIMonitor:
                 "network": "MARKET",
                 "url": "https://api.coingecko.com/api/v3/simple/price",
                 "env_var": "COINGECKO_API_KEY",
-                "fallback_urls": ["https://api.coingecko.com/api/v3/simple/price"],
+                "fallback_urls": ["https://api.binance.com/api/v3/ticker/price"],
                 "impact": "Seluruh perhitungan harga Beli, Jual, dan Swap IDR berhenti.",
             },
             # 2. EVM Blockchain RPCs
@@ -84,7 +84,6 @@ class CoinAPIMonitor:
                 "env_var": "BSC_RPC",
                 "fallback_urls": [
                     "https://bsc-dataseed.bnbchain.org",
-                    "https://bsc-rpc.publicnode.com",
                     "https://1rpc.io/bnb",
                 ],
                 "impact": "Transaksi koin BNB / USDT jaringan BSC tidak dapat diproses.",
@@ -277,8 +276,7 @@ class CoinAPIMonitor:
                 "url": settings.SUI_RPC,
                 "env_var": "SUI_RPC",
                 "fallback_urls": [
-                    "https://sui-rpc.publicnode.com",
-                    "https://mainnet.sui.rpcpool.com",
+                    "https://sui-mainnet-endpoint.blockvision.org",
                 ],
                 "impact": "Transaksi koin SUI tidak dapat diproses.",
             },
@@ -358,17 +356,23 @@ class CoinAPIMonitor:
                 headers = {}
                 if settings.COINGECKO_API_KEY:
                     headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
-                resp = await client.get(
-                    url,
-                    params={"ids": "tether", "vs_currencies": "idr"},
-                    headers=headers,
-                )
+                if "binance.com" in url:
+                    resp = await client.get(url, params={"symbols": '["USDTUSDC"]'})
+                else:
+                    resp = await client.get(
+                        url,
+                        params={"ids": "tether", "vs_currencies": "idr"},
+                        headers=headers,
+                    )
                 latency = int((time.time() - start_time) * 1000)
                 result["latency_ms"] = latency
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    if "tether" in data and "idr" in data["tether"]:
+                    if isinstance(data, list) and data and "price" in data[0]:
+                        result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
+                        result["block_info"] = f"{data[0].get('symbol', 'USDTUSDC')}: {data[0]['price']}"
+                    elif isinstance(data, dict) and "tether" in data and "idr" in data["tether"]:
                         result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
                         result["block_info"] = f"USDT: Rp {data['tether']['idr']:,}"
                     else:
