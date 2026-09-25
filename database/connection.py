@@ -13,6 +13,12 @@ else:
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
+# Kunci driver psycopg2 (yang terpasang di requirements). SQLAlchemy 2.1+
+# menjadikan psycopg3 sebagai default untuk postgresql:// sehingga import
+# gagal (ModuleNotFoundError: psycopg) saat image di-rebuild.
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 if db_url.startswith("sqlite"):
     # SQLite requires check_same_thread=False for multi-thread access.
     # WAL + busy_timeout: banyak handler nulis bersamaan tidak boleh
