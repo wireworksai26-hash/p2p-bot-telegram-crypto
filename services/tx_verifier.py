@@ -600,9 +600,9 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
             token = sender.config["tokens"].get(symbol)
             if not token:
                 return
-            # Jendela 25 blok: batas terketat RPC gratis (blockrazor). Deposit lebih tua
+            # Jendela 10 blok (inklusif): batas Alchemy free tier getLogs. Deposit lebih tua
             # ditangkap riwayat explorer (_explorer_incoming_hashes), bukan getLogs lebar.
-            query = {"fromBlock": max(0, latest - 25), "toBlock": "latest",
+            query = {"fromBlock": max(0, latest - 9), "toBlock": "latest",
                      "address": None, "topics": ["0x" + TRANSFER_TOPIC, None,
                                                  "0x" + wallet.lower()[2:].zfill(64)]}
             logs = None
