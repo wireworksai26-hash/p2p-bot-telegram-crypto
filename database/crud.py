@@ -299,6 +299,7 @@ def expire_stale_orders(db: Session, minutes: int = 30) -> int:
       - Order 'pending' lama (created_at > cutoff).
       - Order 'WAITING_CRYPTO_DEPOSIT' (sell/swap) yang expired_at /
         quote_expires_at sudah lewat.
+      - Order deposit yang macet melewati 2x jendela deposit.
     Mengembalikan jumlah order yang ter-expire.
     """
     try:
@@ -327,7 +328,16 @@ def expire_stale_orders(db: Session, minutes: int = 30) -> int:
             )
             .all()
         )
-        expired_orders = pending + deposit_waiting
+        from config.settings import settings
+        stuck_deposit = (
+            db.query(Order)
+            .filter(
+                Order.status == "WAITING_CRYPTO_DEPOSIT",
+                Order.created_at <= now - timedelta(minutes=settings.SELL_DEPOSIT_WINDOW_MINUTES * 2),
+            )
+            .all()
+        )
+        expired_orders = list({o.order_id: o for o in pending + deposit_waiting + stuck_deposit}.values())
         if not expired_orders:
             return 0
 

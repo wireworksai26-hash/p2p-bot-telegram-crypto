@@ -600,7 +600,9 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
             token = sender.config["tokens"].get(symbol)
             if not token:
                 return
-            query = {"fromBlock": max(0, latest - 2000), "toBlock": "latest",
+            # Jendela 25 blok: batas terketat RPC gratis (blockrazor). Deposit lebih tua
+            # ditangkap riwayat explorer (_explorer_incoming_hashes), bukan getLogs lebar.
+            query = {"fromBlock": max(0, latest - 25), "toBlock": "latest",
                      "address": None, "topics": ["0x" + TRANSFER_TOPIC, None,
                                                  "0x" + wallet.lower()[2:].zfill(64)]}
             logs = None
