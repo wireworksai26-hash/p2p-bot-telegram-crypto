@@ -29,6 +29,7 @@ import httpx
 
 from config.settings import settings
 from bot.utils.telegram_utils import notify_admins
+from services.price_service import next_coingecko_key
 
 logger = logging.getLogger(__name__)
 
@@ -354,8 +355,9 @@ class CoinAPIMonitor:
             # 1. Price API Check
             if category == "PRICE_API":
                 headers = {}
-                if settings.COINGECKO_API_KEY:
-                    headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
+                cg_key = next_coingecko_key()
+                if cg_key:
+                    headers["x-cg-demo-api-key"] = cg_key
                 if "coinpaprika.com" in url:
                     resp = await client.get(url)
                 else:

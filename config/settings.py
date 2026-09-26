@@ -10,6 +10,14 @@ if os.getenv("PYTHON_DOTENV_DISABLED") != "1":
     elif os.path.exists("../.env"):
         load_dotenv("../.env", override=False)
 
+def parse_coingecko_keys(*raws):
+    """Gabung env key CoinGecko jadi tuple unik (pisah koma/spasi, urutan awal).
+
+    Kuota demo 10k kredit/bln per akun, jadi tiap akun punya key sendiri.
+    """
+    return tuple(dict.fromkeys(" ".join(raws).replace(",", " ").split()))
+
+
 class Settings:
     # Telegram settings
     TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
@@ -64,7 +72,11 @@ class Settings:
     APTOS_INDEXER_URL = os.getenv("APTOS_INDEXER_URL", "https://api.mainnet.aptoslabs.com/v1/graphql")
     EVM_DEPOSIT_CONFIRMATIONS = max(1, int(os.getenv("EVM_DEPOSIT_CONFIRMATIONS", "2")))
     SELL_ADMIN_CHAT_ID = int(os.getenv("SELL_ADMIN_CHAT_ID") or "0") or None
-    COINGECKO_API_KEY = (os.getenv("COINGECKO_API_KEY") or "").strip()
+    # Rotasi multi-key: COINGECKO_API_KEYS utama, COINGECKO_API_KEY lama tetap ikut.
+    COINGECKO_API_KEYS = parse_coingecko_keys(
+        os.getenv("COINGECKO_API_KEYS") or "", os.getenv("COINGECKO_API_KEY") or ""
+    )
+    COINGECKO_API_KEY = COINGECKO_API_KEYS[0] if COINGECKO_API_KEYS else ""
     COINMARKETCAP_API_KEY = (os.getenv("COINMARKETCAP_API_KEY") or "").strip()
     TON_PRIVATE_KEY = (os.getenv("TON_PRIVATE_KEY") or "").strip()
     TON_WALLET_ADDRESS = (os.getenv("TON_WALLET_ADDRESS") or "").strip()

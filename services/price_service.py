@@ -22,7 +22,9 @@ FX_URLS = (
     "https://open.er-api.com/v6/latest/USD",
     "https://api.frankfurter.dev/latest?from=USD&to=IDR",
 )
-CACHE_TTL_SECONDS = 30
+# 60 dtk: data demo CoinGecko delay "from 60 s" (lebih cepat = buang kredit).
+# Burn ~43.200 call/bln terbagi rata ke COINGECKO_API_KEYS (kuota 10k/bln/akun).
+CACHE_TTL_SECONDS = 60
 MAX_PRICE_AGE_SECONDS = 600
 MAX_CLOCK_SKEW_SECONDS = 60
 COINGECKO_IDS = {
@@ -56,6 +58,21 @@ CMC_SYMBOLS = {
 
 STABLE_COIN_IDS = {"tether", "usd-coin", "global-dollar"}
 
+_key_seq = 0
+
+
+def next_coingecko_index():
+    global _key_seq
+    i = _key_seq
+    _key_seq += 1
+    return i
+
+
+def next_coingecko_key():
+    """Key CoinGecko berikutnya, round-robin antar akun (kuota terpisah/bln)."""
+    keys = settings.COINGECKO_API_KEYS
+    return keys[next_coingecko_index() % len(keys)] if keys else None
+
 
 class PriceService:
     def __init__(self):
@@ -75,14 +92,28 @@ class PriceService:
     async def _fetch_coingecko(self):
         try:
             client = await self._get_client()
-            response = await client.get(COINGECKO_API_URL, params={
-                "ids": ",".join(sorted(set(COINGECKO_IDS.values()))),
-                "vs_currencies": "idr,usd", "include_last_updated_at": "true",
-            }, headers={"x-cg-demo-api-key": settings.COINGECKO_API_KEY} if settings.COINGECKO_API_KEY else {})
-            response.raise_for_status()
-            data = response.json()
-            if isinstance(data, dict) and any(k in data for k in set(COINGECKO_IDS.values())):
-                return data
+            # Round-robin + failover: 401/403/429 = key ini habis/invalid,
+            # geser ke key berikut (kuota 10k/bln dihitung per akun).
+            keys = settings.COINGECKO_API_KEYS or (None,)
+            mulai = next_coingecko_index() % len(keys)
+            for j in range(len(keys)):
+                key = keys[(mulai + j) % len(keys)]
+                response = await client.get(COINGECKO_API_URL, params={
+                    "ids": ",".join(sorted(set(COINGECKO_IDS.values()))),
+                    "vs_currencies": "idr,usd", "include_last_updated_at": "true",
+                }, headers={"x-cg-demo-api-key": key} if key else {})
+                if response.status_code in (401, 403, 429):
+                    logger.warning(
+                        "CoinGecko HTTP %s (key %d/%d), geser ke key berikut",
+                        response.status_code, j + 1, len(keys),
+                    )
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, dict) and any(k in data for k in set(COINGECKO_IDS.values())):
+                    return data
+                return None
+            logger.warning("Semua %d key CoinGecko gagal (limit/invalid), pakai fallback", len(keys))
         except Exception as exc:
             logger.warning("CoinGecko tidak tersedia (%s)", type(exc).__name__)
         return None
@@ -259,7 +290,9 @@ class PriceService:
         return prices
 
     async def refresh_all_prices(self):
-        await self._refresh(force=True)
+        # Non-force: hormati CACHE_TTL. force=True = 1 call API per tick
+        # scheduler tiap 30 dtk dan kuota 10k/bln habis dalam ~3 hari.
+        await self._refresh()
 
     async def get_coingecko_price_idr(self, symbol):
         await self._refresh()
