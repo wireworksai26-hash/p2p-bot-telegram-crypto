@@ -13,7 +13,7 @@ import logging
 from html import escape as _esc
 from datetime import datetime, timedelta
 from decimal import Decimal
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -405,8 +405,9 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         )
         
         keyboard = [
+            [InlineKeyboardButton("⛓ Salin Alamat Hot Wallet", copy_text=CopyTextButton(text=hot_wallet))],
             [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
-            [InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data="sell_upload_proof")],
+            [InlineKeyboardButton("? Upload Bukti Transfer", callback_data="sell_upload_proof")],
             [InlineKeyboardButton("Batal Jual", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]

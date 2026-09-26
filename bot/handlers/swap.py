@@ -21,7 +21,7 @@ import re
 from html import escape as _esc
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -155,12 +155,18 @@ async def select_src_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = []
     row = []
+    src_symbol = context.user_data.get("swap_src_symbol")
     for i, symbol in enumerate(SUPPORTED_ASSETS, 1):
-        if symbol == context.user_data.get("swap_src_symbol"):
-            continue # Bisa koin sama beda jaringan atau koin beda
+        if symbol == src_symbol:
+            # Bridge: koin sama boleh dipilih bila punya lebih dari satu jaringan
+            if len(NETWORKS_BY_SYMBOL.get(symbol, [])) < 2:
+                continue
+            label = f"{coin_button_text(symbol)} (Bridge)"
+        else:
+            label = coin_button_text(symbol)
         row.append(
             InlineKeyboardButton(
-                text=coin_button_text(symbol),
+                text=label,
                 callback_data=f"swap_tgt_sym_{symbol}",
                 icon_custom_emoji_id=get_coin_emoji_id(symbol)
             )
@@ -188,6 +194,9 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_tgt_symbol"] = symbol
 
     networks = NETWORKS_BY_SYMBOL.get(symbol, ["BSC"])
+    # Bridge: jaringan asal tidak boleh jadi tujuan saat koin sama
+    if symbol == context.user_data.get("swap_src_symbol") and len(networks) > 1:
+        networks = [n for n in networks if n != context.user_data.get("swap_src_network")]
     keyboard = [
         [
             InlineKeyboardButton(
@@ -586,6 +595,7 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["active_swap_order_id"] = order_id
 
     keyboard = [
+        [InlineKeyboardButton("⛓ Salin Alamat Setoran", copy_text=CopyTextButton(text=seller_deposit_wallet))],
         [InlineKeyboardButton("Masukkan TX Hash / Bukti Setor", callback_data=f"input_swap_tx_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
         [InlineKeyboardButton("Batal Order", callback_data=f"cancel_swap_order_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]
     ]
