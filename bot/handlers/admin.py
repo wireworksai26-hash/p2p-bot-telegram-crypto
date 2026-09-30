@@ -938,6 +938,9 @@ async def _reverify_sell_deposit(db, order):
     tx_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
     if not tx_hash or tx_hash.startswith("PHOTO:"):
         return None
+    from services.detector import DepositDetector
+    if DepositDetector._is_hash_used(db, tx_hash, exclude_order=order.order_id):
+        return {"verified": False, "reason": "TX hash sudah diklaim order lain (indikasi replay)."}
     base = order.created_at or datetime.utcnow()
     return await tx_verifier.verify_deposit(
         network=order.network,

@@ -18,6 +18,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
+from html import escape as _esc
 from weakref import WeakValueDictionary
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
@@ -347,10 +348,10 @@ class DepositDetector:
                         f"Order: <code>{order.order_id}</code>\n"
                         f"User ID: <code>{order.telegram_id}</code>\n"
                         f"Deposit: {format_crypto(verified.get('amount'), order.crypto_symbol)} ({order.network})\n"
-                        f"TX Hash: <code>{tx_hash}</code>\n\n"
+                        f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
                         f"‼️ <b>TRANSFER RUPIAH SEGERA:</b> "
                         f"<b>{format_idr(order.total_idr)}</b> ke rekening:\n"
-                        f"<code>{order.buyer_wallet}</code>\n\n"
+                        f"<code>{_esc(order.buyer_wallet)}</code>\n\n"
                         f"Setelah transfer, klik tombol di bawah atau ketik <code>/confirm {order.order_id}</code>."
                     )
                     admin_keyboard = InlineKeyboardMarkup([

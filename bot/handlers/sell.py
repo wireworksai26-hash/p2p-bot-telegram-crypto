@@ -507,8 +507,11 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
     net_idr = context.user_data["sell_net_idr"]
     bank_info = f"{context.user_data['sell_bank_name']} | {context.user_data['sell_bank_acc']} | {context.user_data['sell_bank_holder']}"
     
-    # Validasi format TX Hash sederhana (biasanya hex, minimal 10 karakter)
-    if len(tx_hash) < 10:
+    # Pre-validasi format TX Hash sesuai jaringan order (64 hex / base58 / TON)
+    from services import tx_verifier
+    try:
+        tx_verifier.normalize_tx_hash(network, tx_hash)
+    except ValueError:
         keyboard = [
             [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
@@ -577,9 +580,9 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"User ID: <code>{order.telegram_id if order else context.user_data.get('sell_user_id', update.effective_user.id)}</code>\n"
             f"Crypto: {format_crypto(crypto_amount, symbol)} ({network})\n"
             f"Rupiah Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
-            f"TX Hash: <code>{tx_hash}</code>\n\n"
+            f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
             f"Tujuan Rekening:\n"
-            f"• {bank_info}\n\n"
+            f"• {_esc(bank_info)}\n\n"
             f"<i>Hash diterima, sedang diverifikasi on-chain. Tunggu notifikasi DEPOSIT TERVERIFIKASI sebelum transfer Rupiah.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([
@@ -593,7 +596,7 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
         response_user = (
             f"✅ <b>TX Hash Diterima!</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"TX Hash: <code>{tx_hash}</code>\n\n"
+            f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
             f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
             f"(<b>biasanya di bawah 1 menit</b>). Setelah terverifikasi, admin akan "
             f"segera mentransfer Rupiah ke rekening Anda dan kamu akan menerima notifikasi. 🙏"

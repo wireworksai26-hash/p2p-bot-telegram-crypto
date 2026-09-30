@@ -155,7 +155,6 @@ class TestAdminReverifyReplay(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    @unittest.expectedFailure
     async def test_reverify_tolak_hash_milik_order_lain(self):
         """Serangan: order B (penyerang) setor hash milik deposit order A yang sah.
         verify_deposit lolos on-chain (wallet/amount/waktu sama), lalu admin klik
@@ -238,7 +237,7 @@ class TestHashInputAbuse(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    async def _kirim_hash(self, payload, alasan_verifikasi):
+    async def _kirim_hash(self, payload, alasan_verifikasi, bank_name="Bank Uji"):
         message = AsyncMock()
         message.text = payload
         update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=555))
@@ -251,7 +250,7 @@ class TestHashInputAbuse(unittest.IsolatedAsyncioTestCase):
                 "sell_network": "BSC",
                 "sell_crypto_amount": 10.0,
                 "sell_net_idr": 154000,
-                "sell_bank_name": "Bank Uji",
+                "sell_bank_name": bank_name,
                 "sell_bank_acc": "123456",
                 "sell_bank_holder": "Pemilik",
                 "sell_user_id": 555,
@@ -267,17 +266,16 @@ class TestHashInputAbuse(unittest.IsolatedAsyncioTestCase):
             await handle_tx_hash_input(update, context)
         return update, notify
 
-    @unittest.expectedFailure
     async def test_injection_tx_hash_tidak_lolos_ke_pesan_admin(self):
         """Bank/hash diketik user masuk ke pesan keputusan admin tanpa escape →
         bisa menyisipkan teks 'SEGERA TRANSFER' palsu."""
-        payload = "<b>HACK</b>abcdef123456"
-        _, notify = await self._kirim_hash(payload, "Menunggu konfirmasi jaringan")
+        _, notify = await self._kirim_hash(
+            "0x" + "12" * 32, "Menunggu konfirmasi jaringan", bank_name="<b>HACK</b>"
+        )
         teks = notify.call_args.args[1] if notify.call_args.args else ""
         self.assertIn("&lt;b&gt;HACK", teks)
         self.assertNotIn("<b>HACK", teks)
 
-    @unittest.expectedFailure
     async def test_hash_sampah_tidak_dianggap_menunggu(self):
         """Hash format invalid (ValueError) tidak boleh dibalas 'TX Hash Diterima'
         selama scanner belum tentu bisa mengonfirmasinya."""

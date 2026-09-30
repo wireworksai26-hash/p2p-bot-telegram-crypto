@@ -10,6 +10,7 @@ Menangani fitur:
 import logging
 import os
 from datetime import datetime, timedelta
+from html import escape as _esc
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -351,7 +352,7 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
         admin_caption = (
             f"📸 <b>BUKTI TRANSFER DITERIMA (TOPUP)</b>\n\n"
             f"ID Topup: <code>{topup.topup_id}</code>\n"
-            f"User: {update.effective_user.name} (ID: <code>{user_id}</code>)\n"
+            f"User: {_esc(update.effective_user.name)} (ID: <code>{user_id}</code>)\n"
             f"Total Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
             f"Tekan tombol <b>Approve</b> di bawah jika pembayaran valid untuk menambah saldo user secara otomatis."
         )
