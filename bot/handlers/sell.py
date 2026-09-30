@@ -704,22 +704,32 @@ async def cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """Membatalkan alur jual dan kembali ke menu utama."""
     query = update.callback_query
     if query:
-        try:
-            await query.answer("❌ Penjualan dibatalkan.", show_alert=True)
-        except Exception:
-            pass
-            
         order_id = context.user_data.get("sell_order_id")
+        batal_ok = True
         if order_id:
             db = SessionLocal()
             try:
                 from database.crud import update_order_status
-                update_order_status(db, order_id, new_status="cancelled", failure_reason="Dibatalkan oleh pengguna")
+                order = get_order_by_id(db, order_id)
+                if order is None or (order.status or "").upper() in {
+                    "WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED",
+                }:
+                    update_order_status(db, order_id, new_status="cancelled", failure_reason="Dibatalkan oleh pengguna")
+                else:
+                    batal_ok = False
             except Exception as e:
                 logger.warning(f"Gagal membatalkan order sell {order_id}: {e}")
             finally:
                 db.close()
-                
+
+        try:
+            if batal_ok:
+                await query.answer("❌ Penjualan dibatalkan.", show_alert=True)
+            else:
+                await query.answer("⚠️ Deposit sudah terkonfirmasi dan order diteruskan ke admin.", show_alert=True)
+        except Exception:
+            pass
+
         from bot.handlers.start import send_main_menu
         await send_main_menu(update, context)
     else:

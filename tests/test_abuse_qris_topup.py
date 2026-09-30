@@ -73,7 +73,6 @@ class TestCancelTopupAbuse(unittest.IsolatedAsyncioTestCase):
         finally:
             db.close()
 
-    @unittest.expectedFailure
     async def test_user_lain_tidak_bisa_membatalkan_topup(self):
         """Pesan invoice bisa di-forward; penekan tombol != pemilik invoice."""
         self.db.add(_topup(status="PENDING"))
@@ -89,7 +88,6 @@ class TestCancelTopupAbuse(unittest.IsolatedAsyncioTestCase):
             "user lain tidak boleh membatalkan topup yang bukan miliknya",
         )
 
-    @unittest.expectedFailure
     async def test_topup_success_tidak_bisa_dibatalkan(self):
         """Topup SUCCESS (saldo sudah masuk) di-flip ke CANCELLED = korupsi accounting."""
         self.db.add(_topup(status="SUCCESS"))

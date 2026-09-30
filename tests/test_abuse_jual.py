@@ -191,7 +191,6 @@ class TestRoundingTampilanVsExpected(unittest.TestCase):
 
 
 class TestCancelSellStateGuard(unittest.IsolatedAsyncioTestCase):
-    @unittest.expectedFailure
     async def test_cancel_tidak_boleh_hapus_order_terkonfirmasi(self):
         """Setelah deposit terkonfirmasi, user menekan Batal Jual → order jadi
         cancelled. Tidak boleh: pencairan/admin bisa kehilangan jejak."""

@@ -412,15 +412,25 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
 async def cancel_topup_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Membatalkan invoice topup."""
     query = update.callback_query
-    await query.answer()
 
     topup_id = query.data.replace("cancel_topup_", "")
     db = SessionLocal()
     try:
+        topup = get_topup_order_by_id(db, topup_id)
+        if not topup:
+            await query.answer("❌ Data topup tidak ditemukan.", show_alert=True)
+            return
+        if topup.telegram_id != query.from_user.id:
+            await query.answer("❌ Topup ini bukan milik Anda.", show_alert=True)
+            return
+        if (topup.status or "").upper() != "PENDING":
+            await query.answer(f"⚠️ Topup sudah {topup.status.lower()} dan tidak bisa dibatalkan.", show_alert=True)
+            return
         update_topup_status(db, topup_id, "CANCELLED")
     finally:
         db.close()
 
+    await query.answer()
     await query.edit_message_caption(
         caption=f"❌ <b>Invoice Topup {topup_id} telah dibatalkan.</b>",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
