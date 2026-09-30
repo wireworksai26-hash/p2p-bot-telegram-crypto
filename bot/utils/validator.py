@@ -5,6 +5,7 @@ Menangani validasi alamat wallet berdasarkan blockchain network (EVM, Solana, Tr
 serta validasi nominal rupiah dan crypto.
 """
 
+import math
 import re
 import base58
 from web3 import Web3
@@ -105,6 +106,10 @@ def validate_amount_idr(amount_str: str, min_amount: int = 5000, max_amount: int
 
     text = amount_str.strip()
 
+    # Tolak digit non-ASCII (Arab-Indic/fullwidth) yang lolos regex \d Unicode
+    if not text.isascii():
+        return False, 0
+
     # 1. Cek langsung jika input mirip alamat wallet blockchain
     if (
         text.startswith("0x")
@@ -164,7 +169,7 @@ def validate_crypto_amount(amount_str: str) -> tuple[bool, float]:
             return False, 0.0
             
         amount = float(cleaned)
-        if amount <= 0:
+        if not math.isfinite(amount) or amount <= 0:
             return False, 0.0
             
         return True, amount

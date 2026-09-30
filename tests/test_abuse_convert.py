@@ -132,7 +132,6 @@ class TestConfirmSwapHardening(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Stok tujuan tidak cukup", teks)
         self.assertEqual(self.db.query(Order).count(), 0)
 
-    @unittest.expectedFailure
     async def test_src_tgt_sama_persis_ditolak(self):
         """Callback bisa datang dari pesan lama/forward: server wajib menolak
         src == tgt pada koin DAN jaringan yang sama, bukan hanya UI menyembunyikannya."""
@@ -167,7 +166,6 @@ class TestTargetAddressSelfDealing(unittest.IsolatedAsyncioTestCase):
         def validate_address(self, address):
             return True
 
-    @unittest.expectedFailure
     async def test_target_alamat_hot_wallet_ditolak(self):
         hot = "0x" + "1" * 40
         message = AsyncMock()

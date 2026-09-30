@@ -272,7 +272,24 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Menyimpan detail rekening bank dan menyajikan summary order."""
     bank_info = update.message.text.strip()
-    
+
+    # Batas panjang: data bank digabung ke Order.buyer_wallet (String(250))
+    if len(bank_info) > 250:
+        keyboard = [
+            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()]
+        ]
+        await update.message.reply_text(
+            text=(
+                "❌ <b>Informasi Rekening Terlalu Panjang!</b>\n\n"
+                "Data rekening maksimal 250 karakter. Silakan kirim ulang lebih singkat:\n"
+                "<i>(Contoh: BCA, 882049281, Budi Santoso)</i>"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return INPUT_BANK
+
     # Validasi input sederhana (pastikan tidak kosong dan punya pemisah koma / spasi)
     if len(bank_info) < 8:
         keyboard = [

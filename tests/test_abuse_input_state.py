@@ -63,13 +63,11 @@ class TestValidateAmountIdr(unittest.TestCase):
                 ok, _ = validate_amount_idr(raw)
                 self.assertFalse(ok, f"{raw!r} harus ditolak")
 
-    @unittest.expectedFailure
     def test_digit_arab_ditolak(self):
         """Digit non-ASCII (\u0665\u0660\u0660\u0660 = 5000) lolos regex \\d Unicode."""
         ok, val = validate_amount_idr("\u0665\u0660\u0660\u0660")
         self.assertFalse(ok, f"digit non-ASCII harus ditolak (terbaca {val})")
 
-    @unittest.expectedFailure
     def test_digit_fullwidth_ditolak(self):
         """Digit fullwidth (５０００) juga lolos via int() Python."""
         ok, val = validate_amount_idr("\uff15\uff10\uff10\uff10")
@@ -88,7 +86,6 @@ class TestValidateCryptoAmount(unittest.TestCase):
                 ok, _ = validate_crypto_amount(raw)
                 self.assertFalse(ok, f"{raw!r} harus ditolak")
 
-    @unittest.expectedFailure
     def test_angka_raksasa_jadi_inf_ditolak(self):
         """'9'*400 lolos regex desimal lalu float() → inf dan DITERIMA sebagai
         jumlah crypto (harga jual dihitung dari inf)."""
@@ -162,7 +159,6 @@ class TestBankInfoFreeText(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    @unittest.expectedFailure
     async def test_data_bank_tidak_melebihi_kolom_db(self):
         message = AsyncMock()
         message.text = "Bank X, " + "9" * 300 + ", Pemilik"

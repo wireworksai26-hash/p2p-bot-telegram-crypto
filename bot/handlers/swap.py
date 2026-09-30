@@ -466,6 +466,18 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_TARGET_ADDR
 
+    hot_wallet = (getattr(sender, "wallet_address", "") or "").strip().lower()
+    if hot_wallet and target_addr.strip().lower() == hot_wallet:
+        keyboard = [
+            [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()]
+        ]
+        await update.message.reply_text(
+            f"❌ Alamat tujuan tidak boleh wallet milik bot sendiri. Silakan masukkan alamat wallet {tgt_net} pribadi Anda:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return INPUT_TARGET_ADDR
+
     context.user_data["swap_target_addr"] = target_addr
 
     src_sym = context.user_data["swap_src_symbol"]
@@ -519,6 +531,9 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fee_idr = context.user_data["swap_fee_idr"]
     target_addr = context.user_data["swap_target_addr"]
     seller_deposit_wallet = context.user_data["swap_seller_deposit_wallet"]
+    if src_sym == tgt_sym and src_net == tgt_net:
+        await query.edit_message_text("❌ Koin dan jaringan asal/tujuan sama persis. Convert tidak dijalankan.")
+        return ConversationHandler.END
     if tgt_net in MANUAL_PAYOUT_NETWORKS or not seller_deposit_wallet:
         await query.edit_message_text("Jaringan/wallet belum siap untuk auto-convert. Jangan menyetor crypto; hubungi admin.")
         return ConversationHandler.END
