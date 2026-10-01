@@ -295,11 +295,11 @@ def _seed_price_configs(db):
         return
 
     symbols = {
-        "USDT": 0.0, "USDC": 0.0, "ETH": 0.0, "SOL": 0.0,
-        "TRX": 0.0, "BNB": 0.0, "SUI": 0.0, "TON": 0.0,
-        "POL": 0.0, "MATIC": 0.0, "ARB": 0.0, "AVAX": 0.0,
-        "KAIA": 0.0, "BERA": 0.0, "APT": 0.0, "HYPE": 0.0,
-        "USDG": 0.0,
+        "USDT": 0.5, "USDC": 0.5, "ETH": 0.5, "SOL": 0.5,
+        "TRX": 0.5, "BNB": 0.5, "SUI": 0.5, "TON": 0.5,
+        "POL": 0.5, "MATIC": 0.5, "ARB": 0.5, "AVAX": 0.5,
+        "KAIA": 0.5, "BERA": 0.5, "APT": 0.5, "HYPE": 0.5,
+        "USDG": 0.5,
     }
     configs = [
         PriceConfig(symbol=sym, spread_pct=spread, is_active=True)

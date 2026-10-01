@@ -114,7 +114,7 @@ class TestMatchTransactionCrossAttribution(unittest.TestCase):
 
 
 class TestKodeUnikDaurUlang(unittest.TestCase):
-    """Kode unik 1..150: apa yang terjadi setelah order expired?"""
+    """Kode unik 1..200: apa yang terjadi setelah order expired?"""
 
     def setUp(self):
         Base.metadata.create_all(bind=engine)

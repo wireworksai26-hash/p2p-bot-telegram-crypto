@@ -147,7 +147,7 @@ class PriceConfig(Base):
     __tablename__ = 'price_config'
 
     symbol = Column(String(20), primary_key=True)
-    spread_pct = Column(Numeric(5, 2), default=1.5)  # Markup for buy, markdown for sell
+    spread_pct = Column(Numeric(5, 2), default=0.5)  # Markup for buy, markdown for sell
     is_active = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

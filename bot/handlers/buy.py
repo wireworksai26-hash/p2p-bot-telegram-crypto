@@ -44,7 +44,7 @@ from database.crud import (
     release_order_inventory,
 )
 from services.price_service import price_service, quote_source_text
-from services.fee_service import calculate_fee_idr, get_fee_category, eth_surcharge_note
+from services.fee_service import calculate_fee_idr, get_fee_category, gas_surcharge_note
 from services.gopay_service import gopay_service
 from bot.keyboards.crypto_select import (
     get_buy_symbol_keyboard,
@@ -306,7 +306,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>"
                 f"{quote_info}"
-                f"{eth_surcharge_note(network)}\n\n"
+                f"{gas_surcharge_note(symbol, network)}\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
                 f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
@@ -450,10 +450,10 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     # Tambahkan baris informasi metode pembayaran
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
     summary_text += f"\n💳 <b>Metode Pembayaran:</b> {method_label}"
-    summary_text += eth_surcharge_note(network)
+    summary_text += gas_surcharge_note(symbol, network)
     if method_code == "GOPAY_QRIS":
         summary_text += (
-            "\nℹ️ <i>Kode unik (1-999) akan ditambahkan ke total bayar "
+            "\nℹ️ <i>Kode unik (01-200) akan ditambahkan ke total bayar "
             "untuk verifikasi otomatis.</i>"
         )
     
@@ -616,7 +616,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"🪙 <b>Aset:</b> {format_crypto(crypto_amount, symbol)} ({network})\n"
                 f"💵 <b>Nominal Bayar:</b> {format_idr(total_idr)} (Saldo Bot)\n"
                 f"🔌 <b>Fee Layanan (dipotong):</b> -{format_idr(fee_idr)}"
-                f"{eth_surcharge_note(network)}\n"
+                f"{gas_surcharge_note(symbol, network)}\n"
                 f"💰 <b>Nilai Koin Diterima:</b> {format_idr(received_idr)}\n"
                 f"📍 <b>Wallet Tujuan:</b> <code>{buyer_wallet}</code>\n\n"
                 f"✅ Pembayaran menggunakan Saldo Bot lunas! Koin crypto sedang diproses untuk dikirimkan ke wallet Anda."
@@ -660,7 +660,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
                 f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>\n"
                 f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}"
-                f"{eth_surcharge_note(network)}\n"
+                f"{gas_surcharge_note(symbol, network)}\n"
                 f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
                 f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
                 f"📌 <b>Cara Bayar:</b>\n"

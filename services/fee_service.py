@@ -1,14 +1,26 @@
 """
 services/fee_service.py — Triple-Tier Fee Engine (USD, Altcoin, & Convert)
 ==========================================================================
-Menghitung biaya transaksi IDR fixed sesuai dengan aturan tier resmi dari client:
-1. USD Fee Tier (USDT & USDC): Min Rp 5.000, Max Rp 1.015.000
-2. Altcoin Fee Tier (ETH, SOL, SUI, TRX, BNB, MATIC, ARB, AVAX, KAIA, BERA, APT, TON, HYPE): Min Rp 5.000, Max Rp 1.010.000
-3. Convert Fee Tier (Tukar koin antar jaringan): Min Rp 6.000, Max Rp 1.010.000
+Menghitung biaya transaksi IDR sesuai aturan tier resmi dari client
+(update 1 Okt 2026):
+
+1. USD Fee Tier (USDT/USDC/USDG): Min Rp 5.000.
+2. Altcoin Fee Tier: Min Rp 5.000.
+3. Convert Fee Tier: Min Rp 6.000.
+4. Di atas tier fixed, fee memakai persen (tanpa batas atas):
+   ALTCOIN/CONVERT: 3% (1.010.001-2jt), 2,5% (2jt-3,5jt), 2% (3,5jt-8,5jt), 1,5% (>8,5jt)
+   USD: 2% (1.015.001-3,6jt), 1,5% (>3,6jt)
+   Fee persen dibulatkan ke bawah (int()).
+5. Jual altcoin (bukan USD) kena tambahan flat Rp 500 untuk nominal < Rp 1.010.000.
+6. Pasangan gas mahal (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON):
+   - surcharge kirim Rp 2.500 (hanya saat bot mengirim koin: Beli/Convert target),
+   - minimum transaksi Rp 7.500 untuk semua jenis transaksi.
+
+Lompatan/penurunan fee di batas tier adalah keputusan client (antisipasi
+fluktuasi harga coin) — jangan "diperhalus" tanpa persetujuan ulang.
 """
 
 import logging
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -82,28 +94,62 @@ CONVERT_FEE_TIERS = [
     (940001, 1010000, 18000),
 ]
 
-# Tambahan biaya pengiriman koin keluar di jaringan ETH L1.
-ETH_NETWORK_SURCHARGE_IDR = 2000
+# Tier persen di atas tier fixed (batas sambung: fixed terakhir + 1).
+USD_PERCENT_TIERS = [
+    (1_015_001, 3_600_000, 2.0),
+    (3_600_001, None, 1.5),
+]
+ALTCOIN_PERCENT_TIERS = [
+    (1_010_001, 2_000_000, 3.0),
+    (2_000_001, 3_500_000, 2.5),
+    (3_500_001, 8_500_000, 2.0),
+    (8_500_001, None, 1.5),
+]
+CONVERT_PERCENT_TIERS = ALTCOIN_PERCENT_TIERS
+
+# Surcharge gas untuk pasangan coin/jaringan dengan biaya kirim mahal.
+GAS_SURCHARGE_IDR = 2500
+GAS_SURCHARGE_PAIRS = {
+    ("ETH", "ETH"),
+    ("TRX", "TRON"),
+    ("USDT", "ETH"),
+    ("USDC", "ETH"),
+    ("USDT", "TRON"),
+}
+GAS_PAIR_MIN_IDR = 7500
+
+# Tambahan flat untuk JUAL altcoin (bukan USD), khusus nominal < Rp 1.010.000.
+SELL_ALTCOIN_SURCHARGE_IDR = 500
+SELL_ALTCOIN_SURCHARGE_BELOW = 1_010_000
 
 
-def eth_surcharge_note(network: str) -> str:
-    """Keterangan surcharge ETH untuk pembeli; string kosong bila jaringan lain."""
-    if (network or "").upper() != "ETH":
+def is_gas_pair(symbol: str, network: str) -> bool:
+    """True bila (coin, jaringan) termasuk pasangan gas mahal."""
+    return ((symbol or "").upper(), (network or "").upper()) in GAS_SURCHARGE_PAIRS
+
+
+def gas_surcharge_note(symbol: str, network: str) -> str:
+    """Keterangan surcharge gas untuk pesan; string kosong bila tidak kena."""
+    if not is_gas_pair(symbol, network):
         return ""
-    surcharge = f"{ETH_NETWORK_SURCHARGE_IDR:,}".replace(",", ".")
-    return f"\n⛽ <i>Fee sudah termasuk tambahan Rp {surcharge} untuk biaya kirim jaringan ETH.</i>"
+    surcharge = f"{GAS_SURCHARGE_IDR:,}".replace(",", ".")
+    return f"\n⛽ <i>Fee sudah termasuk tambahan Rp {surcharge} untuk biaya gas pengiriman.</i>"
 
 
-def _tier_fee(nominal_idr: int, tiers: list, category: str, min_nominal: int, max_nominal: int) -> int:
-    """Cari fee fixed dari list tier (min, max, fee). Raise jika di luar rentang."""
-    if nominal_idr < min_nominal:
-        raise ValueError(f"Minimum transaksi {category} adalah Rp {min_nominal:,}")
+def _percent_fee(nominal_idr: int, tiers: list) -> int:
+    """Fee persen (dibulatkan ke bawah) dari tier (min, max|None, pct)."""
+    for min_val, max_val, pct in tiers:
+        if nominal_idr >= min_val and (max_val is None or nominal_idr <= max_val):
+            return int(nominal_idr * pct / 100)
+    raise ValueError(f"Nominal Rp {nominal_idr:,} tidak masuk tier fee mana pun.")
+
+
+def _fixed_fee(nominal_idr: int, tiers: list) -> int | None:
+    """Fee fixed dari tier (min, max, fee); None bila di atas tier terakhir."""
     for min_val, max_val, fee in tiers:
         if min_val <= nominal_idr <= max_val:
             return fee
-    raise ValueError(
-        f"Pembelian atau Penjualan Nominal {category} di atas list (Rp {max_nominal:,}) tanya admin dahulu."
-    )
+    return None
 
 
 def calculate_fee_idr(
@@ -114,37 +160,52 @@ def calculate_fee_idr(
     is_outgoing: bool = True
 ) -> int:
     """
-    Menghitung fee fixed IDR berdasarkan nominal dan kategori transaksi.
-    
+    Menghitung fee IDR berdasarkan nominal dan kategori transaksi.
+
     Args:
         nominal_idr (int): Nominal transaksi dalam Rupiah.
         category (str): Kategori fee: 'USD', 'ALTCOIN', atau 'CONVERT'.
         symbol (str, optional): Simbol koin (e.g. 'ETH', 'TRX', 'USDT').
         network (str, optional): Jaringan blockchain (e.g. 'ETH', 'TRON').
-        is_outgoing (bool, optional): True jika bot mengirim koin ke buyer (Beli / Convert Target).
-                                      False jika buyer mengirim koin ke bot (Jual / Convert Source).
+        is_outgoing (bool, optional): True jika bot mengirim koin ke buyer (Beli / Convert target).
+                                      False jika buyer mengirim koin ke bot (Jual).
 
     Returns:
-        int: Fee fixed dalam Rupiah.
+        int: Fee dalam Rupiah.
     """
     category_upper = category.upper()
+    gas_pair = is_gas_pair(symbol, network)
+
+    if gas_pair:
+        min_nominal, min_note = GAS_PAIR_MIN_IDR, " (pasangan gas ETH/TRON)"
+    elif category_upper == "CONVERT":
+        min_nominal, min_note = 6000, ""
+    else:
+        min_nominal, min_note = 5000, ""
+
+    if nominal_idr < min_nominal:
+        raise ValueError(
+            f"Minimum transaksi {category_upper} adalah Rp {min_nominal:,}{min_note}"
+        )
 
     if category_upper == "USD":
-        if nominal_idr > 1_015_000:
-            raise ValueError("Pembelian atau Penjualan Nominal USD di atas Rp 1.015.000 silakan tanya admin dahulu.")
-        base_fee = _tier_fee(nominal_idr, USD_FEE_TIERS, "USD (USDT/USDC)", 5000, 1015000)
+        fixed, percent = USD_FEE_TIERS, USD_PERCENT_TIERS
     elif category_upper == "CONVERT":
-        if nominal_idr > 1_010_000:
-            raise ValueError("Transaksi Convert di atas Rp 1.010.000 silakan tanya admin dahulu.")
-        base_fee = _tier_fee(nominal_idr, CONVERT_FEE_TIERS, "Convert", 6000, 1010000)
+        fixed, percent = CONVERT_FEE_TIERS, CONVERT_PERCENT_TIERS
     else:  # Default: ALTCOIN
-        if nominal_idr > 1_010_000:
-            raise ValueError("Pembelian atau Penjualan Nominal Altcoin di atas Rp 1.010.000 silakan tanya admin dahulu.")
-        base_fee = _tier_fee(nominal_idr, ALTCOIN_FEE_TIERS, "Altcoin", 5000, 1010000)
+        fixed, percent = ALTCOIN_FEE_TIERS, ALTCOIN_PERCENT_TIERS
 
-    # Tambahan fee jaringan ETH (ERC20 / ETH L1) sebesar Rp 2.000 untuk transaksi pengiriman koin keluar
-    if network and network.upper() == "ETH" and is_outgoing:
-        base_fee += ETH_NETWORK_SURCHARGE_IDR
+    base_fee = _fixed_fee(nominal_idr, fixed)
+    if base_fee is None:
+        base_fee = _percent_fee(nominal_idr, percent)
+
+    # Surcharge gas: hanya saat bot mengirim koin keluar (Beli / Convert target).
+    if gas_pair and is_outgoing:
+        base_fee += GAS_SURCHARGE_IDR
+
+    # Tambahan flat jual altcoin (bukan USD), nominal di bawah batas tier persen.
+    if (not is_outgoing) and category_upper == "ALTCOIN" and nominal_idr < SELL_ALTCOIN_SURCHARGE_BELOW:
+        base_fee += SELL_ALTCOIN_SURCHARGE_IDR
 
     return base_fee
 
@@ -152,7 +213,7 @@ def calculate_fee_idr(
 def get_fee_category(symbol: str) -> str:
     """
     Menentukan kategori fee berdasarkan simbol koin.
-    USDT dan USDC -> 'USD', selainnya -> 'ALTCOIN'.
+    USDT, USDC, dan USDG -> 'USD' (list lebih murah), selainnya -> 'ALTCOIN'.
     """
     sym_upper = symbol.upper()
     if sym_upper in ["USDT", "USDC", "USDG"]:

@@ -740,10 +740,10 @@ def get_low_balance_wallets(db: Session) -> list[WalletBalance]:
         raise
 
 
-def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int = 150) -> int:
+def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int = 200) -> int:
     """
-    Menghasilkan kode unik kecil (1..150, di bawah 100-200 perak) yang belum dipakai oleh order/topup PENDING lainnya.
-    Mencegah selisih pembayaran terlalu jauh dari nominal asli transaksi.
+    Menghasilkan kode unik kecil (01..200) yang belum dipakai oleh order/topup PENDING
+    lainnya. Mencegah selisih pembayaran terlalu jauh dari nominal asli transaksi.
     """
     import random
     try:
@@ -761,13 +761,13 @@ def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int =
         }
         used_codes = pending_order_codes.union(pending_topup_codes)
 
-        # Cari kode unik yang belum terpakai di rentang kecil (1..150)
+        # Cari kode unik yang belum terpakai di rentang kecil (01..200)
         available = [c for c in range(min_code, max_code + 1) if c not in used_codes]
         if available:
             return random.choice(available)
-        
-        # Fallback jika ada >150 order pending bersamaan
-        wider_available = [c for c in range(1, 1000) if c not in used_codes]
+
+        # Fallback jika ada >200 order pending bersamaan — tetap di rentang 01..200
+        wider_available = [c for c in range(1, 201) if c not in used_codes]
         if wider_available:
             return random.choice(wider_available)
         return random.randint(min_code, max_code)

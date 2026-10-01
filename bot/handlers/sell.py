@@ -208,24 +208,9 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Bersih nominal IDR yang diterima customer (Gross - Fee)
         net_nominal_idr = gross_nominal_idr - fee_idr
         
-        # Cek minimal transaksi Rp 5.000 bersih
-        if net_nominal_idr < 5000:
-            keyboard = [
-                [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-                [get_owner_button()]
-            ]
-            await update.message.reply_text(
-                text=(
-                    f"⚠️ <b>Nominal Terlalu Kecil!</b>\n\n"
-                    f"Hasil penjualan bersih Anda adalah {format_idr(net_nominal_idr)}.\n"
-                    f"Minimal penjualan bersih yang kami proses adalah <b>Rp 5.000</b>.\n"
-                    f"Silakan masukkan jumlah koin yang lebih besar:"
-                ),
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
-            db.close()
-            return INPUT_AMOUNT
+        # Minimum transaksi ditegakkan oleh calculate_fee_idr pada nominal KOTOR (gross):
+        # Rp 5.000 default; Rp 7.500 untuk pasangan gas (ETH-ETH/TRX-TRON/USDT-ETH/
+        # USDC-ETH/USDT-TRON). Net boleh di bawah Rp 5.000 (contoh client: jual 105k -> net 99k).
 
         # Simpan rincian perhitungan ke context
         context.user_data["sell_crypto_amount"] = crypto_amount
