@@ -24,5 +24,6 @@ di `tests/test_abuse_{beli,jual,convert,input_state,qris_topup}.py`
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260930-tp4 | Fix high-severity abuse bugs from 26 Sep audit (12 fix: replay hash jual, HTML escape, hash pre-validasi, guard cancel topup/sell, invariant convert, hardening validator) — expected failures 22 → 10 | 2026-09-30 | 41a733b | [260930-tp4-fix-high-severity-abuse-bugs-from-26-sep](./quick/260930-tp4-fix-high-severity-abuse-bugs-from-26-sep/) |
+| 261001-fix | Fix Telegram bot /start failure & PM2 crash loop from Railway PostgreSQL hostname resolution error with graceful SQLite fallback | 2026-10-01 | In Progress | [261001-fix-railway-db-crash-start-loop](./quick/261001-fix-railway-db-crash-start-loop/) |
 
-Last activity: 2026-09-30 - Completed quick task 260930-tp4: Fix high-severity abuse bugs (audit 26 Sep) - 3 commit atomik, suite 205 OK (expected failures=10)
+Last activity: 2026-10-01 - Created quick plan 261001: Fix Railway PostgreSQL connection failure & auto SQLite fallback.

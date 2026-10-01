@@ -98,8 +98,18 @@ def init_database():
     Create all SQLAlchemy tables (no-op if they already exist)
     and seed default data for fee_tiers and price_config.
     """
+    import database.connection as db_conn
     logger.info("Creating database tables (if not exist)...")
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=db_conn.engine)
+    except Exception as ddl_err:
+        logger.error(
+            f"⚠️ [DATABASE] Gagal DDL create_all pada engine aktif: {ddl_err}. "
+            "Melakukan fallback ke SQLite lokal..."
+        )
+        db_conn.engine = db_conn._create_sqlite_engine("sqlite:///./p2p_bot.db")
+        db_conn.SessionLocal.configure(bind=db_conn.engine)
+        Base.metadata.create_all(bind=db_conn.engine)
 
     # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders
     _migrate_users_schema()
@@ -107,7 +117,7 @@ def init_database():
     _migrate_inventory_schema()
     _migrate_orders_schema()
 
-    db = SessionLocal()
+    db = db_conn.SessionLocal()
     try:
         _seed_price_configs(db)
         from database.crud import sync_gopay_session_file

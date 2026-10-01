@@ -30,6 +30,9 @@ if (dbUrl && (dbUrl.startsWith('postgres://') || dbUrl.startsWith('postgresql://
             poolConfig.ssl = { rejectUnauthorized: false };
         }
         pool = new Pool(poolConfig);
+        pool.on('error', (err) => {
+            console.warn('[DB_SESSION] PostgreSQL pool background error:', err.message);
+        });
     } catch (err) {
         console.warn('[DB_SESSION] Gagal inisialisasi koneksi PostgreSQL:', err.message);
     }
