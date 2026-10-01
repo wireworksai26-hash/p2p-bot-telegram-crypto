@@ -467,6 +467,20 @@ def setup_scheduler():
         coalesce=True,
     )
 
+    # --- Payout Watchdog (every 60s) ---
+    # Order yang sudah ter-broadcast tapi receipt-nya telat tidak boleh
+    # nyangkut manual_review tanpa penyelesaian otomatis.
+    scheduler.add_job(
+        _job_reconcile_payouts,
+        "interval",
+        seconds=60,
+        id="payout_watchdog",
+        name="Reconcile broadcasted payouts without receipt",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
     # --- QRIS Topup Polling Job (every 20s) ---
     scheduler.add_job(
         _job_check_pending_topups,
@@ -571,6 +585,18 @@ async def _job_monitor_deposits():
         await deposit_detector.scan_incoming_deposits(bot_app=bot_app)
     except Exception as exc:
         logger.error("Deposit detector job failed: %s", exc, exc_info=True)
+
+
+async def _job_reconcile_payouts():
+    """Watchdog payout: selesaikan order broadcast yang receipt-nya telat."""
+    try:
+        from services.payout_watchdog import reconcile_broadcasted_payouts
+        from services.bot_runtime import bot_app
+        jumlah = await reconcile_broadcasted_payouts(bot=bot_app)
+        if jumlah:
+            logger.info("Payout watchdog: %s order direkonsiliasi COMPLETED", jumlah)
+    except Exception as exc:
+        logger.error("Payout watchdog job failed: %s", exc, exc_info=True)
 
 
 async def _job_expire_orders():

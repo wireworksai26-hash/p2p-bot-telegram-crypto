@@ -364,9 +364,16 @@ class TonSender(BaseCryptoSender):
             except Exception as exc:
                 logger.warning("Gagal membaca saldo jetton penerima (%s)", type(exc).__name__)
 
-        for _ in range(15):
+        for _ in range(20):
             try:
                 if symbol == "USDT":
+                    # Saldo awal bisa gagal dibaca (rate limit tonapi). Jangan
+                    # lewati verifikasi — coba baca ulang tiap iterasi.
+                    if jetton_before is None:
+                        try:
+                            jetton_before = await self._jetton_balance_of(recipient)
+                        except Exception:
+                            jetton_before = None
                     if jetton_before is not None:
                         current = await self._jetton_balance_of(recipient)
                         if current >= jetton_before + amount_float - 1e-9:

@@ -193,7 +193,7 @@ class EVMSender(BaseCryptoSender):
                 "https://hyperliquid.drpc.org",
             ],
             "chain_id": 999,
-            "explorer": "https://hyperevm.cloud",
+            "explorer": "https://hyperscan.com",
             "native_symbol": "HYPE",
             "tokens": {}
         }

@@ -582,21 +582,35 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                 yield tx["hash"]
     elif network in EVM_NETWORKS:
         sender = CryptoSenderFactory.get_sender(network)
-        w3 = _scan_web3(sender.rpc_list[0])
-        if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
-            raise ValueError("Chain ID tidak sesuai.")
-        latest = await asyncio.to_thread(lambda: w3.eth.block_number)
         native = symbol == sender.config["native_symbol"] or (network == "POLYGON" and symbol == "POL")
         if native:
-            # Full blocks avoid one RPC per transaction. Bound work per cycle.
-            for height in range(latest, max(-1, latest - 500), -1):
-                block = await asyncio.to_thread(w3.eth.get_block, height, full_transactions=True)
-                if block["timestamp"] < since:
-                    break
-                for tx in block["transactions"]:
-                    if (tx.get("to") or "").lower() == wallet.lower():
-                        yield w3.to_hex(tx["hash"])
+            # Scan blok penuh; rotasi RPC supaya RPC terbatas (mis. Alchemy 429)
+            # tidak mematikan seluruh siklus scan.
+            last_error = None
+            for rpc in _ordered_rpcs(network, sender.rpc_list):
+                try:
+                    nw3 = _scan_web3(rpc)
+                    if await asyncio.to_thread(lambda: nw3.eth.chain_id) != sender.config["chain_id"]:
+                        raise ValueError("Chain ID tidak sesuai.")
+                    latest = await asyncio.to_thread(lambda: nw3.eth.block_number)
+                    for height in range(latest, max(-1, latest - 500), -1):
+                        block = await asyncio.to_thread(nw3.eth.get_block, height, full_transactions=True)
+                        if block["timestamp"] < since:
+                            break
+                        for tx in block["transactions"]:
+                            if (tx.get("to") or "").lower() == wallet.lower():
+                                yield nw3.to_hex(tx["hash"])
+                    _scan_rpc_cache[network] = rpc
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning("Scan %s/%s blok gagal via %s: %s", network, symbol, rpc, exc)
+            raise RuntimeError(f"scan blok gagal di semua RPC {network}: {last_error}")
         else:
+            w3 = _scan_web3(_ordered_rpcs(network, sender.rpc_list)[0])
+            if await asyncio.to_thread(lambda: w3.eth.chain_id) != sender.config["chain_id"]:
+                raise ValueError("Chain ID tidak sesuai.")
+            latest = await asyncio.to_thread(lambda: w3.eth.block_number)
             token = sender.config["tokens"].get(symbol)
             if not token:
                 return

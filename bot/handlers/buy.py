@@ -870,19 +870,28 @@ async def finalize_gopay_buy_payment(
             menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
             await safe_send_message(bot or bot_app, order.telegram_id, user_msg, reply_markup=menu_keyboard)
         else:
+            # Hash tetap disimpan walau receipt belum terkonfirmasi — supaya
+            # watchdog (services/payout_watchdog.py) bisa menyelesaikan order
+            # begitu receipt muncul, bukan nyangkut manual_review tanpa jejak.
+            tx_hash_gagal = (result.get("tx_hash") or "").strip()
+            extra = {"payout_tx_hash": tx_hash_gagal, "tx_hash": tx_hash_gagal} if tx_hash_gagal else {}
             update_order_status(
                 db,
                 order.order_id,
                 new_status="manual_review",
                 failure_reason=result["error_message"],
+                **extra,
             )
+            jejak = f"\nTX (broadcast): <code>{tx_hash_gagal}</code>" if tx_hash_gagal else ""
+            if result.get("explorer_url"):
+                jejak += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
             admin_msg = (
                 f"🚨 <b>MANUAL REVIEW REQUIRED (GoPay QRIS)</b>\n\n"
                 f"Order: <code>{order.order_id}</code>\n"
                 f"User: {order.telegram_id}\n"
                 f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
                 f"Wallet: <code>{order.buyer_wallet}</code>\n"
-                f"Error: {result['error_message']}\n\n"
+                f"Error: {result['error_message']}{jejak}\n\n"
                 f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual."
             )
             await notify_admins(bot or bot_app, admin_msg, kind="error", butuh_tindakan=True)
