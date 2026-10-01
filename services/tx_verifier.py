@@ -593,13 +593,24 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                     if await asyncio.to_thread(lambda: nw3.eth.chain_id) != sender.config["chain_id"]:
                         raise ValueError("Chain ID tidak sesuai.")
                     latest = await asyncio.to_thread(lambda: nw3.eth.block_number)
-                    for height in range(latest, max(-1, latest - 500), -1):
-                        block = await asyncio.to_thread(nw3.eth.get_block, height, full_transactions=True)
-                        if block["timestamp"] < since:
+                    # Batch paralel 10 blok: walk 500 blok sequential = siklus
+                    # scan lambat (>50 dtk) dan job deposit saling tumpuk.
+                    heights = list(range(latest, max(-1, latest - 500), -1))
+                    stop = False
+                    for i in range(0, len(heights), 10):
+                        blocks = await asyncio.gather(*[
+                            asyncio.to_thread(nw3.eth.get_block, h, full_transactions=True)
+                            for h in heights[i:i + 10]
+                        ])
+                        for block in blocks:
+                            if block["timestamp"] < since:
+                                stop = True
+                                break
+                            for tx in block["transactions"]:
+                                if (tx.get("to") or "").lower() == wallet.lower():
+                                    yield nw3.to_hex(tx["hash"])
+                        if stop:
                             break
-                        for tx in block["transactions"]:
-                            if (tx.get("to") or "").lower() == wallet.lower():
-                                yield nw3.to_hex(tx["hash"])
                     _scan_rpc_cache[network] = rpc
                     return
                 except Exception as exc:
