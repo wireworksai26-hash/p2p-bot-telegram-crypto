@@ -33,8 +33,10 @@ from database.crud import (
     claim_topup_success,
 )
 from services.gopay_service import gopay_service
+from services.fee_service import calculate_qris_mdr
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_idr
+from bot.utils.flow_guard import block_if_busy
 from bot.utils.validator import validate_amount_idr
 from config.assets import QRIS_STATIC_IMAGE
 from bot.utils.emojis import (
@@ -94,6 +96,8 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Menampilkan pilihan nominal preset topup saldo."""
+    if await block_if_busy("topup", update, context):
+        return None
     query = update.callback_query
     await query.answer()
 
@@ -185,7 +189,8 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
     db = SessionLocal()
     try:
         unique_code = generate_unique_payment_code(db)
-        final_amount = amount + unique_code
+        mdr_idr = calculate_qris_mdr(amount)
+        final_amount = amount + mdr_idr + unique_code
         topup_order = create_topup_order(
             db=db,
             topup_id=topup_id,
@@ -194,16 +199,19 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
             expires_at=expires_at
         )
         topup_order.unique_code = unique_code
+        topup_order.mdr_idr = mdr_idr
         db.commit()
     finally:
         db.close()
 
     context.user_data["active_topup_id"] = topup_id
 
+    mdr_line = f"\n🧾 <b>Pajak QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
     caption_text = (
         f"{E_MONEY()} <b>INVOICE TOPUP SALDO BOT (QRIS)</b>\n\n"
         f"🎫 <b>ID Topup</b>: <code>{topup_id}</code>\n"
-        f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_amount)}</b>\n"
+        f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_amount)}</b>"
+        f"{mdr_line}\n"
         f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
         f"📌 <b>Cara Bayar:</b>\n"
         f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
@@ -291,11 +299,15 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 await query.answer("✅ Pembayaran diterima! Menambahkan saldo...", show_alert=False)
             except Exception:
                 pass
-            new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+            # Pajak QRIS tidak masuk saldo (merchant yang menanggung ke GoPay).
+            topup_mdr = int(topup.mdr_idr or 0)
+            new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr - topup_mdr)
+            mdr_credit_line = f"\n🧾 Pajak QRIS 0,3%: -{format_idr(topup_mdr)}" if topup_mdr else ""
 
             success_text = (
                 f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI!</b>\n\n"
-                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil masuk!\n"
+                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr - topup_mdr)}</b> telah berhasil masuk!"
+                f"{mdr_credit_line}\n"
                 f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
                 f"<i>Terima kasih! Anda dapat langsung menggunakan saldo ini untuk membeli crypto secara instan.</i>"
             )
@@ -469,7 +481,6 @@ topup_conversation_handler = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_topup_flow, pattern="^cancel_topup$"),
         CallbackQueryHandler(cancel_topup_flow, pattern="^menu_back$"),
-        CallbackQueryHandler(cancel_topup_flow, pattern="^(menu_buy|menu_sell|start_swap|menu_price|menu_stocks|menu_history|menu_snk)$"),
         CommandHandler("cancel", cancel_topup_flow),
         CommandHandler("start", cancel_topup_flow),
     ],

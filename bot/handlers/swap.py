@@ -42,6 +42,7 @@ from services.detector import deposit_detector
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto
 from bot.utils.telegram_utils import notify_admins
+from bot.utils.flow_guard import block_if_busy
 from bot.utils.emojis import (
     E_SWAP,
     E_CHECK,
@@ -87,6 +88,8 @@ NETWORKS_BY_SYMBOL = {
 
 async def start_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Langkah 1: Mulai alur Swap / Convert — Pilih Koin Asal."""
+    if await block_if_busy("swap", update, context):
+        return None
     query = update.callback_query
     if query:
         await query.answer()
@@ -873,7 +876,6 @@ swap_conv_handler = ConversationHandler(
         CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
         CallbackQueryHandler(cancel_swap, pattern="^cancel_swap_order_"),
         CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
-        CallbackQueryHandler(cancel_swap, pattern="^(menu_buy|menu_sell|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
         CommandHandler("cancel", cancel_swap),
         CommandHandler("start", cancel_swap),
     ],

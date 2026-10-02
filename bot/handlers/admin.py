@@ -5,9 +5,11 @@ Berisi perintah dan kontrol administratif khusus untuk owner/admin bot.
 Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfirmasi order.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 
 from config.settings import settings
@@ -354,6 +356,10 @@ def build_admin_broadcast_view() -> str:
         "Fitur ini memungkinkan Anda mengirimkan siaran pesan resmi ke seluruh pengguna bot secara serentak.\n\n"
         "📝 <b>Format Perintah:</b>\n"
         "<code>/broadcast [PESAN PENGUMUMAN]</code>\n\n"
+        "🖼️ <b>Siaran bergambar (ready coin / campaign):</b>\n"
+        "• Kirim poster sebagai FOTO dengan caption diawali <code>/broadcast ...</code>, ATAU\n"
+        "• Reply foto poster dengan <code>/broadcast ...</code>.\n"
+        "Contoh caption: <code>/broadcast USDC jaringan ARC READY! Ketik /start untuk membeli.</code>\n\n"
         "💡 <b>Contoh Penggunaan:</b>\n"
         "<code>/broadcast 🚀 Promo Spesial Hari Ini! Rate USDT termurah se-Indonesia & bebas biaya admin. Transaksi sekarang di @hsn_store_bot!</code>\n\n"
         "⚠️ <b>Catatan Penting:</b>\n"
@@ -1256,51 +1262,119 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
         db.close()
 
 
+# Jeda tiap N pesan broadcast agar tidak kena flood-limit Telegram.
+BROADCAST_PACE_EVERY = 20
+BROADCAST_PACE_SECONDS = 1.0
+
+
+def _retry_after_seconds(exc: Exception) -> float:
+    """Delay aman dari RetryAfter (int maupun timedelta)."""
+    try:
+        value = getattr(exc, "retry_after", 1)
+        if hasattr(value, "total_seconds"):
+            value = value.total_seconds()
+        return float(value) + 1
+    except Exception:
+        return 2.0
+
+
+async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
+                                 photo_file_id: str | None = None) -> bool:
+    """Kirim 1 pesan broadcast; retry sekali saat flood-limit. True bila sukses."""
+    for attempt in (1, 2):
+        try:
+            if photo_file_id:
+                await bot.send_photo(
+                    chat_id=telegram_id, photo=photo_file_id,
+                    caption=text, parse_mode="HTML",
+                )
+            else:
+                await bot.send_message(
+                    chat_id=telegram_id, text=text, parse_mode="HTML",
+                )
+            return True
+        except RetryAfter as flood:
+            await asyncio.sleep(_retry_after_seconds(flood))
+            if attempt == 2:
+                return False
+        except Exception:
+            return False
+    return False
+
+
 async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mengirim pesan broadcast/siaran ke seluruh user terdaftar di bot."""
+    """Siaran ke seluruh user terdaftar: teks saja atau foto + caption.
+
+    Cara pakai (admin only):
+    - Teks: /broadcast Halo member...
+    - Foto: kirim poster dengan caption diawali /broadcast ... (atau reply
+      foto poster dengan /broadcast ...).
+    """
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
 
-    # Validasi argument: /broadcast Pengumuman penting
-    if not context.args:
-        await update.message.reply_text("⚠️ Format salah. Masukkan pesan siaran. Contoh:\n`/broadcast Halo member...`")
+    message = update.message
+    if message is None:
         return
 
-    broadcast_msg = update.message.text.replace("/broadcast", "").strip()
+    photo_file_id = None
+    if message.photo:
+        photo_file_id = message.photo[-1].file_id
+        raw = message.caption or ""
+    elif message.reply_to_message and message.reply_to_message.photo:
+        photo_file_id = message.reply_to_message.photo[-1].file_id
+        raw = message.text or ""
+    else:
+        raw = message.text or ""
+
+    broadcast_msg = raw.replace("/broadcast", "", 1).strip()
+    if not broadcast_msg and not photo_file_id:
+        await message.reply_text(
+            "⚠️ Format salah.\n"
+            "Teks: <code>/broadcast Halo member...</code>\n"
+            "Foto: kirim poster dengan caption <code>/broadcast ...</code> "
+            "atau reply foto poster dengan <code>/broadcast ...</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    header = "📢 <b>PENGUMUMAN DARI OWNER</b>"
+    full_text = f"{header}\n\n{broadcast_msg}" if broadcast_msg else header
 
     db = SessionLocal()
     try:
         users = db.query(User).filter(User.is_banned == False).all() # noqa: E712
         if not users:
-            await update.message.reply_text("ℹ️ Tidak ada pengguna terdaftar untuk dikirim broadcast.")
+            await message.reply_text("ℹ️ Tidak ada pengguna terdaftar untuk dikirim broadcast.")
             return
 
-        await update.message.reply_text(f"⏳ Mengirim siaran ke {len(users)} pengguna...")
-        
+        mode = "Foto + Teks" if photo_file_id else "Teks"
+        await message.reply_text(f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...")
+
         success_count = 0
         fail_count = 0
-        
-        for u in users:
-            try:
-                await context.bot.send_message(
-                    chat_id=u.telegram_id,
-                    text=f"📢 <b>PENGUMUMAN DARI OWNER</b>\n\n{broadcast_msg}",
-                    parse_mode="HTML"
-                )
+
+        for index, u in enumerate(users, start=1):
+            if await _send_broadcast_to_user(
+                context.bot, u.telegram_id, full_text, photo_file_id
+            ):
                 success_count += 1
-            except Exception:
+            else:
                 fail_count += 1
-                
-        await update.message.reply_text(
+            if index % BROADCAST_PACE_EVERY == 0:
+                await asyncio.sleep(BROADCAST_PACE_SECONDS)
+
+        await message.reply_text(
             f"📢 <b>Broadcast Selesai</b>\n"
+            f"• Mode: <code>{mode}</code>\n"
             f"• Sukses terkirim: <code>{success_count} user</code>\n"
             f"• Gagal/Blokir bot: <code>{fail_count} user</code>",
             parse_mode="HTML"
         )
     except Exception as e:
         logger.error(f"Error broadcast: {e}", exc_info=True)
-        await update.message.reply_text("❌ Terjadi kesalahan saat mengirim broadcast.")
+        await message.reply_text("❌ Terjadi kesalahan saat mengirim broadcast.")
     finally:
         db.close()
 

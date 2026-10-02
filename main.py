@@ -20,7 +20,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -312,6 +312,23 @@ def _seed_price_configs(db):
 # =============================================================
 # 2. TELEGRAM BOT SETUP
 # =============================================================
+BOT_COMMAND_MENU = [
+    ("start", "Memulai bot"),
+    ("cancel", "Membatalkan transaksi"),
+]
+
+
+async def set_bot_commands(application: Application) -> None:
+    """Daftarkan menu command (tombol Menu di Telegram) — idempotent tiap startup."""
+    try:
+        await application.bot.set_my_commands(
+            [BotCommand(cmd, desc) for cmd, desc in BOT_COMMAND_MENU]
+        )
+        logger.info("Menu command Telegram terdaftar: %s", [c for c, _ in BOT_COMMAND_MENU])
+    except Exception as exc:
+        logger.warning("Gagal mendaftarkan menu command: %s", exc)
+
+
 def build_bot_application() -> Application:
     """
     Build the python-telegram-bot Application and register
@@ -323,6 +340,7 @@ def build_bot_application() -> Application:
     application = (
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
+        .post_init(set_bot_commands)
         .build()
     )
 

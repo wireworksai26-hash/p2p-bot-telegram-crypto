@@ -44,7 +44,7 @@ from database.crud import (
     release_order_inventory,
 )
 from services.price_service import price_service, quote_source_text
-from services.fee_service import calculate_fee_idr, get_fee_category, gas_surcharge_note
+from services.fee_service import calculate_fee_idr, get_fee_category, gas_surcharge_note, calculate_qris_mdr, qris_mdr_note
 from services.gopay_service import gopay_service
 from bot.keyboards.crypto_select import (
     get_buy_symbol_keyboard,
@@ -55,6 +55,7 @@ from bot.utils.validator import validate_amount_idr, validate_wallet_address
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
+from bot.utils.flow_guard import block_if_busy
 from bot.utils.emojis import (
     E_CARD,
     E_DOLLAR,
@@ -88,6 +89,8 @@ async def start_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     Entry point alur Beli dari klik tombol menu utama.
     """
+    if await block_if_busy("buy", update, context):
+        return None
     query = update.callback_query
     await query.answer()
     
@@ -106,6 +109,8 @@ async def start_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     Entry point alur Beli dari ketik command /buy.
     """
+    if await block_if_busy("buy", update, context):
+        return None
     await update.message.reply_text(
         text=(
             f"{E_CART()} <b>BELI CRYPTOCURRENCY</b>\n\n"
@@ -306,7 +311,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>"
                 f"{quote_info}"
-                f"{gas_surcharge_note(symbol, network)}\n\n"
+                f"{gas_surcharge_note(symbol, network)}"
+                f"{qris_mdr_note(nominal_idr)}\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
                 f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
@@ -402,7 +408,8 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         text=(
             "💳 <b>PILIH METODE PEMBAYARAN</b>\n\n"
             f"Total Pembayaran: <b>{format_idr(total_idr)}</b>\n"
-            f"Saldo IDR Anda: <b>{format_idr(int(user_balance))}</b>\n\n"
+            f"Saldo IDR Anda: <b>{format_idr(int(user_balance))}</b>"
+            f"{qris_mdr_note(total_idr)}\n\n"
             "Silakan pilih metode pembayaran di bawah ini:"
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -451,7 +458,10 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
     summary_text += f"\n💳 <b>Metode Pembayaran:</b> {method_label}"
     summary_text += gas_surcharge_note(symbol, network)
+    mdr_idr = calculate_qris_mdr(nominal_idr) if method_code == "GOPAY_QRIS" else 0
+    context.user_data["buy_mdr_idr"] = mdr_idr
     if method_code == "GOPAY_QRIS":
+        summary_text += qris_mdr_note(nominal_idr)
         summary_text += (
             "\nℹ️ <i>Kode unik (01-200) akan ditambahkan ke total bayar "
             "untuk verifikasi otomatis.</i>"
@@ -632,7 +642,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         # --- 2b. GoPay QRIS Payment (QRIS Statis, pembayaran manual) ---
         if method_code == "GOPAY_QRIS":
             unique_code = generate_unique_payment_code(db)
-            final_total_idr = int(total_idr) + unique_code
+            mdr_idr = int(context.user_data.get("buy_mdr_idr") or 0)
+            final_total_idr = int(total_idr) + mdr_idr + unique_code
 
             order_data = {
                 "order_id": order_id,
@@ -644,6 +655,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "price_per_unit": int(price_per_unit),
                 "nominal_idr": int(nominal_idr),
                 "fee_idr": int(fee_idr),
+                "mdr_idr": mdr_idr,
                 "unique_code": unique_code,
                 "total_idr": final_total_idr,
                 "buyer_wallet": buyer_wallet,
@@ -655,12 +667,14 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
             # Kirim QRIS dinamis + instruksi pembayaran otomatis
             received_idr = context.user_data["buy_received_idr"]
+            mdr_line = f"\n🧾 <b>Pajak QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
             caption = (
                 f"{E_CARD()} <b>BAYAR VIA QRIS DINAMIS</b>\n\n"
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
                 f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>\n"
                 f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}"
-                f"{gas_surcharge_note(symbol, network)}\n"
+                f"{gas_surcharge_note(symbol, network)}"
+                f"{mdr_line}\n"
                 f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
                 f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
                 f"📌 <b>Cara Bayar:</b>\n"
@@ -705,7 +719,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"Order ID: <code>{order_id}</code>\n"
                 f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
                 f"Koin: {format_crypto(crypto_amount, symbol)} ({network})\n"
-                f"Total Pembayaran: <b>{format_idr(final_total_idr)}</b> (Kode Unik: {unique_code})\n"
+                f"Total Pembayaran: <b>{format_idr(final_total_idr)}</b> (Kode Unik: {unique_code}"
+                f"{f', Pajak QRIS: {format_idr(mdr_idr)}' if mdr_idr else ''})\n"
                 f"Metode: GOPAY_QRIS\n"
                 f"Wallet: <code>{buyer_wallet}</code>"
             )
@@ -1124,7 +1139,6 @@ buy_conversation_handler = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
         CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
-        CallbackQueryHandler(cancel_buy, pattern="^(menu_sell|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
         CommandHandler("cancel", cancel_buy),
         CommandHandler("start", cancel_buy),
     ],

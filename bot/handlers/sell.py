@@ -36,6 +36,7 @@ from bot.utils.validator import validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_SELL
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
+from bot.utils.flow_guard import block_if_busy
 from bot.utils.emojis import E_CHART, E_COIN, E_DOLLAR, E_MONEY, E_CHECK, E_WARN, CUSTOM_EMOJI_IDS
 from config.settings import settings
 
@@ -78,6 +79,8 @@ def get_hot_wallet_address(network: str) -> str:
 
 async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point alur Jual dari klik tombol menu."""
+    if await block_if_busy("sell", update, context):
+        return None
     query = update.callback_query
     await query.answer()
     
@@ -97,6 +100,8 @@ async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point alur Jual dari ketik command /sell."""
+    if await block_if_busy("sell", update, context):
+        return None
     await update.message.reply_text(
         text=(
             f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
@@ -800,7 +805,6 @@ sell_conversation_handler = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
         CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
-        CallbackQueryHandler(cancel_sell, pattern="^(menu_buy|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
         CommandHandler("cancel", cancel_sell),
         CommandHandler("start", cancel_sell),
     ],

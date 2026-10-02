@@ -14,6 +14,14 @@ from telegram.ext import ContextTypes
 
 from database.connection import SessionLocal
 from services.price_service import price_service
+from services.fee_service import (
+    ALTCOIN_FEE_TIERS,
+    ALTCOIN_PERCENT_TIERS,
+    CONVERT_FEE_TIERS,
+    CONVERT_PERCENT_TIERS,
+    USD_FEE_TIERS,
+    USD_PERCENT_TIERS,
+)
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_idr, format_datetime
 from bot.utils.emojis import (
@@ -53,79 +61,70 @@ CURATED_PRICE_ASSETS = [
 ]
 
 
+def _fmt_rp(v: int) -> str:
+    """5000 -> 5k ; 10001 -> 10.001 ; 2000000 -> 2.000.000."""
+    if v >= 1_000_000:
+        return f"{v:,}".replace(",", ".")
+    if v % 1000 == 0:
+        return f"{v // 1000}k"
+    return f"{v:,}".replace(",", ".")
+
+
+def _fmt_fee(f: int) -> str:
+    """3000 -> 3k ; 3500 -> 3,5k."""
+    if f % 1000 == 0:
+        return f"{f // 1000}k"
+    return f"{f / 1000:g}k".replace(".", ",")
+
+
+def _fmt_pct(p: float) -> str:
+    """2.5 -> 2,5%."""
+    return f"{p:g}%".replace(".", ",")
+
+
+def _fixed_rows(prefix: str, tiers) -> list:
+    """Baris tabel fee fixed, digenerate dari konstanta engine (anti-drift)."""
+    return [
+        f"➡️ {prefix} {_fmt_rp(lo)}-{_fmt_rp(hi)} = fee {_fmt_fee(fee)} IDR"
+        for lo, hi, fee in tiers
+    ]
+
+
+def _percent_rows(prefix: str, tiers) -> list:
+    """Baris tabel fee persen, digenerate dari konstanta engine (anti-drift)."""
+    rows = []
+    for lo, hi, pct in tiers:
+        if hi is None:
+            rows.append(f"➡️ {prefix} di atas {_fmt_rp(lo - 1)} = fee {_fmt_pct(pct)}")
+        else:
+            rows.append(f"➡️ {prefix} {_fmt_rp(lo)}-{_fmt_rp(hi)} = fee {_fmt_pct(pct)}")
+    return rows
+
+
 def get_official_price_list_text() -> str:
-    """Menghasilkan teks Price List Fee dengan emoji animasi 3D aktif."""
-    return (
-        f"{E_CHART()} <b>PRICE LIST & CARA PERHITUNGAN TRANSAKSI</b>\n\n"
-        f"<b>Price list khusus FEE ALTCOIN (USDT BEDA dan lebih murah)</b>\n"
-        f"{E_COIN()} <b>Minimum pembelian 5000</b> {E_COIN()}\n\n"
-        "➡️ Jual/Beli 5k-10k  = fee 3k IDR\n"
-        "➡️ Jual/Beli 11-15k  = fee 3.5k IDR\n"
-        "➡️ Jual/Beli 16k-44k  = fee 4k IDR\n"
-        "➡️ Jual/Beli 45k-49k  = fee 4,4k IDR\n"
-        "➡️ Jual/Beli 50k-93k = fee 5k IDR\n"
-        "➡️ Jual/Beli 94k-105k = fee 5.5k IDR\n"
-        "➡️ Jual/Beli 106k-110k = fee 6k IDR\n"
-        "➡️ Jual/Beli 111k-119k = fee 6.5k IDR\n"
-        "➡️ Jual/Beli 120k-150k = fee 7k IDR\n"
-        "➡️ Jual/Beli 151k-185k = fee 7.5k IDR\n"
-        "➡️ Jual/Beli 186k-220k = fee 8k IDR\n"
-        "➡️ Jual/Beli 221k-300k = fee 8.5k IDR\n"
-        "➡️ Jual/Beli 301k-330k = fee 9k IDR\n"
-        "➡️ Jual/Beli 331k-380k = fee 9.5k IDR\n"
-        "➡️ Jual/Beli 381k-420k = fee 10k IDR\n"
-        "➡️ Jual/Beli 421k-460k = fee 10.5k IDR\n"
-        "➡️ Jual/Beli 461k-500k = fee 11k IDR\n"
-        "➡️ Jual/Beli 501k-600k = fee 11.5k IDR\n"
-        "➡️ Jual/Beli 601k-690k = fee 12k IDR\n"
-        "➡️ Jual/Beli 691k-770k = fee 12.5k IDR\n"
-        "➡️ Jual/Beli 771k-840k = fee 13.5k IDR\n"
-        "➡️ Jual/Beli 841k-890k = fee 14k IDR\n"
-        "➡️ Jual/Beli 891k-940k = fee 17k IDR\n"
-        "➡️ Jual/Beli 941-1010k = fee 19k IDR\n\n"
-        f"{E_DOLLAR()} <b>List fee Khusus USD</b>\n"
-        f"{E_COIN()} <b>Minimum pembelian 5k</b> {E_COIN()}\n\n"
-        "➡️ Jual/Beli 5k-34k  = fee 3k IDR\n"
-        "➡️ Jual/Beli 35k-41k  = fee 3.5k IDR\n"
-        "➡️ Jual/Beli 42k-67k  = fee 4k IDR\n"
-        "➡️ Jual/Beli 68k-100k  = fee 4.5k IDR\n"
-        "➡️ Jual/Beli 101k-140k  = fee 5k IDR\n"
-        "➡️ Jual/Beli 141k-180k  = fee 5.5k IDR\n"
-        "➡️ Jual/Beli 181k-200k  = fee 6k IDR\n"
-        "➡️ Jual/Beli 201k-245k = fee 6,5k IDR\n"
-        "➡️ Jual/Beli 246k-330k = fee 7k IDR\n"
-        "➡️ Jual/Beli 331k-400k = fee 7,5k IDR\n"
-        "➡️ Jual/Beli 401k-420k = fee 8k IDR\n"
-        "➡️ Jual/Beli 421k-550k = fee 8.5k IDR\n"
-        "➡️ Jual/Beli 551k-680k = fee 9k IDR\n"
-        "➡️ Jual/Beli 681k-875k = fee 11k IDR\n"
-        "➡️ Jual/Beli 876k-950k = fee 13k IDR\n"
-        "➡️ Jual/Beli 951k-1015k = fee 14.5k IDR\n\n"
-        f"{E_SWAP()} <b>Minimum Convert 6000</b> {E_SWAP()}\n\n"
-        "➡️ Convert 6k-10k  = fee 3.5k IDR\n"
-        "➡️ Convert 11k-19k  = fee 4k IDR\n"
-        "➡️ Convert 20k-47k = fee 4.5k IDR\n"
-        "➡️ Convert 48k-98k = fee 5.5k IDR\n"
-        "➡️ Convert 99k-109k = fee 6k IDR\n"
-        "➡️ Convert 110k-119k = fee 6.5k IDR\n"
-        "➡️ Convert 120k-135k = fee 7k IDR\n"
-        "➡️ Convert 136k-165k = fee 7.5k IDR\n"
-        "➡️ Convert 166k-198k = fee 8k IDR\n"
-        "➡️ Convert 199k-260k = fee 8.5k IDR\n"
-        "➡️ Convert 261k-350k = fee 9k IDR\n"
-        "➡️ Convert 351k-390k = fee 9.5k IDR\n"
-        "➡️ Convert 391k-425k = fee 10.5k IDR\n"
-        "➡️ Convert 426k-475k = fee 11k IDR\n"
-        "➡️ Convert 476k-600k = fee 11.5k IDR\n"
-        "➡️ Convert 601k-680k = fee 12k IDR\n"
-        "➡️ Convert 681k-760k = fee 12.5k IDR\n"
-        "➡️ Convert 761k-830k = fee 13.5k IDR\n"
-        "➡️ Convert 831k-880k = fee 14k IDR\n"
-        "➡️ Convert 881k-940k = fee 16k IDR\n"
-        "➡️ Convert 941k-1010k = fee 18k IDR\n\n"
-        f"{E_BOX()} <b>Pembelian atau Penjualan Nominal di atas list yang tertera tanya admin dahulu</b> {E_BOX()}\n\n"
-        "📣 <i>Adanya fee transaksi yang berbeda-beda dikarenakan volatilitas harga coin crypto yang sangat berfluktuasi (naik-turunnya nilai) dan sphread usdt (selisih harga) yang berubah ubah guna menghindari kerugian stok coin pihak admin.</i> 📣"
-    )
+    """Teks Price List Fee — selalu sinkron dengan services/fee_service.py."""
+    lines = [
+        f"{E_CHART()} <b>PRICE LIST & CARA PERHITUNGAN TRANSAKSI</b>\n",
+        "<b>Price list khusus FEE ALTCOIN (USDT BEDA dan lebih murah)</b>",
+        f"{E_COIN()} <b>Minimum pembelian 5000</b> {E_COIN()}\n",
+        *_fixed_rows("Jual/Beli", ALTCOIN_FEE_TIERS),
+        *_percent_rows("Jual/Beli", ALTCOIN_PERCENT_TIERS),
+        "📌 <i>Khusus JUAL altcoin: +Rp 500 utk nominal di bawah Rp 1.010.000 (jual USD tidak kena).</i>\n",
+        f"{E_DOLLAR()} <b>List fee Khusus USD</b>",
+        f"{E_COIN()} <b>Minimum pembelian 5k</b> {E_COIN()}\n",
+        *_fixed_rows("Jual/Beli", USD_FEE_TIERS),
+        *_percent_rows("Jual/Beli", USD_PERCENT_TIERS),
+        "",
+        f"{E_SWAP()} <b>Minimum Convert 6000</b> {E_SWAP()}\n",
+        *_fixed_rows("Convert", CONVERT_FEE_TIERS),
+        *_percent_rows("Convert", CONVERT_PERCENT_TIERS),
+        "",
+        "⛽ <i>Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON): +Rp 2.500 & min Rp 7.500 semua jenis transaksi.</i>",
+        "🧾 <i>Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).</i>",
+        f"📦 <i>Spread 0,5% | Kode unik 01-200.</i>\n",
+        "📣 <i>Fee beda-beda karena harga crypto fluktuatif & spread berubah-ubah, untuk menghindari kerugian stok admin.</i> 📣",
+    ]
+    return "\n".join(lines)
 
 
 async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

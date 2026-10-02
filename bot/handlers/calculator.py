@@ -20,6 +20,7 @@ from services.fee_service import calculate_fee_idr
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr
 from bot.utils.formatter import format_idr
+from bot.utils.flow_guard import block_if_busy
 from bot.utils.emojis import (
     E_CHART,
     E_MONEY,
@@ -41,6 +42,8 @@ async def start_calculator_callback(update: Update, context: ContextTypes.DEFAUL
     """
     Entry point kalkulator melalui klik tombol inline menu utama (menu_calc).
     """
+    if await block_if_busy("calc", update, context):
+        return None
     query = update.callback_query
     await query.answer()
     
@@ -66,6 +69,8 @@ async def start_calculator_command(update: Update, context: ContextTypes.DEFAULT
     """
     Entry point kalkulator melalui command /calculator di chat.
     """
+    if await block_if_busy("calc", update, context):
+        return None
     keyboard = [
         [InlineKeyboardButton("Batal & Kembali", callback_data="calc_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
@@ -193,7 +198,6 @@ calculator_conversation_handler = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_calculator, pattern="^calc_cancel$"),
         CallbackQueryHandler(cancel_calculator, pattern="^menu_back$"),
-        CallbackQueryHandler(cancel_calculator, pattern="^(menu_buy|menu_sell|start_swap|menu_balance|menu_price|menu_stocks|menu_history|menu_snk)$"),
         CommandHandler("cancel", cancel_calculator),
         CommandHandler("start", cancel_calculator),
     ],

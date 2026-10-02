@@ -21,6 +21,7 @@ fluktuasi harga coin) — jangan "diperhalus" tanpa persetujuan ulang.
 """
 
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,27 @@ GAS_PAIR_MIN_IDR = 7500
 # Tambahan flat untuk JUAL altcoin (bukan USD), khusus nominal < Rp 1.010.000.
 SELL_ALTCOIN_SURCHARGE_IDR = 500
 SELL_ALTCOIN_SURCHARGE_BELOW = 1_010_000
+
+
+# Pajak QRIS GoPay/GoBiz 0,3% untuk pembayaran QRIS nominal > Rp 500.000.
+QRIS_MDR_PCT = 0.3
+QRIS_MDR_THRESHOLD = 500_000
+
+
+def calculate_qris_mdr(nominal_idr: int) -> int:
+    """Pajak QRIS 0,3% (pembulatan ke atas) — 0 bila nominal <= Rp 500.000."""
+    if nominal_idr <= QRIS_MDR_THRESHOLD:
+        return 0
+    return math.ceil(nominal_idr * QRIS_MDR_PCT / 100)
+
+
+def qris_mdr_note(nominal_idr: int) -> str:
+    """Keterangan pajak QRIS untuk pesan; string kosong bila tidak kena."""
+    mdr = calculate_qris_mdr(nominal_idr)
+    if not mdr:
+        return ""
+    rupiah = f"{mdr:,}".replace(",", ".")
+    return f"\n🧾 <i>Pajak QRIS 0,3% (nominal di atas Rp 500.000): +Rp {rupiah}.</i>"
 
 
 def is_gas_pair(symbol: str, network: str) -> bool:

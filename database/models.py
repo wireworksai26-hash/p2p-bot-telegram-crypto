@@ -32,6 +32,7 @@ class TopupOrder(Base):
     topup_id = Column(String(50), unique=True, nullable=False, index=True)
     telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
     amount_idr = Column(BigInteger, nullable=False)
+    mdr_idr = Column(BigInteger, default=0)  # Pajak QRIS 0,3% (0 bila tidak kena)
     unique_code = Column(Integer, default=0)
     status = Column(String(30), default='PENDING', nullable=False, index=True) # PENDING, SUCCESS, EXPIRED, CANCELLED
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -62,7 +63,8 @@ class Order(Base):
     price_per_unit = Column(BigInteger, nullable=False) # IDR price of 1 crypto unit
     nominal_idr = Column(BigInteger, nullable=False)    # Base value in IDR
     fee_idr = Column(BigInteger, nullable=False)        # Transaction fee in IDR
-    unique_code = Column(Integer, default=0)           # Unique payment code (1..99)
+    mdr_idr = Column(BigInteger, default=0)             # Pajak QRIS 0,3% (0 bila tidak kena)
+    unique_code = Column(Integer, default=0)           # Unique payment code (1..200)
     total_idr = Column(BigInteger, nullable=False)      # Total IDR user pays (buy) or gets (sell)
 
     fee_category = Column(String(15), default='ALTCOIN') # 'USD', 'ALTCOIN', 'CONVERT'
