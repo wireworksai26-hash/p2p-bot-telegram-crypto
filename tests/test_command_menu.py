@@ -8,7 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -46,7 +46,9 @@ class TestCommandMenu(unittest.IsolatedAsyncioTestCase):
     async def test_post_init_tidak_mematikan_startup_saat_gagal(self):
         app = SimpleNamespace(bot=SimpleNamespace(
             set_my_commands=AsyncMock(side_effect=RuntimeError("offline"))))
-        await set_bot_commands(app)  # tidak raise
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await set_bot_commands(app)  # tidak raise, 3x percobaan
+        self.assertEqual(app.bot.set_my_commands.await_count, 3)
 
 
 if __name__ == "__main__":

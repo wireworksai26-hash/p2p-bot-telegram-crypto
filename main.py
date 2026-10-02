@@ -320,13 +320,17 @@ BOT_COMMAND_MENU = [
 
 async def set_bot_commands(application: Application) -> None:
     """Daftarkan menu command (tombol Menu di Telegram) — idempotent tiap startup."""
-    try:
-        await application.bot.set_my_commands(
-            [BotCommand(cmd, desc) for cmd, desc in BOT_COMMAND_MENU]
-        )
-        logger.info("Menu command Telegram terdaftar: %s", [c for c, _ in BOT_COMMAND_MENU])
-    except Exception as exc:
-        logger.warning("Gagal mendaftarkan menu command: %s", exc)
+    import asyncio
+    for attempt in (1, 2, 3):
+        try:
+            await application.bot.set_my_commands(
+                [BotCommand(cmd, desc) for cmd, desc in BOT_COMMAND_MENU]
+            )
+            logger.info("Menu command Telegram terdaftar: %s", [c for c, _ in BOT_COMMAND_MENU])
+            return
+        except Exception as exc:
+            logger.warning("Gagal mendaftarkan menu command (percobaan %d): %s", attempt, exc)
+            await asyncio.sleep(5)
 
 
 def build_bot_application() -> Application:
