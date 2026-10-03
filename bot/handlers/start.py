@@ -273,13 +273,23 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.balance import show_balance_menu
         await show_balance_menu(update, context)
 
-    elif data == "menu_saved_wallets":
+    elif data in ["buy_saved_wallets", "menu_saved_wallets"]:
+        back_target = "buy_back_to_menu" if data == "buy_saved_wallets" else "menu_balance"
         from bot.handlers.saved_accounts import show_saved_wallets_menu
-        await show_saved_wallets_menu(update, context)
+        await show_saved_wallets_menu(update, context, back_callback=back_target)
 
-    elif data == "menu_saved_banks":
+    elif data in ["sell_saved_banks", "menu_saved_banks"]:
+        back_target = "sell_back_to_menu" if data == "sell_saved_banks" else "menu_balance"
         from bot.handlers.saved_accounts import show_saved_banks_menu
-        await show_saved_banks_menu(update, context)
+        await show_saved_banks_menu(update, context, back_callback=back_target)
+
+    elif data == "buy_back_to_menu":
+        from bot.handlers.buy import start_buy_callback
+        await start_buy_callback(update, context)
+
+    elif data == "sell_back_to_menu":
+        from bot.handlers.sell import start_sell_callback
+        await start_sell_callback(update, context)
 
     elif data == "act_add_saved_wallet":
         from bot.handlers.saved_accounts import prompt_add_saved_wallet

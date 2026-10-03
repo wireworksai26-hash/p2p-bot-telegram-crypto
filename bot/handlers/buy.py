@@ -122,6 +122,13 @@ async def start_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return SELECT_SYMBOL
 
 
+async def buy_open_saved_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Membuka menu Alamat Wallet langsung dari alur Beli."""
+    from bot.handlers.saved_accounts import show_saved_wallets_menu
+    await show_saved_wallets_menu(update, context, back_callback="buy_back_to_menu")
+    return SELECT_SYMBOL
+
+
 async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Tahap 1 Beli: Menyimpan simbol koin yang dipilih, lalu menampilkan pilihan jaringan.
@@ -1175,6 +1182,8 @@ buy_conversation_handler = ConversationHandler(
     states={
         SELECT_SYMBOL: [
             CallbackQueryHandler(handle_symbol_selection, pattern="^buy_sym_[A-Z0-9]+$"),
+            CallbackQueryHandler(buy_open_saved_wallets, pattern="^buy_saved_wallets$"),
+            CallbackQueryHandler(start_buy_callback, pattern="^buy_back_to_menu$"),
             CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
             CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
         ],

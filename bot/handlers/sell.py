@@ -115,6 +115,13 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return SELECT_SYMBOL
 
 
+async def sell_open_saved_banks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Membuka menu Rekening Pencairan langsung dari alur Jual."""
+    from bot.handlers.saved_accounts import show_saved_banks_menu
+    await show_saved_banks_menu(update, context, back_callback="sell_back_to_menu")
+    return SELECT_SYMBOL
+
+
 async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Tahap 1 Jual: Menyimpan simbol koin, lalu menampilkan pilihan jaringan."""
     query = update.callback_query
@@ -848,6 +855,8 @@ sell_conversation_handler = ConversationHandler(
     states={
         SELECT_SYMBOL: [
             CallbackQueryHandler(handle_symbol_selection, pattern="^sell_sym_[A-Z0-9]+$"),
+            CallbackQueryHandler(sell_open_saved_banks, pattern="^sell_saved_banks$"),
+            CallbackQueryHandler(start_sell_callback, pattern="^sell_back_to_menu$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
         ],

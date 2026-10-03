@@ -393,3 +393,58 @@ class TestBuyAndSellIntegration:
         finally:
             db_session.close = orig_close
 
+    async def test_buy_symbol_keyboard_has_wallet_button(self):
+        from bot.keyboards.crypto_select import get_buy_symbol_keyboard
+        kb = get_buy_symbol_keyboard()
+        buttons = [btn for row in kb.inline_keyboard for btn in row]
+        wallet_btn = [btn for btn in buttons if btn.callback_data == "buy_saved_wallets"]
+        assert len(wallet_btn) == 1
+        assert "Alamat Wallet" in wallet_btn[0].text
+
+    async def test_sell_symbol_keyboard_has_bank_button(self):
+        from bot.keyboards.crypto_select import get_sell_symbol_keyboard
+        kb = get_sell_symbol_keyboard()
+        buttons = [btn for row in kb.inline_keyboard for btn in row]
+        bank_btn = [btn for btn in buttons if btn.callback_data == "sell_saved_banks"]
+        assert len(bank_btn) == 1
+        assert "Rekening Pencairan" in bank_btn[0].text
+
+    async def test_buy_open_saved_wallets_flow(self, db_session):
+        from bot.handlers.buy import buy_open_saved_wallets, SELECT_SYMBOL
+
+        update = MagicMock()
+        update.effective_user.id = 777111
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("bot.handlers.saved_accounts.SessionLocal", return_value=db_session):
+            res = await buy_open_saved_wallets(update, context)
+
+        assert res == SELECT_SYMBOL
+        assert context.user_data.get("saved_wallets_back") == "buy_back_to_menu"
+        update.callback_query.edit_message_text.assert_called_once()
+        assert "Alamat Wallet" in update.callback_query.edit_message_text.call_args[0][0]
+
+    async def test_sell_open_saved_banks_flow(self, db_session):
+        from bot.handlers.sell import sell_open_saved_banks, SELECT_SYMBOL
+
+        update = MagicMock()
+        update.effective_user.id = 888222
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("bot.handlers.saved_accounts.SessionLocal", return_value=db_session):
+            res = await sell_open_saved_banks(update, context)
+
+        assert res == SELECT_SYMBOL
+        assert context.user_data.get("saved_banks_back") == "sell_back_to_menu"
+        update.callback_query.edit_message_text.assert_called_once()
+        assert "Rekening Pencairan" in update.callback_query.edit_message_text.call_args[0][0]
+
+

@@ -51,6 +51,11 @@ def _get_symbol_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarku
     if row:
         keyboard.append(row)
 
+    if prefix == "buy":
+        keyboard.append([InlineKeyboardButton("👛 Alamat Wallet", callback_data="buy_saved_wallets")])
+    elif prefix == "sell":
+        keyboard.append([InlineKeyboardButton("👛 Rekening Pencairan", callback_data="sell_saved_banks")])
+
     keyboard.append([InlineKeyboardButton("Kembali ke Menu", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
     keyboard.append([get_owner_button()])
     return InlineKeyboardMarkup(keyboard)

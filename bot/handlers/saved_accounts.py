@@ -49,7 +49,7 @@ def _detect_wallet_network(address: str) -> str:
 # 1. ALAMAT WALLET VIEW (Screenshot 1)
 # ============================================================
 
-def build_saved_wallets_view(telegram_id: int, db) -> tuple[str, InlineKeyboardMarkup]:
+def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_balance") -> tuple[str, InlineKeyboardMarkup]:
     """Menyusun teks dan keyboard untuk menu Alamat Wallet."""
     wallets = get_user_saved_wallets(db, telegram_id)
 
@@ -62,7 +62,7 @@ def build_saved_wallets_view(telegram_id: int, db) -> tuple[str, InlineKeyboardM
         )
         keyboard = [
             [InlineKeyboardButton("📌 Tambah / Simpan Addres", callback_data="act_add_saved_wallet")],
-            [InlineKeyboardButton("🔙 Kembali", callback_data="menu_balance", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
     else:
@@ -82,19 +82,24 @@ def build_saved_wallets_view(telegram_id: int, db) -> tuple[str, InlineKeyboardM
         keyboard = [
             [InlineKeyboardButton("📌 Tambah / Simpan Addres", callback_data="act_add_saved_wallet")],
             [InlineKeyboardButton("🗑 Hapus Alamat", callback_data="act_del_saved_wallet_menu")],
-            [InlineKeyboardButton("🔙 Kembali", callback_data="menu_balance", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
 
     return text, InlineKeyboardMarkup(keyboard)
 
 
-async def show_saved_wallets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_saved_wallets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, back_callback: str = None):
     """Menampilkan tampilan Alamat Wallet tersimpan."""
     user = update.effective_user
+    if back_callback:
+        context.user_data["saved_wallets_back"] = back_callback
+    else:
+        back_callback = context.user_data.get("saved_wallets_back", "menu_balance")
+
     db = SessionLocal()
     try:
-        text, reply_markup = build_saved_wallets_view(user.id, db)
+        text, reply_markup = build_saved_wallets_view(user.id, db, back_callback=back_callback)
     finally:
         db.close()
 
@@ -109,7 +114,7 @@ async def show_saved_wallets_menu(update: Update, context: ContextTypes.DEFAULT_
 # 2. REKENING PENCAIRAN VIEW (Screenshot 3)
 # ============================================================
 
-def build_saved_banks_view(telegram_id: int, db) -> tuple[str, InlineKeyboardMarkup]:
+def build_saved_banks_view(telegram_id: int, db, back_callback: str = "menu_balance") -> tuple[str, InlineKeyboardMarkup]:
     """Menyusun teks dan keyboard untuk menu Rekening Pencairan."""
     banks = get_user_saved_banks(db, telegram_id)
 
@@ -122,7 +127,7 @@ def build_saved_banks_view(telegram_id: int, db) -> tuple[str, InlineKeyboardMar
         )
         keyboard = [
             [InlineKeyboardButton("✍️ Tambah / Ganti Rekening", callback_data="act_add_saved_bank")],
-            [InlineKeyboardButton("🔙 Kembali", callback_data="menu_balance", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
     else:
@@ -144,19 +149,24 @@ def build_saved_banks_view(telegram_id: int, db) -> tuple[str, InlineKeyboardMar
         keyboard = [
             [InlineKeyboardButton("✍️ Tambah / Ganti Rekening", callback_data="act_add_saved_bank")],
             [InlineKeyboardButton("🗑 Hapus Rekening", callback_data="act_del_saved_bank_menu")],
-            [InlineKeyboardButton("🔙 Kembali", callback_data="menu_balance", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
 
     return text, InlineKeyboardMarkup(keyboard)
 
 
-async def show_saved_banks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_saved_banks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, back_callback: str = None):
     """Menampilkan tampilan Rekening Pencairan tersimpan."""
     user = update.effective_user
+    if back_callback:
+        context.user_data["saved_banks_back"] = back_callback
+    else:
+        back_callback = context.user_data.get("saved_banks_back", "menu_balance")
+
     db = SessionLocal()
     try:
-        text, reply_markup = build_saved_banks_view(user.id, db)
+        text, reply_markup = build_saved_banks_view(user.id, db, back_callback=back_callback)
     finally:
         db.close()
 
