@@ -272,6 +272,39 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data in ["menu_balance", "show_balance"]:
         from bot.handlers.balance import show_balance_menu
         await show_balance_menu(update, context)
+
+    elif data == "menu_saved_wallets":
+        from bot.handlers.saved_accounts import show_saved_wallets_menu
+        await show_saved_wallets_menu(update, context)
+
+    elif data == "menu_saved_banks":
+        from bot.handlers.saved_accounts import show_saved_banks_menu
+        await show_saved_banks_menu(update, context)
+
+    elif data == "act_add_saved_wallet":
+        from bot.handlers.saved_accounts import prompt_add_saved_wallet
+        await prompt_add_saved_wallet(update, context)
+
+    elif data == "act_add_saved_bank":
+        from bot.handlers.saved_accounts import prompt_add_saved_bank
+        await prompt_add_saved_bank(update, context)
+
+    elif data == "act_del_saved_wallet_menu":
+        from bot.handlers.saved_accounts import show_delete_wallet_menu
+        await show_delete_wallet_menu(update, context)
+
+    elif data.startswith("act_del_wallet_"):
+        from bot.handlers.saved_accounts import handle_delete_wallet_action
+        await handle_delete_wallet_action(update, context)
+
+    elif data == "act_del_saved_bank_menu":
+        from bot.handlers.saved_accounts import show_delete_bank_menu
+        await show_delete_bank_menu(update, context)
+
+    elif data.startswith("act_del_bank_"):
+        from bot.handlers.saved_accounts import handle_delete_bank_action
+        await handle_delete_bank_action(update, context)
+
         
     elif data == "menu_buy":
         from bot.handlers.buy import start_buy_callback

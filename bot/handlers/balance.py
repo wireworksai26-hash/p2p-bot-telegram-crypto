@@ -81,6 +81,10 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("Topup Saldo (QRIS)", callback_data="start_topup_qris", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PLUS", "5204256218100547827"))],
+        [
+            InlineKeyboardButton("👛 Alamat Wallet", callback_data="menu_saved_wallets"),
+            InlineKeyboardButton("🏦 Rekening Pencairan", callback_data="menu_saved_banks"),
+        ],
         [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]

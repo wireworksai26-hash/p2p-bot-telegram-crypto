@@ -417,6 +417,9 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("giveaway", campaign_command_handler))
     application.add_handler(CommandHandler("setreferral", setreferral_handler))
     application.add_handler(CommandHandler("referral", referral_menu_handler))
+    from bot.handlers.saved_accounts import show_saved_wallets_menu, show_saved_banks_menu
+    application.add_handler(CommandHandler(["wallet", "dompet"], show_saved_wallets_menu))
+    application.add_handler(CommandHandler(["rekening", "bank"], show_saved_banks_menu))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands
@@ -431,8 +434,8 @@ def build_bot_application() -> Application:
     # Satu router: foto diarahkan ke alur Buy ATAU Topup (hindari forward ganda ke admin).
     application.add_handler(MessageHandler(filters.PHOTO, _route_transfer_proof))
 
-    # --- Admin Interactive Input (Text) ---
-    # Menangani input teks admin untuk wizard campaign (budget manual / kustomisasi teks notifikasi)
+    # --- Admin & Interactive User Input (Text) ---
+    # Menangani input teks user (simpan wallet/rekening) dan admin (wizard campaign / referral)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_admin_text))
 
     # --- Callback Query Handler (catch-all for inline keyboard buttons) ---
@@ -448,11 +451,19 @@ def build_bot_application() -> Application:
 
 async def _route_admin_text(update: Update, context) -> None:
     """
-    Router pesan teks interaktif untuk input wizard admin
-    (seperti nominal budget campaign atau kustomisasi teks notifikasi giveaway, serta referral).
+    Router pesan teks interaktif untuk input user (simpan wallet/rekening)
+    dan input wizard admin (nominal budget campaign, notifikasi, serta referral).
     """
     if not update.message or not update.message.text:
         return
+
+    # Routing input user untuk simpan wallet atau simpan rekening
+    if context.user_data.get("awaiting_save_wallet") or context.user_data.get("awaiting_save_bank"):
+        from bot.handlers.saved_accounts import handle_saved_account_text_input
+        handled = await handle_saved_account_text_input(update, context)
+        if handled:
+            return
+
     user_id = update.effective_user.id
     from bot.handlers.admin import is_admin
     if not is_admin(user_id):

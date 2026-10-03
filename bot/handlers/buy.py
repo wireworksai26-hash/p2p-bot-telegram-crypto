@@ -302,6 +302,21 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
 
+        # Ambil daftar alamat wallet tersimpan milik user untuk network ini
+        user_id = update.effective_user.id
+        from database.crud import get_user_saved_wallets
+        saved_wallets = get_user_saved_wallets(db, user_id, network=network)
+
+        saved_buttons = []
+        for sw in saved_wallets:
+            short_addr = f"{sw.wallet_address[:6]}...{sw.wallet_address[-4:]}" if len(sw.wallet_address) > 12 else sw.wallet_address
+            lbl = f"👛 Gunakan: {short_addr}"
+            if sw.label:
+                lbl = f"👛 Gunakan: {sw.label} ({short_addr})"
+            saved_buttons.append([InlineKeyboardButton(lbl, callback_data=f"buy_saved_wallet_{sw.id}")])
+
+        input_wallet_keyboard = saved_buttons + keyboard
+
         await update.message.reply_text(
             text=(
                 f"🪙 <b>Simulasi Perhitungan Pembelian:</b>\n"
@@ -316,7 +331,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
                 f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=InlineKeyboardMarkup(input_wallet_keyboard),
             parse_mode="HTML"
         )
         return INPUT_WALLET
@@ -332,9 +347,80 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         db.close()
 
 
+async def _proceed_to_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet_address: str) -> int:
+    """Helper untuk memproses wallet terpilih dan beralih ke pemilihan metode pembayaran."""
+    network = context.user_data["buy_network"]
+    symbol = context.user_data["buy_symbol"]
+    total_idr = context.user_data.get("buy_total_idr", 0)
+    user_id = update.effective_user.id
+
+    context.user_data["buy_wallet"] = wallet_address
+
+    db = SessionLocal()
+    try:
+        user_balance = get_user_balance(db, user_id)
+        available_inventory = get_available_inventory(db, network, symbol)
+        if available_inventory is None:
+            from services.wallet_sync import sync_wallet_balances
+            stock_sym = "MATIC" if network.upper() == "POLYGON" and symbol.upper() == "POL" else symbol
+            await sync_wallet_balances([(stock_sym, network)])
+            available_inventory = get_available_inventory(db, network, symbol)
+
+        if available_inventory is None or available_inventory < Decimal(str(context.user_data["buy_crypto_amount"])):
+            available_text = (
+                format_crypto(float(available_inventory), symbol)
+                if available_inventory is not None
+                else "belum tersedia"
+            )
+            msg_text = (
+                f"⚠️ <b>Stok {symbol} ({network}) belum mencukupi.</b>\n\n"
+                f"Stok tersedia: <code>{available_text}</code>\n"
+                "Silakan hubungi admin untuk proses manual."
+            )
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+            ]])
+            if update.callback_query:
+                await update.callback_query.edit_message_text(msg_text, reply_markup=markup, parse_mode="HTML")
+            else:
+                await update.message.reply_text(msg_text, reply_markup=markup, parse_mode="HTML")
+            return ConversationHandler.END
+    finally:
+        db.close()
+
+    keyboard = []
+    if user_balance >= total_idr:
+        keyboard.append([
+            InlineKeyboardButton(f"Saldo Bot ({format_idr(int(user_balance))}) — Instan", callback_data="paymethod_BOT_BALANCE", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096"))
+        ])
+
+    keyboard.extend([
+        [InlineKeyboardButton("QRIS GoPay (All E-Wallet & Bank)", callback_data="paymethod_GOPAY_QRIS", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PHONE", "5409357944619802453"))],
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+        [get_owner_button()]
+    ])
+
+    text_msg = (
+        "💳 <b>PILIH METODE PEMBAYARAN</b>\n\n"
+        f"Alamat Wallet: <code>{wallet_address}</code>\n"
+        f"Total Pembayaran: <b>{format_idr(total_idr)}</b>\n"
+        f"Saldo IDR Anda: <b>{format_idr(int(user_balance))}</b>"
+        f"{qris_mdr_note(total_idr)}\n\n"
+        "Silakan pilih metode pembayaran di bawah ini:"
+    )
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text=text_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    else:
+        await update.message.reply_text(text=text_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+    return SELECT_PAYMENT
+
+
 async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Memvalidasi wallet address, lalu meminta memilih metode pembayaran.
+    Memvalidasi wallet address yang diketik manual, lalu beralih ke pemilihan metode pembayaran.
+    Alamat valid otomatis disimpan agar dapat digunakan kembali (1-Tap).
     """
     wallet_address = update.message.text.strip()
     network = context.user_data["buy_network"]
@@ -357,65 +443,48 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return INPUT_WALLET
 
-    # Simpan wallet ke context
-    context.user_data["buy_wallet"] = wallet_address
-    
-    total_idr = context.user_data.get("buy_total_idr", 0)
+    # Auto-save alamat wallet valid ke data tersimpan user
     user_id = update.effective_user.id
-    
     db = SessionLocal()
     try:
-        user_balance = get_user_balance(db, user_id)
-        available_inventory = get_available_inventory(db, network, symbol)
-        if available_inventory is None:
-            from services.wallet_sync import sync_wallet_balances
-            stock_sym = "MATIC" if network.upper() == "POLYGON" and symbol.upper() == "POL" else symbol
-            await sync_wallet_balances([(stock_sym, network)])
-            available_inventory = get_available_inventory(db, network, symbol)
-
-        if available_inventory is None or available_inventory < Decimal(str(context.user_data["buy_crypto_amount"])):
-            available_text = (
-                format_crypto(float(available_inventory), symbol)
-                if available_inventory is not None
-                else "belum tersedia"
-            )
-            await update.message.reply_text(
-                f"⚠️ <b>Stok {symbol} ({network}) belum mencukupi.</b>\n\n"
-                f"Stok tersedia: <code>{available_text}</code>\n"
-                "Silakan hubungi admin untuk proses manual.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
-                ]]),
-                parse_mode="HTML",
-            )
-            return ConversationHandler.END
+        from database.crud import save_user_wallet
+        save_user_wallet(db, user_id, wallet_address, network=network)
+    except Exception as exc:
+        logger.debug(f"Auto save wallet error: {exc}")
     finally:
         db.close()
 
-    keyboard = []
-    if user_balance >= total_idr:
-        keyboard.append([
-            InlineKeyboardButton(f"Saldo Bot ({format_idr(int(user_balance))}) — Instan", callback_data="paymethod_BOT_BALANCE", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("MONEY_BAG", "5350452584119279096"))
-        ])
+    return await _proceed_to_payment_selection(update, context, wallet_address)
 
-    keyboard.extend([
-        [InlineKeyboardButton("QRIS GoPay (All E-Wallet & Bank)", callback_data="paymethod_GOPAY_QRIS", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PHONE", "5409357944619802453"))],
-        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-        [get_owner_button()]
-    ])
-    
-    await update.message.reply_text(
-        text=(
-            "💳 <b>PILIH METODE PEMBAYARAN</b>\n\n"
-            f"Total Pembayaran: <b>{format_idr(total_idr)}</b>\n"
-            f"Saldo IDR Anda: <b>{format_idr(int(user_balance))}</b>"
-            f"{qris_mdr_note(total_idr)}\n\n"
-            "Silakan pilih metode pembayaran di bawah ini:"
-        ),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
-    return SELECT_PAYMENT
+
+async def handle_saved_wallet_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Menggunakan alamat wallet tersimpan yang dipilih via tombol inline.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    wallet_id = int(query.data.replace("buy_saved_wallet_", ""))
+    user_id = update.effective_user.id
+
+    db = SessionLocal()
+    try:
+        from database.crud import get_saved_wallet_by_id
+        sw = get_saved_wallet_by_id(db, wallet_id, user_id)
+        if not sw:
+            await query.answer("Wallet tidak ditemukan atau sudah dihapus.", show_alert=True)
+            return INPUT_WALLET
+        wallet_address = sw.wallet_address
+    finally:
+        db.close()
+
+    network = context.user_data["buy_network"]
+    if not validate_wallet_address(wallet_address, network):
+        await query.answer(f"Alamat tidak cocok dengan format network {network}!", show_alert=True)
+        return INPUT_WALLET
+
+    return await _proceed_to_payment_selection(update, context, wallet_address)
+
 
 
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1122,6 +1191,7 @@ buy_conversation_handler = ConversationHandler(
         ],
         INPUT_WALLET: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_input),
+            CallbackQueryHandler(handle_saved_wallet_selection, pattern="^buy_saved_wallet_[0-9]+$"),
             CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
             CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ],

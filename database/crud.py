@@ -1367,3 +1367,204 @@ def set_referral_config(db: Session, key: str, value: str) -> None:
     db.commit()
     logger.info(f"Referral config set: {key} = {value}")
 
+
+# ============================================================
+# USER SAVED WALLETS & BANKS CRUD
+# ============================================================
+
+def get_user_saved_wallets(db: Session, telegram_id: int, network: str = None) -> list:
+    """Ambil daftar alamat wallet tersimpan milik user, bisa difilter per network."""
+    from database.models import UserSavedWallet
+    
+    wallets = (
+        db.query(UserSavedWallet)
+        .filter(UserSavedWallet.telegram_id == telegram_id)
+        .order_by(UserSavedWallet.updated_at.desc())
+        .all()
+    )
+    if not network:
+        return wallets
+
+    from bot.utils.validator import validate_wallet_address
+    net_upper = network.upper()
+    matched = []
+    for w in wallets:
+        if w.network and w.network.upper() == net_upper:
+            matched.append(w)
+        elif not w.network or w.network.upper() in ["ALL", "EVM"]:
+            if validate_wallet_address(w.wallet_address, net_upper):
+                matched.append(w)
+        else:
+            if validate_wallet_address(w.wallet_address, net_upper):
+                matched.append(w)
+    return matched
+
+
+def get_saved_wallet_by_id(db: Session, wallet_id: int, telegram_id: int = None):
+    """Ambil satu wallet tersimpan berdasarkan ID."""
+    from database.models import UserSavedWallet
+    query = db.query(UserSavedWallet).filter(UserSavedWallet.id == wallet_id)
+    if telegram_id is not None:
+        query = query.filter(UserSavedWallet.telegram_id == telegram_id)
+    return query.first()
+
+
+def save_user_wallet(
+    db: Session,
+    telegram_id: int,
+    wallet_address: str,
+    network: str = None,
+    label: str = None,
+):
+    """Simpan atau update alamat wallet tersimpan milik user."""
+    from database.models import UserSavedWallet
+
+    clean_addr = wallet_address.strip()
+    existing = (
+        db.query(UserSavedWallet)
+        .filter(
+            UserSavedWallet.telegram_id == telegram_id,
+            UserSavedWallet.wallet_address == clean_addr,
+        )
+        .first()
+    )
+    if existing:
+        if network:
+            existing.network = network.upper()
+        if label:
+            existing.label = label
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_wallet = UserSavedWallet(
+        telegram_id=telegram_id,
+        wallet_address=clean_addr,
+        network=network.upper() if network else None,
+        label=label,
+    )
+    db.add(new_wallet)
+    db.commit()
+    db.refresh(new_wallet)
+    return new_wallet
+
+
+def delete_user_saved_wallet(db: Session, wallet_id: int, telegram_id: int) -> bool:
+    """Hapus alamat wallet tersimpan milik user."""
+    from database.models import UserSavedWallet
+
+    w = (
+        db.query(UserSavedWallet)
+        .filter(
+            UserSavedWallet.id == wallet_id,
+            UserSavedWallet.telegram_id == telegram_id,
+        )
+        .first()
+    )
+    if w:
+        db.delete(w)
+        db.commit()
+        return True
+    return False
+
+
+EWALLET_IDENTIFIERS = {"GOPAY", "OVO", "DANA", "SHOPEEPAY", "LINKAJA", "ISAKU"}
+
+def detect_account_type(bank_name: str) -> str:
+    cleaned = bank_name.strip().upper().replace(" ", "").replace("-", "")
+    for ew in EWALLET_IDENTIFIERS:
+        if ew in cleaned:
+            return "EWALLET"
+    return "BANK"
+
+
+def get_user_saved_banks(db: Session, telegram_id: int) -> list:
+    """Ambil semua rekening bank & e-wallet tersimpan milik user."""
+    from database.models import UserSavedBank
+
+    return (
+        db.query(UserSavedBank)
+        .filter(UserSavedBank.telegram_id == telegram_id)
+        .order_by(UserSavedBank.updated_at.desc())
+        .all()
+    )
+
+
+def get_saved_bank_by_id(db: Session, bank_id: int, telegram_id: int = None):
+    """Ambil satu rekening tersimpan berdasarkan ID."""
+    from database.models import UserSavedBank
+
+    query = db.query(UserSavedBank).filter(UserSavedBank.id == bank_id)
+    if telegram_id is not None:
+        query = query.filter(UserSavedBank.telegram_id == telegram_id)
+    return query.first()
+
+
+def save_user_bank(
+    db: Session,
+    telegram_id: int,
+    bank_name: str,
+    account_number: str,
+    account_name: str,
+    account_type: str = None,
+):
+    """Simpan atau update rekening bank / e-wallet pencairan user."""
+    from database.models import UserSavedBank
+
+    clean_bank = bank_name.strip().upper()
+    clean_num = "".join(c for c in account_number if c.isdigit() or c.isalnum()).strip()
+    clean_name = account_name.strip().upper()
+
+    if not account_type:
+        account_type = detect_account_type(clean_bank)
+
+    existing = (
+        db.query(UserSavedBank)
+        .filter(
+            UserSavedBank.telegram_id == telegram_id,
+            UserSavedBank.account_number == clean_num,
+        )
+        .first()
+    )
+    if existing:
+        existing.bank_name = clean_bank
+        existing.account_name = clean_name
+        existing.account_type = account_type
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_bank = UserSavedBank(
+        telegram_id=telegram_id,
+        bank_name=clean_bank,
+        account_number=clean_num,
+        account_name=clean_name,
+        account_type=account_type,
+    )
+    db.add(new_bank)
+    db.commit()
+    db.refresh(new_bank)
+    return new_bank
+
+
+def delete_user_saved_bank(db: Session, bank_id: int, telegram_id: int) -> bool:
+    """Hapus rekening tersimpan milik user."""
+    from database.models import UserSavedBank
+
+    b = (
+        db.query(UserSavedBank)
+        .filter(
+            UserSavedBank.id == bank_id,
+            UserSavedBank.telegram_id == telegram_id,
+        )
+        .first()
+    )
+    if b:
+        db.delete(b)
+        db.commit()
+        return True
+    return False
+
+

@@ -275,3 +275,37 @@ class CampaignDistribution(Base):
     # Relationships
     campaign = relationship("Campaign", back_populates="distributions")
 
+
+class UserSavedWallet(Base):
+    """Menyimpan alamat wallet crypto milik user agar bisa dipilih instan saat Beli."""
+    __tablename__ = 'user_saved_wallets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    label = Column(String(50), nullable=True)
+    network = Column(String(30), nullable=True)  # BSC, ETH, SOLANA, TRON, etc. atau None (semua)
+    wallet_address = Column(String(250), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="saved_wallets")
+
+
+class UserSavedBank(Base):
+    """Menyimpan rekening bank & e-wallet user untuk pencairan dana saat Jual."""
+    __tablename__ = 'user_saved_banks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    bank_name = Column(String(50), nullable=False)  # BCA, Mandiri, BRI, BNI, Seabank, GoPay, OVO, DANA, ShopeePay, etc.
+    account_number = Column(String(50), nullable=False)  # Nomor rekening atau nomor HP e-wallet
+    account_name = Column(String(100), nullable=False)  # Nama pemilik rekening
+    account_type = Column(String(20), default='BANK', nullable=False)  # 'BANK' atau 'EWALLET'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="saved_banks")
+
+
