@@ -11,7 +11,7 @@ import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Any
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from database.models import User, Order, AuditLog, Campaign, CampaignDistribution
@@ -132,7 +132,7 @@ def get_top_users_by_milestone(
             metric_col,
         )
         .join(User, User.telegram_id == Order.telegram_id)
-        .filter(User.is_banned == False, *order_filter)  # noqa: E712
+        .filter(or_(User.is_banned == False, User.is_banned.is_(None)), *order_filter)  # noqa: E712
         .group_by(Order.telegram_id, User.username, User.balance_idr)
         .having(metric_col >= min_value)
         .order_by(metric_col.desc())

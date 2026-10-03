@@ -15,7 +15,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from config.settings import settings
-from database.connection import SessionLocal
+from database.connection import SessionLocal, engine, Base
+import database.models
 from database.models import Campaign, CampaignDistribution
 from bot.handlers.admin import is_admin
 from bot.utils.formatter import format_idr
@@ -28,6 +29,12 @@ from services.campaign_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Memastikan tabel campaign terdaftar dan dibuat bila belum ada
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as _init_err:
+    logger.warning("Auto DDL create_all campaign: %s", _init_err)
 
 
 def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
@@ -130,7 +137,11 @@ async def campaign_command_handler(update: Update, context: ContextTypes.DEFAULT
 async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Router callback interaktif untuk alur campaign."""
     query = update.callback_query
-    await query.answer()
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -151,7 +162,10 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             tpl_key = data.replace("camp_tpl_", "")
             tpl = get_template(tpl_key)
             if not tpl:
-                await query.answer("Template tidak ditemukan.", show_alert=True)
+                try:
+                    await query.answer("Template tidak ditemukan.", show_alert=True)
+                except Exception:
+                    pass
                 return
 
             text = (
@@ -173,7 +187,10 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             pool = int(parts[-1])
             tpl = get_template(tpl_key)
             if not tpl:
-                await query.answer("Template tidak valid.", show_alert=True)
+                try:
+                    await query.answer("Template tidak valid.", show_alert=True)
+                except Exception:
+                    pass
                 return
 
             sim = simulate_campaign(
@@ -186,7 +203,16 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             )
 
             if sim.get("error"):
-                await query.answer(sim["error"], show_alert=True)
+                text_err = (
+                    f"⚠️ <b>Simulasi Campaign Dibatalkan:</b>\n\n"
+                    f"{sim['error']}\n\n"
+                    f"<i>Silakan pilih nominal atau template lain di bawah:</i>"
+                )
+                keyboard_err = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Pilih Template Lain", callback_data="admin_panel_campaign")],
+                    [InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main")],
+                ])
+                await query.edit_message_text(text_err, reply_markup=keyboard_err, parse_mode="HTML")
                 return
 
             # Buat record Campaign status DRAFT
@@ -210,11 +236,20 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
             # Tampilkan Preview Simulasi
             text = _build_preview_text(camp, sim)
-            await query.edit_message_text(
-                text,
-                reply_markup=get_preview_action_keyboard(camp.id),
-                parse_mode="HTML",
-            )
+            try:
+                await query.edit_message_text(
+                    text,
+                    reply_markup=get_preview_action_keyboard(camp.id),
+                    parse_mode="HTML",
+                )
+            except Exception as edit_err:
+                logger.warning("Gagal edit_message_text preview HTML: %s, fallback tanpa blockquote", edit_err)
+                clean_text = text.replace("<blockquote>", "\n---\n").replace("</blockquote>", "\n---\n")
+                await query.edit_message_text(
+                    clean_text,
+                    reply_markup=get_preview_action_keyboard(camp.id),
+                    parse_mode="HTML",
+                )
             return
 
         # Input budget manual
@@ -384,7 +419,19 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     except Exception as exc:
         logger.error(f"Error campaign_callback_handler: {exc}", exc_info=True)
-        await query.answer("Terjadi kesalahan sistem pada campaign.", show_alert=True)
+        try:
+            await query.edit_message_text(
+                f"⚠️ <b>Terjadi kendala pada sistem campaign:</b>\n\n"
+                f"<code>{_esc(str(exc))}</code>\n\n"
+                f"<i>Silakan pilih menu di bawah untuk melanjutkan:</i>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Menu Campaign", callback_data="admin_panel_campaign")],
+                    [InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main")],
+                ]),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
     finally:
         db.close()
 

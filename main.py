@@ -104,6 +104,7 @@ def init_database():
     Create all SQLAlchemy tables (no-op if they already exist)
     and seed default data for fee_tiers and price_config.
     """
+    import database.models  # Pastikan semua model ter-load ke Base.metadata
     import database.connection as db_conn
     logger.info("Creating database tables (if not exist)...")
     try:
@@ -117,11 +118,12 @@ def init_database():
         db_conn.SessionLocal.configure(bind=db_conn.engine)
         Base.metadata.create_all(bind=db_conn.engine)
 
-    # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders
+    # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders, campaigns
     _migrate_users_schema()
     _migrate_wallet_balance_schema()
     _migrate_inventory_schema()
     _migrate_orders_schema()
+    _migrate_campaign_schema()
 
     db = db_conn.SessionLocal()
     try:
@@ -160,8 +162,27 @@ def _migrate_users_schema():
                     if col not in existing_cols:
                         conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
                         logger.info("Migrasi users: kolom %s ditambahkan.", col)
+                conn.exec_driver_sql("UPDATE users SET is_banned = FALSE WHERE is_banned IS NULL")
     except Exception as exc:
         logger.error("Migrasi users gagal: %s", exc, exc_info=True)
+
+
+def _migrate_campaign_schema():
+    """
+    Memastikan tabel campaigns dan campaign_distributions terbuat
+    (kompatibel SQLite & PostgreSQL).
+    """
+    from sqlalchemy import inspect
+    from database.connection import engine, Base
+    import database.models
+    try:
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+        if "campaigns" not in table_names or "campaign_distributions" not in table_names:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Migrasi campaign: tabel campaigns & campaign_distributions berhasil dibuat.")
+    except Exception as exc:
+        logger.error("Migrasi campaign gagal: %s", exc, exc_info=True)
 
 
 def _migrate_orders_schema():

@@ -1154,7 +1154,8 @@ def get_users_by_segment(db: Session, segment: str) -> list:
         buyers  — user yang punya minimal 1 order COMPLETED
         balance — user yang punya saldo > 0
     """
-    query = db.query(User).filter(User.is_banned == False)  # noqa: E712
+    from sqlalchemy import or_
+    query = db.query(User).filter(or_(User.is_banned == False, User.is_banned.is_(None)))  # noqa: E712
 
     if segment == "active":
         cutoff = datetime.utcnow() - timedelta(days=30)
