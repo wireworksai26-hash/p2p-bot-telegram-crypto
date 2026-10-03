@@ -40,6 +40,12 @@ TIMEOUT_SECONDS = 6.0
 # Jeda pengingat ulang jika endpoint tetap DOWN (2 jam = 7200 detik)
 REMINDER_INTERVAL_SECONDS = 7200
 
+# Anti-flap: alarm DOWN / notif pulih hanya setelah status yang sama
+# terlihat 2x beruntun (interval monitor 5 menit -> maks ~10 menit delay).
+# Mencegah alarm <-> pulih berulang saat endpoint putus-nyambung (mis. 429).
+ALERT_DOWN_CONFIRM_STREAK = 2
+RECOVERY_CONFIRM_STREAK = 2
+
 
 class CoinAPIMonitor:
     """Pemantau proaktif URL & API koin."""
@@ -277,6 +283,7 @@ class CoinAPIMonitor:
                 "url": settings.SUI_RPC,
                 "env_var": "SUI_RPC",
                 "fallback_urls": [
+                    "https://sui-rpc.publicnode.com",
                     "https://sui-mainnet-endpoint.blockvision.org",
                 ],
                 "impact": "Transaksi koin SUI tidak dapat diproses.",
@@ -550,9 +557,9 @@ class CoinAPIMonitor:
         """
         Dijalankan oleh background job APScheduler:
         1. Memeriksa seluruh endpoint.
-        2. Jika ada yang berubah ke status DOWN -> kirim ALARM instan ke admin.
-        3. Jika ada yang pulih (DOWN -> OK) -> kirim notifikasi pemulihan.
-        4. Jika tetap DOWN selama > 2 jam -> kirim pengingat berkala.
+        2. DOWN 2x beruntun -> ALARM instan ke admin (sekali DOWN lalu pulih = flap, diam).
+        3. Sehat 2x beruntun setelah DOWN -> notifikasi pemulihan.
+        4. Tetap DOWN > 2 jam -> pengingat berkala.
         """
         results = await self.check_all()
         now = time.time()
@@ -563,25 +570,40 @@ class CoinAPIMonitor:
             prev_state = self._endpoint_states.get(ep_id, {})
             prev_status = prev_state.get("status", "UNKNOWN")
             last_alert_at = prev_state.get("last_alert_at", 0)
+            down_streak = int(prev_state.get("down_streak", 0))
+            up_streak = int(prev_state.get("up_streak", 0))
 
             should_alert_down = False
             should_alert_recovery = False
 
             if current_status == "DOWN":
-                if prev_status != "DOWN":
-                    # Transisi baru ke DOWN -> ALARM INSTAN
+                down_streak += 1
+                up_streak = 0
+                pending_recovery = False
+                if down_streak == ALERT_DOWN_CONFIRM_STREAK:
+                    # DOWN terkonfirmasi -> ALARM
                     should_alert_down = True
-                elif (now - last_alert_at) >= REMINDER_INTERVAL_SECONDS:
-                    # Sudah 2 jam masih DOWN -> Pengingat berkala
+                elif (down_streak > ALERT_DOWN_CONFIRM_STREAK
+                        and (now - last_alert_at) >= REMINDER_INTERVAL_SECONDS):
+                    # Masih DOWN 2 jam -> pengingat berkala
                     should_alert_down = True
 
-            elif current_status in ("OK", "DEGRADED") and prev_status == "DOWN":
-                # Pulih dari DOWN
-                should_alert_recovery = True
+            else:
+                up_streak = up_streak + 1 if prev_status != "DOWN" else 1
+                down_streak = 0
+                pending_recovery = (prev_status == "DOWN"
+                                    or prev_state.get("pending_recovery", False))
+                if pending_recovery and up_streak >= RECOVERY_CONFIRM_STREAK:
+                    # Pulih terkonfirmasi -> notifikasi pemulihan
+                    should_alert_recovery = True
+                    pending_recovery = False
 
             # Simpan state terkini
             self._endpoint_states[ep_id] = {
                 "status": current_status,
+                "down_streak": down_streak,
+                "up_streak": up_streak,
+                "pending_recovery": pending_recovery,
                 "last_alert_at": now if (should_alert_down or should_alert_recovery) else last_alert_at,
                 "last_error": res.get("error_detail", ""),
             }
