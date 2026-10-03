@@ -15,6 +15,7 @@ Startup sequence:
 
 import asyncio
 import logging
+import re
 import signal
 import sys
 import time
@@ -364,6 +365,13 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("sellorders", sellorders_handler))
     application.add_handler(CommandHandler("confirm", confirm_handler))
     application.add_handler(CommandHandler("broadcast", broadcast_handler))
+    # Handler siaran foto / dokumen gambar dengan caption diawali /broadcast (agar tidak tertangkap oleh router bukti transfer)
+    application.add_handler(
+        MessageHandler(
+            (filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(re.compile(r"^/broadcast(\s|@|$)", re.IGNORECASE)),
+            broadcast_handler,
+        )
+    )
     application.add_handler(CommandHandler("ban", ban_handler))
     application.add_handler(CommandHandler("unban", unban_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
@@ -421,6 +429,11 @@ async def _route_transfer_proof(update: Update, context) -> None:
     from bot.handlers.balance import handle_topup_transfer_proof
 
     user_id = update.effective_user.id
+    # Guard: jangan pernah tangani pesan /broadcast di router bukti transfer
+    caption = (update.message.caption or "").strip() if update.message else ""
+    if caption.lower().startswith("/broadcast"):
+        return
+
     # Cek jika admin sedang mengirimkan foto bukti transfer untuk order Sell
     if context.user_data.get("admin_awaiting_proof_order_id"):
         from bot.handlers.admin import handle_admin_upload_proof, is_admin

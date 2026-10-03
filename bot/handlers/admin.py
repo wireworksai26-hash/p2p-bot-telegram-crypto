@@ -7,9 +7,10 @@ Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfi
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, BadRequest
 from telegram.ext import ContextTypes
 
 from config.settings import settings
@@ -1384,25 +1385,59 @@ def _retry_after_seconds(exc: Exception) -> float:
 
 
 async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
-                                 photo_file_id: str | None = None) -> bool:
-    """Kirim 1 pesan broadcast; retry sekali saat flood-limit. True bila sukses."""
+                                 photo_file_id: str | None = None,
+                                 is_document: bool = False) -> bool:
+    """Kirim 1 pesan broadcast (teks / foto / dokumen gambar); retry saat flood-limit atau format fallback."""
     for attempt in (1, 2):
         try:
             if photo_file_id:
-                await bot.send_photo(
-                    chat_id=telegram_id, photo=photo_file_id,
-                    caption=text, parse_mode="HTML",
-                )
+                if is_document:
+                    if len(text) > 1024:
+                        await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+                    else:
+                        await bot.send_document(chat_id=telegram_id, document=photo_file_id, caption=text, parse_mode="HTML")
+                else:
+                    if len(text) > 1024:
+                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
+                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+                    else:
+                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id, caption=text, parse_mode="HTML")
             else:
-                await bot.send_message(
-                    chat_id=telegram_id, text=text, parse_mode="HTML",
-                )
+                await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
             return True
         except RetryAfter as flood:
             await asyncio.sleep(_retry_after_seconds(flood))
             if attempt == 2:
                 return False
-        except Exception:
+        except BadRequest as bad_req:
+            err_str = str(bad_req).lower()
+            if "can't parse entities" in err_str or "entity" in err_str:
+                # Fallback format plain text jika ada tag HTML / simbol tidak valid
+                try:
+                    if photo_file_id:
+                        if is_document:
+                            if len(text) > 1024:
+                                await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                                await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                            else:
+                                await bot.send_document(chat_id=telegram_id, document=photo_file_id, caption=text, parse_mode=None)
+                        else:
+                            if len(text) > 1024:
+                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
+                                await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                            else:
+                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id, caption=text, parse_mode=None)
+                    else:
+                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                    return True
+                except Exception as fallback_err:
+                    logger.warning("Broadcast fallback gagal ke %s: %s", telegram_id, fallback_err)
+                    return False
+            logger.warning("BadRequest broadcast ke %s: %s", telegram_id, bad_req)
+            return False
+        except Exception as exc:
+            logger.warning("Gagal kirim broadcast ke %s: %s", telegram_id, exc)
             return False
     return False
 
@@ -1444,17 +1479,26 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     photo_file_id = None
+    is_document = False
     if message.photo:
         photo_file_id = message.photo[-1].file_id
         raw = message.caption or ""
-    elif message.reply_to_message and message.reply_to_message.photo:
+    elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
+        photo_file_id = message.document.file_id
+        is_document = True
+        raw = message.caption or ""
+    elif message.reply_to_message and getattr(message.reply_to_message, "photo", None):
         photo_file_id = message.reply_to_message.photo[-1].file_id
+        raw = message.text or ""
+    elif message.reply_to_message and getattr(message.reply_to_message, "document", None) and isinstance(getattr(message.reply_to_message.document, "mime_type", None), str) and message.reply_to_message.document.mime_type.startswith("image/"):
+        photo_file_id = message.reply_to_message.document.file_id
+        is_document = True
         raw = message.text or ""
     else:
         raw = message.text or ""
 
-    broadcast_msg = raw.replace("/broadcast", "", 1).strip()
-    if not broadcast_msg and not photo_file_id:
+    clean_raw = re.sub(r"^/broadcast(?:@\w+)?\s*", "", raw, flags=re.IGNORECASE).strip()
+    if not clean_raw and not photo_file_id:
         await message.reply_text(
             "⚠️ Format salah.\n"
             "Teks: <code>/broadcast Halo member...</code>\n"
@@ -1465,7 +1509,12 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    segment, broadcast_msg = _parse_broadcast_segment(broadcast_msg)
+    segment, broadcast_msg = _parse_broadcast_segment(clean_raw)
+
+    # Jika mereply foto tanpa teks tambahan di reply-nya, pakai caption asli foto tersebut bila ada
+    if not broadcast_msg and message.reply_to_message and message.reply_to_message.caption:
+        broadcast_msg = message.reply_to_message.caption.strip()
+
     if not broadcast_msg and not photo_file_id:
         await message.reply_text(
             "⚠️ Pesan broadcast kosong setelah flag segment.",
@@ -1483,7 +1532,13 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await message.reply_text(f"ℹ️ Tidak ada user pada segment {_segment_label(segment)}.")
             return
 
-        mode = "Foto + Teks" if photo_file_id else "Teks"
+        if photo_file_id and broadcast_msg:
+            mode = "Dokumen Gambar + Teks" if is_document else "Foto + Teks"
+        elif photo_file_id:
+            mode = "Dokumen Gambar" if is_document else "Foto"
+        else:
+            mode = "Teks"
+
         import time as _time
         start_ts = _time.monotonic()
 
@@ -1497,7 +1552,7 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         for index, u in enumerate(users, start=1):
             if await _send_broadcast_to_user(
-                context.bot, u.telegram_id, full_text, photo_file_id
+                context.bot, u.telegram_id, full_text, photo_file_id, is_document=is_document
             ):
                 success_count += 1
             else:

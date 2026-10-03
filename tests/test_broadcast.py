@@ -208,6 +208,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg.photo = photo or []
         msg.caption = caption
         msg.reply_to_message = None
+        msg.document = None
         return msg
 
     def _run(self, message, admin=True, bot=None):
@@ -274,6 +275,121 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         await broadcast_handler(update, ctx)
         bot.send_message.assert_not_awaited()
 
+    async def test_broadcast_photo_direct(self):
+        """Direct photo upload with caption /broadcast Promo Foto."""
+        bot = AsyncMock()
+        photo_obj = SimpleNamespace(file_id="photo_xyz_123")
+        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast Promo Foto Langsung")
+        msg.document = None
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_photo.await_count, 2)
+        call_kwargs = bot.send_photo.call_args_list[0].kwargs
+        self.assertEqual(call_kwargs["photo"], "photo_xyz_123")
+        self.assertIn("Promo Foto Langsung", call_kwargs["caption"])
+        self.assertEqual(call_kwargs["parse_mode"], "HTML")
+
+    async def test_broadcast_photo_reply(self):
+        """Reply to a photo message with /broadcast Teks Reply."""
+        bot = AsyncMock()
+        replied_photo = SimpleNamespace(file_id="replied_photo_456")
+        replied_msg = SimpleNamespace(photo=[replied_photo], caption="Foto Original", document=None)
+        
+        msg = self._msg(text="/broadcast Promo Teks Baru")
+        msg.document = None
+        msg.reply_to_message = replied_msg
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_photo.await_count, 2)
+        call_kwargs = bot.send_photo.call_args_list[0].kwargs
+        self.assertEqual(call_kwargs["photo"], "replied_photo_456")
+        self.assertIn("Promo Teks Baru", call_kwargs["caption"])
+
+    async def test_broadcast_photo_reply_inherits_caption(self):
+        """Reply /broadcast (no text) to a photo that has a caption."""
+        bot = AsyncMock()
+        replied_photo = SimpleNamespace(file_id="replied_photo_789")
+        replied_msg = SimpleNamespace(photo=[replied_photo], caption="Caption Asli dari Poster", document=None)
+        
+        msg = self._msg(text="/broadcast")
+        msg.document = None
+        msg.reply_to_message = replied_msg
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_photo.await_count, 2)
+        call_kwargs = bot.send_photo.call_args_list[0].kwargs
+        self.assertIn("Caption Asli dari Poster", call_kwargs["caption"])
+
+    async def test_broadcast_photo_with_segment(self):
+        """Photo broadcast targeting specific segment (--balance)."""
+        bot = AsyncMock()
+        photo_obj = SimpleNamespace(file_id="photo_seg_999")
+        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --balance Khusus yang punya saldo")
+        msg.document = None
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        # Only alice has balance > 0
+        self.assertEqual(bot.send_photo.await_count, 1)
+        call_kwargs = bot.send_photo.call_args_list[0].kwargs
+        self.assertEqual(call_kwargs["chat_id"], 10)
+        self.assertIn("Khusus yang punya saldo", call_kwargs["caption"])
+
+    async def test_broadcast_document_image(self):
+        """Image sent as document (uncompressed image/png)."""
+        bot = AsyncMock()
+        doc_obj = SimpleNamespace(file_id="doc_img_123", mime_type="image/png")
+        msg = self._msg(text=None, photo=[], caption="/broadcast Promo Dokumen Gambar")
+        msg.document = doc_obj
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_document.await_count, 2)
+        call_kwargs = bot.send_document.call_args_list[0].kwargs
+        self.assertEqual(call_kwargs["document"], "doc_img_123")
+        self.assertIn("Promo Dokumen Gambar", call_kwargs["caption"])
+
+    async def test_broadcast_photo_long_caption(self):
+        """Photo with caption > 1024 characters splits into photo + text message."""
+        bot = AsyncMock()
+        photo_obj = SimpleNamespace(file_id="photo_long_123")
+        long_text = "A" * 1200
+        msg = self._msg(text=None, photo=[photo_obj], caption=f"/broadcast {long_text}")
+        msg.document = None
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        # 2 users -> 2 send_photo (without full caption) + 2 send_message (with full text)
+        self.assertEqual(bot.send_photo.await_count, 2)
+        self.assertEqual(bot.send_message.await_count, 2)
+
+    async def test_broadcast_photo_html_parse_error_fallback(self):
+        """Photo broadcast with broken HTML tag falls back to plain text."""
+        from telegram.error import BadRequest
+        bot = AsyncMock()
+        photo_obj = SimpleNamespace(file_id="photo_fallback_123")
+        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast Beli <USDT> sekarang")
+        msg.document = None
+
+        # First call with parse_mode='HTML' raises BadRequest, second call with parse_mode=None succeeds
+        async def mock_send_photo(*args, **kwargs):
+            if kwargs.get("parse_mode") == "HTML":
+                raise BadRequest("Can't parse entities in message text")
+            return True
+
+        bot.send_photo = AsyncMock(side_effect=mock_send_photo)
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        # It should have called send_photo twice per user (HTML then fallback plain text)
+        self.assertEqual(bot.send_photo.await_count, 4)
+        report = update.message.reply_text.call_args_list[-1].args[0]
+        self.assertIn("Terkirim        : <code>2 user</code>", report)
+
 
 if __name__ == "__main__":
     unittest.main()
+
