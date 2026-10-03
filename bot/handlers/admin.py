@@ -403,15 +403,39 @@ def build_admin_credit_view() -> str:
 
 
 def build_admin_referral_view(db) -> str:
-    """Membangun tampilan statistik referral untuk admin."""
+    """Membangun tampilan manajemen konfigurasi & statistik referral untuk admin."""
     try:
         from database.models import Referral, ReferralConfig
+        from database.crud import get_referral_config
+        from sqlalchemy import func as sa_func, Integer
+
         total = db.query(Referral).count()
         completed = db.query(Referral).filter(Referral.status == "COMPLETED").count()
         pending = db.query(Referral).filter(Referral.status == "PENDING").count()
 
-        # Top referrers
-        from sqlalchemy import func as sa_func
+        # Configs
+        reward_cfg = get_referral_config(db, "reward_per_referral")
+        reward_idr = int(reward_cfg) if reward_cfg else 5000
+
+        bonus_cfg = get_referral_config(db, "referee_discount_idr")
+        bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+
+        enabled_cfg = get_referral_config(db, "referral_enabled")
+        is_enabled = enabled_cfg is None or enabled_cfg.lower() == "true"
+
+        max_cfg = get_referral_config(db, "max_referrals_per_user")
+        max_refs = int(max_cfg) if max_cfg else 100
+
+        # Total reward paid out
+        total_payout = (
+            db.query(sa_func.sum(sa_func.cast(Referral.reward_idr, Integer)))
+            .filter(Referral.status == "COMPLETED")
+            .scalar() or 0
+        )
+
+        status_badge = "🟢 <b>AKTIF</b>" if is_enabled else "🔴 <b>NONAKTIF</b>"
+
+        # Top 10 referrers
         top = (
             db.query(
                 Referral.referrer_id,
@@ -426,19 +450,18 @@ def build_admin_referral_view(db) -> str:
             .all()
         )
 
-        # Reward config
-        reward_row = db.query(ReferralConfig).filter(
-            ReferralConfig.key == "reward_per_referral"
-        ).first()
-        reward_idr = int(reward_row.value) if reward_row else 5000
-
         lines = [
-            "🔗 <b>STATISTIK REFERRAL PROGRAM</b>\n",
-            f"📊 Total Referral  : <b>{total}</b>",
-            f"✅ Completed       : <b>{completed}</b>",
-            f"⏳ Pending         : <b>{pending}</b>",
-            f"💰 Reward/Referral : <b>Rp {reward_idr:,}</b>\n",
-            "🏆 <b>Top 10 Referrers:</b>",
+            "🔗 <b>MANAJEMEN PROGRAM REFERRAL</b>\n",
+            f"⚙️ <b>Status Program:</b> {status_badge}",
+            f"💰 <b>Reward Pengundang:</b> Rp {reward_idr:,}",
+            f"🎁 <b>Potongan/Bonus Teman:</b> Rp {bonus_idr:,}",
+            f"🎯 <b>Maksimal per User:</b> {max_refs} teman\n",
+            "📊 <b>Statistik Akumulatif:</b>",
+            f"├── 👥 Total Ajakan    : <b>{total}</b>",
+            f"├── ✅ Selesai Transaksi: <b>{completed}</b>",
+            f"├── ⏳ Belum Transaksi  : <b>{pending}</b>",
+            f"└── 💸 Total Reward Cair: <b>Rp {total_payout:,}</b>\n",
+            "🏆 <b>Top 10 Pengundang Terbanyak:</b>",
         ]
         if top:
             for i, row in enumerate(top, 1):
@@ -449,16 +472,79 @@ def build_admin_referral_view(db) -> str:
         else:
             lines.append("<i>Belum ada data referral.</i>")
 
-        lines.append("\n💡 <b>Setting:</b>")
-        lines.append("<code>/setreferral reward [JUMLAH]</code> — Set reward")
-        lines.append("<code>/setreferral enabled true|false</code> — On/Off")
+        lines.append(
+            "\n💡 <b>Pengaturan Cepat:</b>\n"
+            "Gunakan tombol di bawah untuk toggle status atau ubah nominal reward & potongan secara instan."
+        )
 
         return "\n".join(lines)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error build_admin_referral_view: {e}", exc_info=True)
         return (
             "🔗 <b>REFERRAL PROGRAM</b>\n\n"
-            "<i>Tabel referral belum tersedia. Restart bot untuk inisialisasi.</i>"
+            "<i>Tabel referral belum siap atau terjadi kendala database.</i>"
         )
+
+
+def build_admin_referral_keyboard(db) -> InlineKeyboardMarkup:
+    """Membuat inline keyboard manajemen referral interaktif untuk admin."""
+    from database.crud import get_referral_config
+    enabled_cfg = get_referral_config(db, "referral_enabled")
+    is_enabled = enabled_cfg is None or enabled_cfg.lower() == "true"
+    toggle_text = "🔴 Nonaktifkan Program" if is_enabled else "🟢 Aktifkan Program"
+
+    buttons = [
+        [InlineKeyboardButton(toggle_text, callback_data="admin_ref_toggle_enabled")],
+        [
+            InlineKeyboardButton("💵 Atur Reward Pengundang", callback_data="admin_ref_pick_reward"),
+            InlineKeyboardButton("🎁 Atur Potongan Teman", callback_data="admin_ref_pick_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_reward_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat nominal reward pengundang."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 2.000", callback_data="admin_ref_set_reward_2000"),
+            InlineKeyboardButton("Rp 5.000", callback_data="admin_ref_set_reward_5000"),
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_reward_10000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_ref_set_reward_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_ref_set_reward_50000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_reward"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_bonus_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat nominal potongan/bonus transaksi pertama teman."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Nonaktif)", callback_data="admin_ref_set_bonus_0"),
+            InlineKeyboardButton("Rp 2.500", callback_data="admin_ref_set_bonus_2500"),
+            InlineKeyboardButton("Rp 5.000", callback_data="admin_ref_set_bonus_5000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_bonus_10000"),
+            InlineKeyboardButton("Rp 20.000", callback_data="admin_ref_set_bonus_20000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
 def build_admin_emojis_view() -> str:
@@ -632,12 +718,80 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         elif data == "admin_panel_referral":
             text = build_admin_referral_view(db)
-            buttons = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_referral")],
-                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
-            ]
-            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
-            await query.answer("Statistik referral dimuat.")
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Manajemen referral dimuat.")
+
+        elif data == "admin_ref_toggle_enabled":
+            curr = crud.get_referral_config(db, "referral_enabled")
+            is_on = curr is None or curr.lower() == "true"
+            new_val = "false" if is_on else "true"
+            crud.set_referral_config(db, "referral_enabled", new_val)
+            status_str = "dinonaktifkan" if new_val == "false" else "diaktifkan"
+            await query.answer(f"Program referral berhasil {status_str}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_pick_reward":
+            curr_reward = crud.get_referral_config(db, "reward_per_referral") or "5000"
+            text = (
+                "💵 <b>PILIH REWARD PENGUNDANG (REFERRER)</b>\n\n"
+                f"Nominal reward saat ini: <b>Rp {int(curr_reward):,}</b> per teman yang selesai transaksi pertama.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_reward_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_reward_"):
+            val_str = data.replace("admin_ref_set_reward_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "reward_per_referral", str(val_int))
+            await query.answer(f"Reward pengundang diset ke Rp {val_int:,}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_reward":
+            context.user_data["admin_awaiting_ref_custom_reward"] = True
+            context.user_data["admin_awaiting_ref_custom_bonus"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Reward Pengundang</b>\n\n"
+                "Silakan ketik nominal reward baru dalam Rupiah (contoh: <code>7500</code> atau <code>15000</code>):",
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_ref_pick_bonus":
+            curr_bonus = crud.get_referral_config(db, "referee_discount_idr") or "0"
+            text = (
+                "🎁 <b>PILIH POTONGAN / CASHBACK TEMAN (REFEREE)</b>\n\n"
+                f"Nominal potongan saat ini: <b>Rp {int(curr_bonus):,}</b> untuk teman pada transaksi pertama.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_bonus_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_bonus_"):
+            val_str = data.replace("admin_ref_set_bonus_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "referee_discount_idr", str(val_int))
+            await query.answer(f"Potongan teman diset ke Rp {val_int:,}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_bonus":
+            context.user_data["admin_awaiting_ref_custom_bonus"] = True
+            context.user_data["admin_awaiting_ref_custom_reward"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Potongan Teman (Referee)</b>\n\n"
+                "Silakan ketik nominal potongan/cashback transaksi pertama baru dalam Rupiah (contoh: <code>3000</code> atau <code>5000</code>):",
+                parse_mode="HTML"
+            )
 
         elif data == "admin_panel_emojis":
             text = build_admin_emojis_view()
@@ -2379,17 +2533,22 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Konfigurasi referral program.
 
     Format:
-      /setreferral reward <jumlah>     — Set reward per referral
-      /setreferral enabled true|false  — Aktifkan/nonaktifkan
+      /setreferral reward <jumlah>     — Set reward per referral (Rp)
+      /setreferral bonus <jumlah>      — Set potongan/bonus transaksi pertama teman (Rp)
+      /setreferral enabled true|false  — Aktifkan/nonaktifkan program
+      /setreferral max <jumlah>        — Batas maksimal referral per user
     """
     if not is_admin(update.effective_user.id):
         return
 
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
-            "⚠️ Format:\n"
-            "<code>/setreferral reward [JUMLAH]</code>\n"
-            "<code>/setreferral enabled true|false</code>",
+            "⚠️ <b>Format Pengaturan Referral:</b>\n\n"
+            "• <code>/setreferral reward [JUMLAH]</code> — Set reward pengundang\n"
+            "• <code>/setreferral bonus [JUMLAH]</code> — Set potongan/bonus teman\n"
+            "• <code>/setreferral enabled true|false</code> — Aktifkan/nonaktifkan\n"
+            "• <code>/setreferral max [JUMLAH]</code> — Batas maksimal teman/user\n\n"
+            "<i>Atau gunakan menu interaktif di Dashboard Admin ➔ Kelola Referral.</i>",
             parse_mode="HTML",
         )
         return
@@ -2397,22 +2556,43 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     key = context.args[0].lower()
     value = context.args[1]
 
-    valid_keys = {"reward": "reward_per_referral", "enabled": "referral_enabled"}
+    valid_keys = {
+        "reward": "reward_per_referral",
+        "enabled": "referral_enabled",
+        "bonus": "referee_discount_idr",
+        "discount": "referee_discount_idr",
+        "potongan": "referee_discount_idr",
+        "max": "max_referrals_per_user",
+    }
     if key not in valid_keys:
-        await update.message.reply_text(f"❌ Key tidak valid: {key}. Gunakan: reward, enabled")
+        await update.message.reply_text(
+            f"❌ Key tidak valid: <code>{key}</code>.\n"
+            "Gunakan salah satu: <code>reward</code>, <code>bonus</code>, <code>enabled</code>, <code>max</code>",
+            parse_mode="HTML"
+        )
         return
 
     config_key = valid_keys[key]
 
-    if key == "reward":
+    if key in ("reward", "bonus", "discount", "potongan"):
         try:
             val = int(value)
             if val < 0 or val > 1_000_000:
-                await update.message.reply_text("❌ Reward harus antara 0 - 1.000.000")
+                await update.message.reply_text("❌ Nilai harus antara 0 - 1.000.000")
                 return
             value = str(val)
         except ValueError:
-            await update.message.reply_text("❌ Nilai reward harus berupa angka.")
+            await update.message.reply_text("❌ Nilai harus berupa angka.")
+            return
+    elif key == "max":
+        try:
+            val = int(value)
+            if val < 1 or val > 100_000:
+                await update.message.reply_text("❌ Batas maksimal harus antara 1 - 100.000")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai max harus berupa angka.")
             return
     elif key == "enabled":
         if value.lower() not in ("true", "false"):
@@ -2424,13 +2604,70 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         crud.set_referral_config(db, config_key, value)
         await update.message.reply_text(
-            f"✅ Referral config diperbarui:\n"
-            f"<code>{config_key}</code> = <code>{value}</code>",
+            f"✅ <b>Referral Config Diperbarui!</b>\n\n"
+            f"⚙️ <code>{config_key}</code> = <b>{value}</b>",
             parse_mode="HTML",
         )
     except Exception as e:
         logger.error(f"Error setreferral: {e}", exc_info=True)
         await update.message.reply_text("❌ Gagal update konfigurasi referral.")
+    finally:
+        db.close()
+
+
+async def admin_referral_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Menangani input nominal kustom reward pengundang atau potongan teman dari admin."""
+    if not update.message or not update.message.text:
+        return False
+
+    is_reward = context.user_data.get("admin_awaiting_ref_custom_reward")
+    is_bonus = context.user_data.get("admin_awaiting_ref_custom_bonus")
+
+    if not is_reward and not is_bonus:
+        return False
+
+    raw_text = update.message.text.strip().replace(".", "").replace(",", "").replace("Rp", "").replace("rp", "").strip()
+    try:
+        val = int(raw_text)
+        if val < 0 or val > 1_000_000:
+            await update.message.reply_text("❌ Nominal harus antara Rp 0 sampai Rp 1.000.000. Silakan ketik angka kembali:")
+            return True
+    except ValueError:
+        await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 7500):")
+        return True
+
+    db = SessionLocal()
+    try:
+        if is_reward:
+            crud.set_referral_config(db, "reward_per_referral", str(val))
+            context.user_data["admin_awaiting_ref_custom_reward"] = False
+            await update.message.reply_text(
+                f"✅ <b>Reward Pengundang Berhasil Diperbarui!</b>\n\n"
+                f"💰 Nominal reward baru: <b>Rp {val:,}</b> per teman yang selesai transaksi.",
+                parse_mode="HTML"
+            )
+        elif is_bonus:
+            crud.set_referral_config(db, "referee_discount_idr", str(val))
+            context.user_data["admin_awaiting_ref_custom_bonus"] = False
+            await update.message.reply_text(
+                f"✅ <b>Potongan / Bonus Teman Berhasil Diperbarui!</b>\n\n"
+                f"🎁 Nominal potongan baru: <b>Rp {val:,}</b> untuk transaksi pertama teman.",
+                parse_mode="HTML"
+            )
+
+        # Kirimkan kembali panel referral terkini beserta tombol aksi
+        view_text = build_admin_referral_view(db)
+        markup = build_admin_referral_keyboard(db)
+        await update.message.reply_text(
+            text=view_text,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error in admin_referral_text_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal menyimpan konfigurasi referral.")
+        return True
     finally:
         db.close()
 

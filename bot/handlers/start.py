@@ -186,18 +186,37 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 try:
                     referrer_id = int(context.args[0].replace("ref_", ""))
                     if referrer_id != user.id:  # Tidak bisa refer diri sendiri
-                        from database.crud import create_referral, get_referral_by_referee
+                        from database.crud import create_referral, get_referral_by_referee, get_referral_config
                         existing_ref = get_referral_by_referee(db, user.id)
                         if not existing_ref:
                             ref = create_referral(db, referrer_id, user.id)
                             if ref:
+                                reward_cfg = get_referral_config(db, "reward_per_referral")
+                                reward_idr = int(reward_cfg) if reward_cfg else 5000
+                                bonus_cfg = get_referral_config(db, "referee_discount_idr")
+                                bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+
+                                # Notifikasi ke referee (user baru) jika ada potongan/bonus
+                                if bonus_idr > 0:
+                                    try:
+                                        await update.message.reply_text(
+                                            f"🎁 <b>Selamat Datang!</b>\n\n"
+                                            f"Anda bergabung lewat link undangan teman.\n"
+                                            f"Dapatkan potongan / bonus cashback saldo sebesar <b>Rp {bonus_idr:,}</b> "
+                                            f"setelah Anda menyelesaikan transaksi pertama Anda!",
+                                            parse_mode="HTML"
+                                        )
+                                    except Exception:
+                                        pass
+
                                 # Notifikasi ke referrer
                                 try:
                                     await context.bot.send_message(
                                         referrer_id,
                                         f"🎉 <b>Referral Baru!</b>\n\n"
-                                        f"User baru bergabung via link referral Anda.\n"
-                                        f"Reward akan diberikan setelah mereka menyelesaikan transaksi pertama!",
+                                        f"Teman baru bergabung via link referral Anda.\n"
+                                        f"Reward <b>Rp {reward_idr:,}</b> akan otomatis masuk ke saldo Anda "
+                                        f"setelah mereka menyelesaikan transaksi pertama!",
                                         parse_mode="HTML",
                                     )
                                 except Exception:
@@ -322,7 +341,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import sellorders_handler
         await sellorders_handler(update, context)
 
-    elif data.startswith("admin_panel_"):
+    elif data.startswith("admin_panel_") or data.startswith("admin_ref_"):
         if data == "admin_panel_campaign":
             from bot.handlers.admin_campaign import campaign_callback_handler
             await campaign_callback_handler(update, context)

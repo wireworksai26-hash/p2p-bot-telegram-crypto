@@ -141,6 +141,25 @@ class TestReferralCRUD(unittest.TestCase):
         finally:
             db.close()
 
+    def test_complete_referral_credits_reward_and_referee_bonus(self):
+        """When referee_discount_idr is set, referee also receives the bonus/discount credit."""
+        db = SessionLocal()
+        try:
+            crud.set_referral_config(db, "referee_discount_idr", "2500")
+            crud.create_referral(db, referrer_id=100, referee_id=200)
+            result = crud.complete_referral(db, referee_id=200)
+            self.assertTrue(result)
+
+            # Check referrer balance credited 5000
+            bal_referrer = crud.get_user_balance(db, 100)
+            self.assertEqual(bal_referrer, 5000.0)
+
+            # Check referee balance credited 2500
+            bal_referee = crud.get_user_balance(db, 200)
+            self.assertEqual(bal_referee, 2500.0)
+        finally:
+            db.close()
+
     def test_complete_referral_already_completed(self):
         """Double-complete should return False."""
         db = SessionLocal()
@@ -380,7 +399,7 @@ class TestSetReferralHandler(unittest.IsolatedAsyncioTestCase):
                 await setreferral_handler(update, context)
 
         text = update.message.reply_text.call_args.args[0]
-        self.assertIn("diperbarui", text)
+        self.assertIn("diperbarui", text.lower())
 
         db = SessionLocal()
         try:
@@ -438,6 +457,187 @@ class TestSetReferralHandler(unittest.IsolatedAsyncioTestCase):
             await setreferral_handler(update, context)
 
         update.message.reply_text.assert_not_awaited()
+
+    async def test_set_bonus(self):
+        from bot.handlers.admin import setreferral_handler
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=AsyncMock(),
+        )
+        context = SimpleNamespace(args=["bonus", "3000"])
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await setreferral_handler(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "referee_discount_idr")
+            self.assertEqual(val, "3000")
+        finally:
+            db.close()
+
+    async def test_set_max(self):
+        from bot.handlers.admin import setreferral_handler
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=AsyncMock(),
+        )
+        context = SimpleNamespace(args=["max", "50"])
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await setreferral_handler(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "max_referrals_per_user")
+            self.assertEqual(val, "50")
+        finally:
+            db.close()
+
+
+class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
+    """Test interactive admin panel referral controls and callbacks."""
+
+    def setUp(self):
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        db.add_all([
+            User(telegram_id=999, username="admin_boss", balance_idr=Decimal("0")),
+            ReferralConfig(key="reward_per_referral", value="5000"),
+            ReferralConfig(key="referee_discount_idr", value="2500"),
+            ReferralConfig(key="referral_enabled", value="true"),
+        ])
+        db.commit()
+        db.close()
+
+    def tearDown(self):
+        Base.metadata.drop_all(bind=engine)
+
+    async def test_admin_panel_referral_view(self):
+        from bot.handlers.admin import admin_panel_callback
+
+        update = SimpleNamespace(
+            callback_query=SimpleNamespace(
+                from_user=SimpleNamespace(id=999),
+                data="admin_panel_referral",
+                edit_message_text=AsyncMock(),
+                answer=AsyncMock(),
+            )
+        )
+        context = SimpleNamespace()
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await admin_panel_callback(update, context)
+
+        update.callback_query.edit_message_text.assert_awaited_once()
+        text = update.callback_query.edit_message_text.call_args.kwargs["text"]
+        self.assertIn("MANAJEMEN PROGRAM REFERRAL", text)
+        self.assertIn("Reward Pengundang", text)
+        self.assertIn("Potongan/Bonus Teman", text)
+
+    async def test_admin_ref_toggle_enabled(self):
+        from bot.handlers.admin import admin_panel_callback
+
+        update = SimpleNamespace(
+            callback_query=SimpleNamespace(
+                from_user=SimpleNamespace(id=999),
+                data="admin_ref_toggle_enabled",
+                edit_message_text=AsyncMock(),
+                answer=AsyncMock(),
+            )
+        )
+        context = SimpleNamespace()
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await admin_panel_callback(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "referral_enabled")
+            self.assertEqual(val, "false")
+        finally:
+            db.close()
+
+    async def test_admin_ref_set_reward(self):
+        from bot.handlers.admin import admin_panel_callback
+
+        update = SimpleNamespace(
+            callback_query=SimpleNamespace(
+                from_user=SimpleNamespace(id=999),
+                data="admin_ref_set_reward_10000",
+                edit_message_text=AsyncMock(),
+                answer=AsyncMock(),
+            )
+        )
+        context = SimpleNamespace()
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await admin_panel_callback(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "reward_per_referral")
+            self.assertEqual(val, "10000")
+        finally:
+            db.close()
+
+    async def test_admin_ref_set_bonus(self):
+        from bot.handlers.admin import admin_panel_callback
+
+        update = SimpleNamespace(
+            callback_query=SimpleNamespace(
+                from_user=SimpleNamespace(id=999),
+                data="admin_ref_set_bonus_5000",
+                edit_message_text=AsyncMock(),
+                answer=AsyncMock(),
+            )
+        )
+        context = SimpleNamespace()
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await admin_panel_callback(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "referee_discount_idr")
+            self.assertEqual(val, "5000")
+        finally:
+            db.close()
+
+    async def test_admin_referral_text_handler_custom_reward(self):
+        from bot.handlers.admin import admin_referral_text_handler
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=SimpleNamespace(
+                text="15.000",
+                reply_text=AsyncMock(),
+            ),
+        )
+        context = SimpleNamespace(
+            user_data={"admin_awaiting_ref_custom_reward": True}
+        )
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            handled = await admin_referral_text_handler(update, context)
+
+        self.assertTrue(handled)
+        self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_reward"))
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "reward_per_referral")
+            self.assertEqual(val, "15000")
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

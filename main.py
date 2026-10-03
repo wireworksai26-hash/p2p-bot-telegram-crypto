@@ -449,7 +449,7 @@ def build_bot_application() -> Application:
 async def _route_admin_text(update: Update, context) -> None:
     """
     Router pesan teks interaktif untuk input wizard admin
-    (seperti nominal budget campaign atau kustomisasi teks notifikasi giveaway).
+    (seperti nominal budget campaign atau kustomisasi teks notifikasi giveaway, serta referral).
     """
     if not update.message or not update.message.text:
         return
@@ -457,6 +457,13 @@ async def _route_admin_text(update: Update, context) -> None:
     from bot.handlers.admin import is_admin
     if not is_admin(user_id):
         return
+
+    # Routing input kustom referral (reward pengundang / potongan teman)
+    if context.user_data.get("admin_awaiting_ref_custom_reward") or context.user_data.get("admin_awaiting_ref_custom_bonus"):
+        from bot.handlers.admin import admin_referral_text_handler
+        handled = await admin_referral_text_handler(update, context)
+        if handled:
+            return
 
     from bot.handlers.admin_campaign import campaign_text_input_handler
     await campaign_text_input_handler(update, context)

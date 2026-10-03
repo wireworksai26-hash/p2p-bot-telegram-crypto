@@ -6,6 +6,7 @@ Menampilkan link referral, statistik, dan leaderboard.
 
 import logging
 from html import escape as _esc
+from urllib.parse import quote
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -36,25 +37,37 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         reward_str = get_referral_config(db, "reward_per_referral")
         reward_idr = int(reward_str) if reward_str else 5000
 
+        # Get referee bonus/discount config
+        bonus_str = get_referral_config(db, "referee_discount_idr")
+        bonus_idr = int(bonus_str) if bonus_str else 0
+
         # Build referral link
         bot_username = (await context.bot.get_me()).username if context.bot else "Hsnpro_bot"
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
+
+        bonus_line = ""
+        if bonus_idr > 0:
+            bonus_line = f"• Teman Anda juga mendapat cashback/potongan <b>{format_idr(bonus_idr)}</b> di transaksi pertamanya!\n"
 
         text = (
             f"🔗 <b>PROGRAM REFERRAL HSN STORE</b>\n\n"
             f"🎁 <b>Link Referral Anda:</b>\n"
             f"<code>{ref_link}</code>\n\n"
-            f"📊 <b>Statistik Referral:</b>\n"
+            f"📊 <b>Statistik Referral Anda:</b>\n"
             f"├── 👥 Total Ajakan   : <b>{stats['total']} orang</b>\n"
-            f"├── ✅ Sudah Transaksi : <b>{stats['completed']} orang</b>\n"
-            f"├── ⏳ Belum Transaksi : <b>{stats['pending']} orang</b>\n"
+            f"├── ✅ Selesai Trade   : <b>{stats['completed']} orang</b>\n"
+            f"├── ⏳ Belum Selesai   : <b>{stats['pending']} orang</b>\n"
             f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>\n\n"
-            f"💡 <i>Bagikan link di atas ke teman Anda.\n"
-            f"Anda mendapat <b>{format_idr(reward_idr)}</b> untuk setiap teman "
-            f"yang berhasil transaksi pertama!</i>"
+            f"💡 <i>Bagikan link di atas ke teman Anda:\n"
+            f"• Anda mendapat reward <b>{format_idr(reward_idr)}</b> untuk setiap teman yang menyelesaikan transaksi pertama!\n"
+            f"{bonus_line}</i>"
         )
 
+        share_msg = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya: {ref_link}"
+        share_url = f"https://t.me/share/url?url={quote(ref_link)}&text={quote(share_msg)}"
+
         keyboard = [
+            [InlineKeyboardButton("📤 Bagikan Link ke Teman", url=share_url)],
             [InlineKeyboardButton("🏆 Leaderboard", callback_data="referral_leaderboard")],
             [InlineKeyboardButton("🏠 Menu Utama", callback_data="menu_back")],
         ]

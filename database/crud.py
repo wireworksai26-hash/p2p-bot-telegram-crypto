@@ -180,6 +180,13 @@ def update_order_status(
         db.commit()
         db.refresh(order)
         logger.info(f"Order {order_id} status updated: {old_status} -> {new_status}")
+
+        if new_status and str(new_status).lower() == "completed":
+            try:
+                complete_referral(db, order.telegram_id)
+            except Exception as ref_err:
+                logger.warning(f"Error completing referral on order {order_id}: {ref_err}")
+
         return order
 
     except Exception as e:
@@ -1240,12 +1247,12 @@ def get_referral_by_referee(db: Session, referee_id: int):
 
 
 def complete_referral(db: Session, referee_id: int) -> bool:
-    """Mark referral COMPLETED dan credit reward ke referrer.
+    """Mark referral COMPLETED dan credit reward ke referrer serta potongan/bonus ke referee.
 
     Dipanggil saat referee menyelesaikan transaksi pertama.
     Return True jika berhasil, False jika tidak ada referral atau sudah completed.
     """
-    from database.models import Referral
+    from database.models import Referral, AuditLog
 
     ref = db.query(Referral).filter(
         Referral.referee_id == referee_id,
@@ -1256,17 +1263,33 @@ def complete_referral(db: Session, referee_id: int) -> bool:
         return False
 
     try:
-        # Credit reward ke referrer
+        # 1. Credit reward ke referrer
         reward = ref.reward_idr or 0
         if reward > 0:
             credit_user_balance(db, ref.referrer_id, float(reward))
+            db.add(AuditLog(
+                telegram_id=ref.referrer_id,
+                action="REFERRAL_REWARD",
+                details=f"Reward referral dari transaksi user {referee_id}: +Rp {reward:,}",
+            ))
+
+        # 2. Credit bonus/potongan ke referee jika diaktifkan admin
+        bonus_cfg = get_referral_config(db, "referee_discount_idr")
+        bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+        if bonus_idr > 0:
+            credit_user_balance(db, referee_id, float(bonus_idr))
+            db.add(AuditLog(
+                telegram_id=referee_id,
+                action="REFERRAL_BONUS",
+                details=f"Bonus/Potongan transaksi pertama referral (diajak oleh {ref.referrer_id}): +Rp {bonus_idr:,}",
+            ))
 
         ref.status = "COMPLETED"
         ref.completed_at = datetime.utcnow()
         db.commit()
         logger.info(
             f"Referral completed: {ref.referrer_id} ← {referee_id}. "
-            f"Reward Rp {reward:,} credited."
+            f"Reward Rp {reward:,} (referrer), Bonus Rp {bonus_idr:,} (referee) credited."
         )
         return True
     except Exception as e:
