@@ -47,6 +47,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("Riwayat Transaksi", callback_data="menu_history", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873")),
+            InlineKeyboardButton("Program Referral", callback_data="menu_referral", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("LINK", "5350305691942788490")),
+        ],
+        [
             InlineKeyboardButton("Syarat & Ketentuan", callback_data="menu_snk", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("WARNING", "5447644880824181073")),
         ],
         [

@@ -16,6 +16,7 @@ from config.settings import settings
 from database.connection import SessionLocal
 from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, TopupOrder
 from database import crud
+from html import escape as _esc
 from services.crypto_sender import CryptoSenderFactory
 from bot.utils.formatter import format_idr, format_crypto
 from bot.utils.emojis import (
@@ -55,7 +56,11 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         ],
         [
             InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
+            InlineKeyboardButton("💳 Isi Saldo User", callback_data="admin_panel_credit"),
+        ],
+        [
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
+            InlineKeyboardButton("🔗 Referral Stats", callback_data="admin_panel_referral"),
         ],
         [
             InlineKeyboardButton("📡 Status API & URL Koin", callback_data="admin_panel_check_apis"),
@@ -356,6 +361,11 @@ def build_admin_broadcast_view() -> str:
         "Fitur ini memungkinkan Anda mengirimkan siaran pesan resmi ke seluruh pengguna bot secara serentak.\n\n"
         "📝 <b>Format Perintah:</b>\n"
         "<code>/broadcast [PESAN PENGUMUMAN]</code>\n\n"
+        "🎯 <b>Broadcast ke Segmen Tertentu:</b>\n"
+        "<code>/broadcast --all [PESAN]</code>  — Semua user\n"
+        "<code>/broadcast --active [PESAN]</code> — User aktif 30 hari\n"
+        "<code>/broadcast --buyers [PESAN]</code> — User yang pernah transaksi\n"
+        "<code>/broadcast --balance [PESAN]</code> — User yang punya saldo\n\n"
         "🖼️ <b>Siaran bergambar (ready coin / campaign):</b>\n"
         "• Kirim poster sebagai FOTO dengan caption diawali <code>/broadcast ...</code>, ATAU\n"
         "• Reply foto poster dengan <code>/broadcast ...</code>.\n"
@@ -367,6 +377,84 @@ def build_admin_broadcast_view() -> str:
         "• User yang memblokir bot akan otomatis dilewati tanpa menghentikan broadcast."
     )
     return text
+
+
+def build_admin_credit_view() -> str:
+    """Membangun panduan isi saldo user."""
+    return (
+        "💳 <b>ISI SALDO USER (ADMIN CREDIT)</b>\n\n"
+        "Fitur ini memungkinkan admin mengisi saldo IDR ke user tertentu.\n"
+        "Digunakan untuk campaign giveaway, reward, atau kompensasi.\n\n"
+        "📝 <b>Satu User:</b>\n"
+        "<code>/credit [telegram_id] [jumlah_idr]</code>\n"
+        "Contoh: <code>/credit 123456789 10000</code>\n\n"
+        "📝 <b>Banyak User Sekaligus:</b>\n"
+        "<code>/bulkcredit [jumlah_idr] [id1] [id2] ...</code>\n"
+        "Contoh: <code>/bulkcredit 10000 123456789 987654321</code>\n\n"
+        "⚠️ <b>Catatan:</b>\n"
+        "• Minimum: Rp 1.000 | Maksimum: Rp 10.000.000 per operasi\n"
+        "• Setiap kredit tercatat di Audit Log\n"
+        "• User otomatis mendapat notifikasi saldo bertambah"
+    )
+
+
+def build_admin_referral_view(db) -> str:
+    """Membangun tampilan statistik referral untuk admin."""
+    try:
+        from database.models import Referral, ReferralConfig
+        total = db.query(Referral).count()
+        completed = db.query(Referral).filter(Referral.status == "COMPLETED").count()
+        pending = db.query(Referral).filter(Referral.status == "PENDING").count()
+
+        # Top referrers
+        from sqlalchemy import func as sa_func
+        top = (
+            db.query(
+                Referral.referrer_id,
+                sa_func.count(Referral.id).label("cnt"),
+                sa_func.sum(
+                    sa_func.cast(Referral.status == "COMPLETED", Integer)
+                ).label("done"),
+            )
+            .group_by(Referral.referrer_id)
+            .order_by(sa_func.count(Referral.id).desc())
+            .limit(10)
+            .all()
+        )
+
+        # Reward config
+        reward_row = db.query(ReferralConfig).filter(
+            ReferralConfig.key == "reward_per_referral"
+        ).first()
+        reward_idr = int(reward_row.value) if reward_row else 5000
+
+        lines = [
+            "🔗 <b>STATISTIK REFERRAL PROGRAM</b>\n",
+            f"📊 Total Referral  : <b>{total}</b>",
+            f"✅ Completed       : <b>{completed}</b>",
+            f"⏳ Pending         : <b>{pending}</b>",
+            f"💰 Reward/Referral : <b>Rp {reward_idr:,}</b>\n",
+            "🏆 <b>Top 10 Referrers:</b>",
+        ]
+        if top:
+            for i, row in enumerate(top, 1):
+                user = db.query(User).filter(User.telegram_id == row.referrer_id).first()
+                name = f"@{user.username}" if user and user.username else str(row.referrer_id)
+                done = row.done or 0
+                lines.append(f"{i}. {name} — {row.cnt} ajakan ({done} selesai)")
+        else:
+            lines.append("<i>Belum ada data referral.</i>")
+
+        lines.append("\n💡 <b>Setting:</b>")
+        lines.append("<code>/setreferral reward [JUMLAH]</code> — Set reward")
+        lines.append("<code>/setreferral enabled true|false</code> — On/Off")
+
+        return "\n".join(lines)
+    except Exception:
+        return (
+            "🔗 <b>REFERRAL PROGRAM</b>\n\n"
+            "<i>Tabel referral belum tersedia. Restart bot untuk inisialisasi.</i>"
+        )
 
 
 def build_admin_emojis_view() -> str:
@@ -523,6 +611,23 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             ]
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Panduan broadcast dimuat.")
+
+        elif data == "admin_panel_credit":
+            text = build_admin_credit_view()
+            buttons = [
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Panduan isi saldo dimuat.")
+
+        elif data == "admin_panel_referral":
+            text = build_admin_referral_view(db)
+            buttons = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_referral")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Statistik referral dimuat.")
 
         elif data == "admin_panel_emojis":
             text = build_admin_emojis_view()
@@ -1302,11 +1407,31 @@ async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
     return False
 
 
+def _parse_broadcast_segment(text: str) -> tuple[str, str]:
+    """Parse segment flag dari teks broadcast. Return (segment, clean_message)."""
+    segments = {"--all": "all", "--active": "active", "--buyers": "buyers", "--balance": "balance"}
+    for flag, seg in segments.items():
+        if text.startswith(flag + " ") or text == flag:
+            return seg, text[len(flag):].strip()
+    return "all", text
+
+
+def _segment_label(segment: str) -> str:
+    """Human-readable label untuk segment."""
+    labels = {
+        "all": "👥 Semua User",
+        "active": "🔄 User Aktif 30 Hari",
+        "buyers": "🛒 User Pernah Transaksi",
+        "balance": "💰 User Bersaldo",
+    }
+    return labels.get(segment, "👥 Semua User")
+
+
 async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Siaran ke seluruh user terdaftar: teks saja atau foto + caption.
+    """Siaran ke user terdaftar dengan segment targeting.
 
     Cara pakai (admin only):
-    - Teks: /broadcast Halo member...
+    - Teks: /broadcast [--all|--active|--buyers|--balance] Halo member...
     - Foto: kirim poster dengan caption diawali /broadcast ... (atau reply
       foto poster dengan /broadcast ...).
     """
@@ -1333,8 +1458,17 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await message.reply_text(
             "⚠️ Format salah.\n"
             "Teks: <code>/broadcast Halo member...</code>\n"
+            "Segment: <code>/broadcast --buyers Promo...</code>\n"
             "Foto: kirim poster dengan caption <code>/broadcast ...</code> "
             "atau reply foto poster dengan <code>/broadcast ...</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    segment, broadcast_msg = _parse_broadcast_segment(broadcast_msg)
+    if not broadcast_msg and not photo_file_id:
+        await message.reply_text(
+            "⚠️ Pesan broadcast kosong setelah flag segment.",
             parse_mode="HTML",
         )
         return
@@ -1344,13 +1478,19 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     db = SessionLocal()
     try:
-        users = db.query(User).filter(User.is_banned == False).all() # noqa: E712
+        users = crud.get_users_by_segment(db, segment)
         if not users:
-            await message.reply_text("ℹ️ Tidak ada pengguna terdaftar untuk dikirim broadcast.")
+            await message.reply_text(f"ℹ️ Tidak ada user pada segment {_segment_label(segment)}.")
             return
 
         mode = "Foto + Teks" if photo_file_id else "Teks"
-        await message.reply_text(f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...")
+        import time as _time
+        start_ts = _time.monotonic()
+
+        await message.reply_text(
+            f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...\n"
+            f"📌 Segment: {_segment_label(segment)}"
+        )
 
         success_count = 0
         fail_count = 0
@@ -1365,11 +1505,16 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if index % BROADCAST_PACE_EVERY == 0:
                 await asyncio.sleep(BROADCAST_PACE_SECONDS)
 
+        elapsed = _time.monotonic() - start_ts
+
         await message.reply_text(
-            f"📢 <b>Broadcast Selesai</b>\n"
-            f"• Mode: <code>{mode}</code>\n"
-            f"• Sukses terkirim: <code>{success_count} user</code>\n"
-            f"• Gagal/Blokir bot: <code>{fail_count} user</code>",
+            f"📊 <b>LAPORAN BROADCAST SELESAI</b>\n\n"
+            f"📌 Segment: {_segment_label(segment)}\n"
+            f"📤 Total target   : <code>{len(users)} user</code>\n"
+            f"✅ Terkirim        : <code>{success_count} user</code>\n"
+            f"❌ Gagal (blocked) : <code>{fail_count} user</code>\n"
+            f"⏱  Durasi         : <code>{elapsed:.1f} detik</code>\n"
+            f"🔤 Mode           : <code>{mode}</code>",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -1809,3 +1954,278 @@ async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Judul: {chat.title or 'chat pribadi'}\n\n"
         f"Jalankan /settarget beli (dll) di topik yang dituju.",
         parse_mode="HTML")
+
+
+# ============================================================
+# ADMIN CREDIT BALANCE — Isi saldo IDR ke user
+# ============================================================
+
+async def credit_balance_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Isi saldo IDR ke user tertentu.
+
+    Format: /credit <telegram_id> <jumlah_idr> [keterangan]
+    Contoh: /credit 123456789 10000 Giveaway Winner Oktober
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Format: <code>/credit [telegram_id] [jumlah_idr] [keterangan]</code>\n"
+            "Contoh: <code>/credit 123456789 10000 Giveaway Winner</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Telegram ID harus berupa angka.")
+        return
+
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Jumlah IDR harus berupa angka.")
+        return
+
+    if amount < 1000:
+        await update.message.reply_text("❌ Minimum kredit adalah Rp 1.000.")
+        return
+    if amount > 10_000_000:
+        await update.message.reply_text("❌ Maksimum kredit adalah Rp 10.000.000 per operasi.")
+        return
+
+    keterangan = " ".join(context.args[2:]) if len(context.args) > 2 else "Admin credit"
+
+    db = SessionLocal()
+    try:
+        target_user = db.query(User).filter(User.telegram_id == target_id).first()
+        if not target_user:
+            await update.message.reply_text(
+                f"❌ User dengan ID <code>{target_id}</code> tidak ditemukan di database.",
+                parse_mode="HTML",
+            )
+            return
+
+        old_bal = float(target_user.balance_idr or 0)
+        new_bal = crud.credit_user_balance(db, target_id, float(amount))
+
+        # Audit log
+        db.add(AuditLog(
+            telegram_id=target_id,
+            action="ADMIN_CREDIT_BALANCE",
+            details=f"Admin {user_id} credit Rp {amount:,} ke {target_id}. "
+                    f"Saldo: Rp {old_bal:,.0f} → Rp {new_bal:,.0f}. Keterangan: {keterangan}",
+        ))
+        db.commit()
+
+        target_name = f"@{target_user.username}" if target_user.username else str(target_id)
+
+        # Notifikasi ke user penerima
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    f"🎉 <b>Saldo Anda Bertambah!</b>\n\n"
+                    f"💰 Jumlah : <b>{format_idr(amount)}</b>\n"
+                    f"📝 Keterangan: {_esc(keterangan)}\n"
+                    f"💳 Saldo Sekarang: <b>{format_idr(int(new_bal))}</b>\n\n"
+                    f"Gunakan saldo ini untuk membeli crypto di bot! 🚀"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as notif_err:
+            logger.warning(f"Gagal kirim notifikasi credit ke {target_id}: {notif_err}")
+
+        await update.message.reply_text(
+            f"✅ <b>Berhasil Isi Saldo</b>\n\n"
+            f"👤 User: {target_name} (<code>{target_id}</code>)\n"
+            f"💰 Jumlah: <b>{format_idr(amount)}</b>\n"
+            f"💳 Saldo Baru: <b>{format_idr(int(new_bal))}</b>\n"
+            f"📝 Keterangan: {_esc(keterangan)}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error credit_balance_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal mengisi saldo user.")
+    finally:
+        db.close()
+
+
+async def bulkcredit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Isi saldo IDR ke banyak user sekaligus.
+
+    Format: /bulkcredit <jumlah_idr> <id1> <id2> <id3> ...
+    Contoh: /bulkcredit 10000 123456789 987654321 555666777
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Format: <code>/bulkcredit [jumlah_idr] [id1] [id2] ...</code>\n"
+            "Contoh: <code>/bulkcredit 10000 123456789 987654321</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        amount = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Jumlah IDR harus berupa angka (argumen pertama).")
+        return
+
+    if amount < 1000:
+        await update.message.reply_text("❌ Minimum kredit adalah Rp 1.000.")
+        return
+    if amount > 10_000_000:
+        await update.message.reply_text("❌ Maksimum kredit adalah Rp 10.000.000 per operasi.")
+        return
+
+    target_ids = []
+    for arg in context.args[1:]:
+        try:
+            target_ids.append(int(arg))
+        except ValueError:
+            await update.message.reply_text(f"❌ ID <code>{arg}</code> bukan angka valid.", parse_mode="HTML")
+            return
+
+    if not target_ids:
+        await update.message.reply_text("❌ Tidak ada user ID yang diberikan.")
+        return
+
+    await update.message.reply_text(
+        f"⏳ Memproses bulk credit {format_idr(amount)} ke {len(target_ids)} user..."
+    )
+
+    db = SessionLocal()
+    try:
+        success_count = 0
+        fail_count = 0
+        results = []
+
+        for tid in target_ids:
+            target_user = db.query(User).filter(User.telegram_id == tid).first()
+            if not target_user:
+                fail_count += 1
+                results.append(f"❌ {tid} — tidak ditemukan")
+                continue
+
+            try:
+                new_bal = crud.credit_user_balance(db, tid, float(amount))
+                db.add(AuditLog(
+                    telegram_id=tid,
+                    action="ADMIN_CREDIT_BALANCE",
+                    details=f"Bulk credit oleh admin {user_id}. Rp {amount:,}. Saldo baru: Rp {new_bal:,.0f}",
+                ))
+                db.commit()
+
+                name = f"@{target_user.username}" if target_user.username else str(tid)
+                success_count += 1
+                results.append(f"✅ {name} — saldo baru: {format_idr(int(new_bal))}")
+
+                # Notifikasi ke user
+                try:
+                    await context.bot.send_message(
+                        chat_id=tid,
+                        text=(
+                            f"🎉 <b>Saldo Anda Bertambah!</b>\n\n"
+                            f"💰 Jumlah: <b>{format_idr(amount)}</b>\n"
+                            f"💳 Saldo Sekarang: <b>{format_idr(int(new_bal))}</b>\n\n"
+                            f"Gunakan saldo ini untuk membeli crypto di bot! 🚀"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                fail_count += 1
+                results.append(f"❌ {tid} — error: {e}")
+
+        total_credited = amount * success_count
+        report = "\n".join(results[:20])  # Max 20 lines
+        if len(results) > 20:
+            report += f"\n... dan {len(results) - 20} lainnya"
+
+        await update.message.reply_text(
+            f"📊 <b>LAPORAN BULK CREDIT</b>\n\n"
+            f"💰 Nominal per user: <b>{format_idr(amount)}</b>\n"
+            f"✅ Sukses: <b>{success_count}/{len(target_ids)}</b>\n"
+            f"❌ Gagal: <b>{fail_count}/{len(target_ids)}</b>\n"
+            f"💵 Total dikreditkan: <b>{format_idr(total_credited)}</b>\n\n"
+            f"<b>Detail:</b>\n{report}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error bulkcredit_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses bulk credit.")
+    finally:
+        db.close()
+
+
+# ============================================================
+# ADMIN REFERRAL CONFIG — /setreferral
+# ============================================================
+
+async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Konfigurasi referral program.
+
+    Format:
+      /setreferral reward <jumlah>     — Set reward per referral
+      /setreferral enabled true|false  — Aktifkan/nonaktifkan
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Format:\n"
+            "<code>/setreferral reward [JUMLAH]</code>\n"
+            "<code>/setreferral enabled true|false</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    key = context.args[0].lower()
+    value = context.args[1]
+
+    valid_keys = {"reward": "reward_per_referral", "enabled": "referral_enabled"}
+    if key not in valid_keys:
+        await update.message.reply_text(f"❌ Key tidak valid: {key}. Gunakan: reward, enabled")
+        return
+
+    config_key = valid_keys[key]
+
+    if key == "reward":
+        try:
+            val = int(value)
+            if val < 0 or val > 1_000_000:
+                await update.message.reply_text("❌ Reward harus antara 0 - 1.000.000")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai reward harus berupa angka.")
+            return
+    elif key == "enabled":
+        if value.lower() not in ("true", "false"):
+            await update.message.reply_text("❌ Nilai harus 'true' atau 'false'.")
+            return
+        value = value.lower()
+
+    db = SessionLocal()
+    try:
+        crud.set_referral_config(db, config_key, value)
+        await update.message.reply_text(
+            f"✅ Referral config diperbarui:\n"
+            f"<code>{config_key}</code> = <code>{value}</code>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error setreferral: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal update konfigurasi referral.")
+    finally:
+        db.close()
+

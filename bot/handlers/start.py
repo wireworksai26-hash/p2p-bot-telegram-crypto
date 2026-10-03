@@ -163,6 +163,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Handler untuk command /start.
     Mendaftarkan user ke database jika baru, mereset state percakapan lama,
     kemudian mengirim welcome message & dashboard menu.
+    Mendukung deep-link referral: /start ref_<TELEGRAM_ID>
     """
     try:
         user = update.effective_user
@@ -179,6 +180,30 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 username=user.username,
                 full_name=user.full_name
             )
+
+            # Deep-link referral detection
+            if context.args and context.args[0].startswith("ref_"):
+                try:
+                    referrer_id = int(context.args[0].replace("ref_", ""))
+                    if referrer_id != user.id:  # Tidak bisa refer diri sendiri
+                        from database.crud import create_referral, get_referral_by_referee
+                        existing_ref = get_referral_by_referee(db, user.id)
+                        if not existing_ref:
+                            ref = create_referral(db, referrer_id, user.id)
+                            if ref:
+                                # Notifikasi ke referrer
+                                try:
+                                    await context.bot.send_message(
+                                        referrer_id,
+                                        f"🎉 <b>Referral Baru!</b>\n\n"
+                                        f"User baru bergabung via link referral Anda.\n"
+                                        f"Reward akan diberikan setelah mereka menyelesaikan transaksi pertama!",
+                                        parse_mode="HTML",
+                                    )
+                                except Exception:
+                                    pass
+                except (ValueError, TypeError):
+                    pass  # Invalid referral link, ignore silently
         finally:
             db.close()
             
@@ -316,6 +341,14 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "menu_stocks" or data.startswith("menu_stocks_page_"):
         from bot.handlers.stocks import show_stocks
         await show_stocks(update, context)
+
+    elif data == "menu_referral":
+        from bot.handlers.referral import referral_menu_handler
+        await referral_menu_handler(update, context)
+
+    elif data == "referral_leaderboard":
+        from bot.handlers.referral import referral_leaderboard_handler
+        await referral_leaderboard_handler(update, context)
         
     elif data == "menu_history":
         from bot.handlers.history import show_history

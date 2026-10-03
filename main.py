@@ -59,7 +59,11 @@ from bot.handlers.admin import (
     listemojis_handler,
     resetemojis_handler,
     check_api_command,
+    credit_balance_handler,
+    bulkcredit_handler,
+    setreferral_handler,
 )
+from bot.handlers.referral import referral_menu_handler
 
 # FastAPI app & webhook bridge
 from services.bot_runtime import bot_app, set_bot_app
@@ -377,6 +381,10 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("resetemojis", resetemojis_handler))
     application.add_handler(CommandHandler("checkapi", check_api_command))
     application.add_handler(CommandHandler("cekurl", check_api_command))
+    application.add_handler(CommandHandler("credit", credit_balance_handler))
+    application.add_handler(CommandHandler("bulkcredit", bulkcredit_handler))
+    application.add_handler(CommandHandler("setreferral", setreferral_handler))
+    application.add_handler(CommandHandler("referral", referral_menu_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands

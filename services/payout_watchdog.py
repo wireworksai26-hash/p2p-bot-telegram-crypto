@@ -193,6 +193,24 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                     except Exception as exc:
                         logger.warning("Gagal notif admin %s: %s", order.order_id, exc)
 
+                    # Referral reward trigger
+                    try:
+                        ref_result = crud.complete_referral(db, order.telegram_id)
+                        if ref_result:
+                            ref = crud.get_referral_by_referee(db, order.telegram_id)
+                            if ref:
+                                reward = ref.reward_idr or 0
+                                from bot.utils.formatter import format_idr as _fmt_idr
+                                await bot.send_message(
+                                    ref.referrer_id,
+                                    f"🎉 <b>Referral Reward!</b>\n\n"
+                                    f"User yang Anda ajak telah menyelesaikan transaksi.\n"
+                                    f"Saldo Anda bertambah <b>{_fmt_idr(reward)}</b>!",
+                                    parse_mode="HTML",
+                                )
+                    except Exception as exc:
+                        logger.warning("Gagal proses referral reward user %s: %s", order.telegram_id, exc)
+
             elif state == "reverted":
                 if order.order_id not in _alerted:
                     _alerted.add(order.order_id)

@@ -200,3 +200,30 @@ class NotificationTarget(Base):
     thread_id = Column(String(32), nullable=True)  # id topik forum (None bila bukan forum)
     title = Column(String(150), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Referral(Base):
+    """Tracking referral: siapa yang invite siapa."""
+    __tablename__ = 'referrals'
+    __table_args__ = (
+        UniqueConstraint('referee_id', name='uq_referee_one_referrer'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    referrer_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    referee_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, unique=True)
+    status = Column(String(20), default='PENDING', nullable=False)
+    # PENDING = referee belum transaksi, COMPLETED = reward sudah diberikan
+    reward_idr = Column(BigInteger, default=0)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReferralConfig(Base):
+    """Konfigurasi referral program (reward amount, enabled flag, dll)."""
+    __tablename__ = 'referral_config'
+
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

@@ -1139,3 +1139,196 @@ def get_pending_orders_count(db: Session) -> int:
     return db.query(Order).filter(
         Order.status.in_(["pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"])
     ).count()
+
+
+# ============================================================
+# BROADCAST SEGMENT HELPERS
+# ============================================================
+
+def get_users_by_segment(db: Session, segment: str) -> list:
+    """Return list User berdasarkan segment broadcast.
+
+    Segments:
+        all     — semua user non-banned
+        active  — user yang punya order dalam 30 hari terakhir
+        buyers  — user yang punya minimal 1 order COMPLETED
+        balance — user yang punya saldo > 0
+    """
+    query = db.query(User).filter(User.is_banned == False)  # noqa: E712
+
+    if segment == "active":
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        active_ids = (
+            db.query(Order.telegram_id)
+            .filter(Order.created_at >= cutoff)
+            .distinct()
+        )
+        query = query.filter(User.telegram_id.in_(active_ids.scalar_subquery()))
+    elif segment == "buyers":
+        buyer_ids = (
+            db.query(Order.telegram_id)
+            .filter(func.lower(Order.status) == "completed")
+            .distinct()
+        )
+        query = query.filter(User.telegram_id.in_(buyer_ids.scalar_subquery()))
+    elif segment == "balance":
+        query = query.filter(User.balance_idr > 0)
+    # else: "all" — semua non-banned user
+
+    return query.all()
+
+
+def get_segment_count(db: Session, segment: str) -> int:
+    """Return jumlah user pada segment tertentu."""
+    return len(get_users_by_segment(db, segment))
+
+
+# ============================================================
+# REFERRAL CRUD
+# ============================================================
+
+def create_referral(db: Session, referrer_id: int, referee_id: int):
+    """Buat record referral baru. Return Referral atau None jika sudah ada."""
+    from database.models import Referral, ReferralConfig
+
+    # Cek apakah referral sudah ada untuk referee ini
+    existing = db.query(Referral).filter(Referral.referee_id == referee_id).first()
+    if existing:
+        return None
+
+    # Cek apakah referral enabled
+    enabled = db.query(ReferralConfig).filter(
+        ReferralConfig.key == "referral_enabled"
+    ).first()
+    if enabled and enabled.value == "false":
+        return None
+
+    # Cek max referrals per user
+    max_cfg = db.query(ReferralConfig).filter(
+        ReferralConfig.key == "max_referrals_per_user"
+    ).first()
+    max_referrals = int(max_cfg.value) if max_cfg else 100
+    current_count = db.query(Referral).filter(Referral.referrer_id == referrer_id).count()
+    if current_count >= max_referrals:
+        logger.info(f"Referrer {referrer_id} sudah mencapai batas {max_referrals} referral.")
+        return None
+
+    # Get reward amount
+    reward_cfg = db.query(ReferralConfig).filter(
+        ReferralConfig.key == "reward_per_referral"
+    ).first()
+    reward_idr = int(reward_cfg.value) if reward_cfg else 5000
+
+    ref = Referral(
+        referrer_id=referrer_id,
+        referee_id=referee_id,
+        status="PENDING",
+        reward_idr=reward_idr,
+    )
+    db.add(ref)
+    db.commit()
+    db.refresh(ref)
+    logger.info(f"Referral created: {referrer_id} → {referee_id} (reward Rp {reward_idr:,})")
+    return ref
+
+
+def get_referral_by_referee(db: Session, referee_id: int):
+    """Ambil record referral berdasarkan referee_id."""
+    from database.models import Referral
+    return db.query(Referral).filter(Referral.referee_id == referee_id).first()
+
+
+def complete_referral(db: Session, referee_id: int) -> bool:
+    """Mark referral COMPLETED dan credit reward ke referrer.
+
+    Dipanggil saat referee menyelesaikan transaksi pertama.
+    Return True jika berhasil, False jika tidak ada referral atau sudah completed.
+    """
+    from database.models import Referral
+
+    ref = db.query(Referral).filter(
+        Referral.referee_id == referee_id,
+        Referral.status == "PENDING",
+    ).first()
+
+    if not ref:
+        return False
+
+    try:
+        # Credit reward ke referrer
+        reward = ref.reward_idr or 0
+        if reward > 0:
+            credit_user_balance(db, ref.referrer_id, float(reward))
+
+        ref.status = "COMPLETED"
+        ref.completed_at = datetime.utcnow()
+        db.commit()
+        logger.info(
+            f"Referral completed: {ref.referrer_id} ← {referee_id}. "
+            f"Reward Rp {reward:,} credited."
+        )
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error completing referral for {referee_id}: {e}")
+        return False
+
+
+def get_referral_stats(db: Session, referrer_id: int) -> dict:
+    """Ambil statistik referral untuk seorang referrer."""
+    from database.models import Referral
+
+    referrals = db.query(Referral).filter(Referral.referrer_id == referrer_id).all()
+    total = len(referrals)
+    completed = sum(1 for r in referrals if r.status == "COMPLETED")
+    pending = sum(1 for r in referrals if r.status == "PENDING")
+    total_reward = sum(r.reward_idr or 0 for r in referrals if r.status == "COMPLETED")
+
+    return {
+        "total": total,
+        "completed": completed,
+        "pending": pending,
+        "total_reward": total_reward,
+    }
+
+
+def get_top_referrers(db: Session, limit: int = 10) -> list:
+    """Ambil leaderboard top referrers."""
+    from database.models import Referral
+    from sqlalchemy import Integer as SA_Integer
+
+    results = (
+        db.query(
+            Referral.referrer_id,
+            func.count(Referral.id).label("total"),
+            func.sum(
+                func.cast(Referral.reward_idr, SA_Integer)
+            ).label("total_reward"),
+        )
+        .filter(Referral.status == "COMPLETED")
+        .group_by(Referral.referrer_id)
+        .order_by(func.count(Referral.id).desc())
+        .limit(limit)
+        .all()
+    )
+    return results
+
+
+def get_referral_config(db: Session, key: str) -> Optional[str]:
+    """Ambil nilai konfigurasi referral."""
+    from database.models import ReferralConfig
+    row = db.query(ReferralConfig).filter(ReferralConfig.key == key).first()
+    return row.value if row else None
+
+
+def set_referral_config(db: Session, key: str, value: str) -> None:
+    """Set konfigurasi referral. Insert atau update."""
+    from database.models import ReferralConfig
+    row = db.query(ReferralConfig).filter(ReferralConfig.key == key).first()
+    if row:
+        row.value = value
+    else:
+        db.add(ReferralConfig(key=key, value=value))
+    db.commit()
+    logger.info(f"Referral config set: {key} = {value}")
+
