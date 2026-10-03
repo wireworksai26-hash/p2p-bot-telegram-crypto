@@ -183,7 +183,8 @@ def update_order_status(
 
         if new_status and str(new_status).lower() == "completed":
             try:
-                complete_referral(db, order.telegram_id)
+                amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
+                complete_referral(db, order.telegram_id, trade_amount_idr=amt)
             except Exception as ref_err:
                 logger.warning(f"Error completing referral on order {order_id}: {ref_err}")
 
@@ -1246,11 +1247,12 @@ def get_referral_by_referee(db: Session, referee_id: int):
     return db.query(Referral).filter(Referral.referee_id == referee_id).first()
 
 
-def complete_referral(db: Session, referee_id: int) -> bool:
+def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.0) -> bool:
     """Mark referral COMPLETED dan credit reward ke referrer serta potongan/bonus ke referee.
 
     Dipanggil saat referee menyelesaikan transaksi pertama.
-    Return True jika berhasil, False jika tidak ada referral atau sudah completed.
+    Jika ada aturan min_trade_amount_idr > 0, nominal transaksi harus >= nilai tersebut.
+    Return True jika berhasil, False jika tidak ada referral, belum memenuhi syarat minimal, atau sudah completed.
     """
     from database.models import Referral, AuditLog
 
@@ -1260,6 +1262,15 @@ def complete_referral(db: Session, referee_id: int) -> bool:
     ).first()
 
     if not ref:
+        return False
+
+    # Verifikasi syarat minimal transaksi (bila diatur oleh admin)
+    min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
+    min_trade = float(min_trade_cfg) if min_trade_cfg else 0.0
+    if min_trade > 0 and trade_amount_idr < min_trade:
+        logger.info(
+            f"Referral pending for referee {referee_id}: trade amount Rp {trade_amount_idr:,.0f} < minimum requirement Rp {min_trade:,.0f}"
+        )
         return False
 
     try:

@@ -160,6 +160,29 @@ class TestReferralCRUD(unittest.TestCase):
         finally:
             db.close()
 
+    def test_complete_referral_min_trade_requirement(self):
+        """When min_trade_amount_idr is set, trade amount must be >= minimum."""
+        db = SessionLocal()
+        try:
+            crud.set_referral_config(db, "min_trade_amount_idr", "50000")
+            crud.create_referral(db, referrer_id=100, referee_id=200)
+
+            # 1. Trade below minimum (20.000) -> rejected, stays PENDING
+            res1 = crud.complete_referral(db, referee_id=200, trade_amount_idr=20000.0)
+            self.assertFalse(res1)
+            ref1 = crud.get_referral_by_referee(db, 200)
+            self.assertEqual(ref1.status, "PENDING")
+            self.assertEqual(crud.get_user_balance(db, 100), 0.0)
+
+            # 2. Next trade meeting minimum (50.000) -> completed, credited!
+            res2 = crud.complete_referral(db, referee_id=200, trade_amount_idr=50000.0)
+            self.assertTrue(res2)
+            ref2 = crud.get_referral_by_referee(db, 200)
+            self.assertEqual(ref2.status, "COMPLETED")
+            self.assertEqual(crud.get_user_balance(db, 100), 5000.0)
+        finally:
+            db.close()
+
     def test_complete_referral_already_completed(self):
         """Double-complete should return False."""
         db = SessionLocal()
@@ -498,6 +521,26 @@ class TestSetReferralHandler(unittest.IsolatedAsyncioTestCase):
         finally:
             db.close()
 
+    async def test_set_min_trade(self):
+        from bot.handlers.admin import setreferral_handler
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=AsyncMock(),
+        )
+        context = SimpleNamespace(args=["min", "50000"])
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await setreferral_handler(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "min_trade_amount_idr")
+            self.assertEqual(val, "50000")
+        finally:
+            db.close()
+
 
 class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
     """Test interactive admin panel referral controls and callbacks."""
@@ -636,6 +679,57 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
         try:
             val = crud.get_referral_config(db, "reward_per_referral")
             self.assertEqual(val, "15000")
+        finally:
+            db.close()
+
+    async def test_admin_ref_set_min_trade(self):
+        from bot.handlers.admin import admin_panel_callback
+
+        update = SimpleNamespace(
+            callback_query=SimpleNamespace(
+                from_user=SimpleNamespace(id=999),
+                data="admin_ref_set_min_trade_25000",
+                edit_message_text=AsyncMock(),
+                answer=AsyncMock(),
+            )
+        )
+        context = SimpleNamespace()
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                await admin_panel_callback(update, context)
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "min_trade_amount_idr")
+            self.assertEqual(val, "25000")
+        finally:
+            db.close()
+
+    async def test_admin_referral_text_handler_custom_min_trade(self):
+        from bot.handlers.admin import admin_referral_text_handler
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            message=SimpleNamespace(
+                text="75.000",
+                reply_text=AsyncMock(),
+            ),
+        )
+        context = SimpleNamespace(
+            user_data={"admin_awaiting_ref_custom_min_trade": True}
+        )
+
+        with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
+            handled = await admin_referral_text_handler(update, context)
+
+        self.assertTrue(handled)
+        self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_min_trade"))
+
+        db = SessionLocal()
+        try:
+            val = crud.get_referral_config(db, "min_trade_amount_idr")
+            self.assertEqual(val, "75000")
         finally:
             db.close()
 

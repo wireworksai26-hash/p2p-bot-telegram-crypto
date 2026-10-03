@@ -420,6 +420,10 @@ def build_admin_referral_view(db) -> str:
         bonus_cfg = get_referral_config(db, "referee_discount_idr")
         bonus_idr = int(bonus_cfg) if bonus_cfg else 0
 
+        min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
+        min_trade_idr = int(min_trade_cfg) if min_trade_cfg else 0
+        min_trade_display = f"Rp {min_trade_idr:,}" if min_trade_idr > 0 else "Tanpa Minimal (Semua Order)"
+
         enabled_cfg = get_referral_config(db, "referral_enabled")
         is_enabled = enabled_cfg is None or enabled_cfg.lower() == "true"
 
@@ -455,6 +459,7 @@ def build_admin_referral_view(db) -> str:
             f"⚙️ <b>Status Program:</b> {status_badge}",
             f"💰 <b>Reward Pengundang:</b> Rp {reward_idr:,}",
             f"🎁 <b>Potongan/Bonus Teman:</b> Rp {bonus_idr:,}",
+            f"🛒 <b>Min. Pembelian Teman:</b> {min_trade_display}",
             f"🎯 <b>Maksimal per User:</b> {max_refs} teman\n",
             "📊 <b>Statistik Akumulatif:</b>",
             f"├── 👥 Total Ajakan    : <b>{total}</b>",
@@ -474,7 +479,7 @@ def build_admin_referral_view(db) -> str:
 
         lines.append(
             "\n💡 <b>Pengaturan Cepat:</b>\n"
-            "Gunakan tombol di bawah untuk toggle status atau ubah nominal reward & potongan secara instan."
+            "Gunakan tombol di bawah untuk toggle status, atur reward, potongan, atau minimal pembelian secara instan."
         )
 
         return "\n".join(lines)
@@ -498,6 +503,9 @@ def build_admin_referral_keyboard(db) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("💵 Atur Reward Pengundang", callback_data="admin_ref_pick_reward"),
             InlineKeyboardButton("🎁 Atur Potongan Teman", callback_data="admin_ref_pick_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🛒 Atur Min. Pembelian", callback_data="admin_ref_pick_min_trade"),
         ],
         [
             InlineKeyboardButton("🔄 Refresh Data", callback_data="admin_panel_referral"),
@@ -539,6 +547,26 @@ def build_admin_pick_bonus_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_bonus_10000"),
             InlineKeyboardButton("Rp 20.000", callback_data="admin_ref_set_bonus_20000"),
             InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_min_trade_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat syarat minimal pembelian teman untuk referral."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Bebas)", callback_data="admin_ref_set_min_trade_0"),
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_min_trade_10000"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_ref_set_min_trade_25000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_ref_set_min_trade_50000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_ref_set_min_trade_100000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_min_trade"),
         ],
         [
             InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
@@ -786,10 +814,46 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "admin_ref_custom_bonus":
             context.user_data["admin_awaiting_ref_custom_bonus"] = True
             context.user_data["admin_awaiting_ref_custom_reward"] = False
+            context.user_data["admin_awaiting_ref_custom_min_trade"] = False
             await query.answer()
             await query.message.reply_text(
                 "✏️ <b>Ketik Nominal Potongan Teman (Referee)</b>\n\n"
                 "Silakan ketik nominal potongan/cashback transaksi pertama baru dalam Rupiah (contoh: <code>3000</code> atau <code>5000</code>):",
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_ref_pick_min_trade":
+            curr_min = crud.get_referral_config(db, "min_trade_amount_idr") or "0"
+            min_val = int(curr_min)
+            desc_min = f"Rp {min_val:,}" if min_val > 0 else "Tanpa Minimal (Semua Order)"
+            text = (
+                "🛒 <b>ATUR MINIMAL PEMBELIAN / TRANSAKSI TEMAN</b>\n\n"
+                f"Aturan saat ini: <b>{desc_min}</b>\n\n"
+                "Teman yang diundang harus menyelesaikan transaksi minimal sebesar nominal ini agar reward pengundang & potongan teman dapat dicairkan.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_min_trade_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_min_trade_"):
+            val_str = data.replace("admin_ref_set_min_trade_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "min_trade_amount_idr", str(val_int))
+            msg_alert = f"Min. pembelian diset ke Rp {val_int:,}!" if val_int > 0 else "Min. pembelian dinonaktifkan (bebas nominal)!"
+            await query.answer(msg_alert, show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_min_trade":
+            context.user_data["admin_awaiting_ref_custom_min_trade"] = True
+            context.user_data["admin_awaiting_ref_custom_reward"] = False
+            context.user_data["admin_awaiting_ref_custom_bonus"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Minimal Pembelian Teman</b>\n\n"
+                "Silakan ketik nominal minimal transaksi baru dalam Rupiah (contoh: <code>50000</code> atau <code>100000</code>, ketik <code>0</code> untuk tanpa minimal):",
                 parse_mode="HTML"
             )
 
@@ -2546,7 +2610,8 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             "⚠️ <b>Format Pengaturan Referral:</b>\n\n"
             "• <code>/setreferral reward [JUMLAH]</code> — Set reward pengundang\n"
             "• <code>/setreferral bonus [JUMLAH]</code> — Set potongan/bonus teman\n"
-            "• <code>/setreferral enabled true|false</code> — Aktifkan/nonaktifkan\n"
+            "• <code>/setreferral min [JUMLAH]</code> — Set min. pembelian teman (0 = tanpa min)\n"
+            "• <code>/setreferral enabled true|false</code> — Aktifkan/nonaktifkan program\n"
             "• <code>/setreferral max [JUMLAH]</code> — Batas maksimal teman/user\n\n"
             "<i>Atau gunakan menu interaktif di Dashboard Admin ➔ Kelola Referral.</i>",
             parse_mode="HTML",
@@ -2563,11 +2628,15 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         "discount": "referee_discount_idr",
         "potongan": "referee_discount_idr",
         "max": "max_referrals_per_user",
+        "min": "min_trade_amount_idr",
+        "minimal": "min_trade_amount_idr",
+        "min_trade": "min_trade_amount_idr",
+        "minorder": "min_trade_amount_idr",
     }
     if key not in valid_keys:
         await update.message.reply_text(
             f"❌ Key tidak valid: <code>{key}</code>.\n"
-            "Gunakan salah satu: <code>reward</code>, <code>bonus</code>, <code>enabled</code>, <code>max</code>",
+            "Gunakan salah satu: <code>reward</code>, <code>bonus</code>, <code>min</code>, <code>enabled</code>, <code>max</code>",
             parse_mode="HTML"
         )
         return
@@ -2583,6 +2652,16 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             value = str(val)
         except ValueError:
             await update.message.reply_text("❌ Nilai harus berupa angka.")
+            return
+    elif key in ("min", "minimal", "min_trade", "minorder"):
+        try:
+            val = int(value)
+            if val < 0 or val > 50_000_000:
+                await update.message.reply_text("❌ Nilai minimal harus antara 0 - 50.000.000 (0 = tanpa min)")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai minimal harus berupa angka.")
             return
     elif key == "max":
         try:
@@ -2616,24 +2695,26 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def admin_referral_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Menangani input nominal kustom reward pengundang atau potongan teman dari admin."""
+    """Menangani input nominal kustom reward pengundang, potongan teman, atau minimal pembelian dari admin."""
     if not update.message or not update.message.text:
         return False
 
     is_reward = context.user_data.get("admin_awaiting_ref_custom_reward")
     is_bonus = context.user_data.get("admin_awaiting_ref_custom_bonus")
+    is_min_trade = context.user_data.get("admin_awaiting_ref_custom_min_trade")
 
-    if not is_reward and not is_bonus:
+    if not is_reward and not is_bonus and not is_min_trade:
         return False
 
     raw_text = update.message.text.strip().replace(".", "").replace(",", "").replace("Rp", "").replace("rp", "").strip()
     try:
         val = int(raw_text)
-        if val < 0 or val > 1_000_000:
-            await update.message.reply_text("❌ Nominal harus antara Rp 0 sampai Rp 1.000.000. Silakan ketik angka kembali:")
+        max_limit = 50_000_000 if is_min_trade else 1_000_000
+        if val < 0 or val > max_limit:
+            await update.message.reply_text(f"❌ Nominal harus antara Rp 0 sampai Rp {max_limit:,}. Silakan ketik angka kembali:")
             return True
     except ValueError:
-        await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 7500):")
+        await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 50000):")
         return True
 
     db = SessionLocal()
@@ -2652,6 +2733,15 @@ async def admin_referral_text_handler(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text(
                 f"✅ <b>Potongan / Bonus Teman Berhasil Diperbarui!</b>\n\n"
                 f"🎁 Nominal potongan baru: <b>Rp {val:,}</b> untuk transaksi pertama teman.",
+                parse_mode="HTML"
+            )
+        elif is_min_trade:
+            crud.set_referral_config(db, "min_trade_amount_idr", str(val))
+            context.user_data["admin_awaiting_ref_custom_min_trade"] = False
+            desc_val = f"Rp {val:,}" if val > 0 else "Tanpa Minimal (Bebas)"
+            await update.message.reply_text(
+                f"✅ <b>Syarat Minimal Pembelian Diperbarui!</b>\n\n"
+                f"🛒 Minimal pembelian teman baru: <b>{desc_val}</b>.",
                 parse_mode="HTML"
             )
 

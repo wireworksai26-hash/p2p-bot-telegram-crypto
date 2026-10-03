@@ -195,6 +195,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                                 reward_idr = int(reward_cfg) if reward_cfg else 5000
                                 bonus_cfg = get_referral_config(db, "referee_discount_idr")
                                 bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+                                min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
+                                min_trade_idr = int(min_trade_cfg) if min_trade_cfg else 0
+
+                                min_trade_note = f" minimal <b>Rp {min_trade_idr:,}</b>" if min_trade_idr > 0 else ""
 
                                 # Notifikasi ke referee (user baru) jika ada potongan/bonus
                                 if bonus_idr > 0:
@@ -203,7 +207,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                                             f"🎁 <b>Selamat Datang!</b>\n\n"
                                             f"Anda bergabung lewat link undangan teman.\n"
                                             f"Dapatkan potongan / bonus cashback saldo sebesar <b>Rp {bonus_idr:,}</b> "
-                                            f"setelah Anda menyelesaikan transaksi pertama Anda!",
+                                            f"setelah Anda menyelesaikan transaksi pertama{min_trade_note} Anda!",
                                             parse_mode="HTML"
                                         )
                                     except Exception:
@@ -216,7 +220,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                                         f"🎉 <b>Referral Baru!</b>\n\n"
                                         f"Teman baru bergabung via link referral Anda.\n"
                                         f"Reward <b>Rp {reward_idr:,}</b> akan otomatis masuk ke saldo Anda "
-                                        f"setelah mereka menyelesaikan transaksi pertama!",
+                                        f"setelah mereka menyelesaikan transaksi pertama{min_trade_note}!",
                                         parse_mode="HTML",
                                     )
                                 except Exception:

@@ -41,6 +41,10 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         bonus_str = get_referral_config(db, "referee_discount_idr")
         bonus_idr = int(bonus_str) if bonus_str else 0
 
+        # Get minimum trade config
+        min_trade_str = get_referral_config(db, "min_trade_amount_idr")
+        min_trade_idr = int(min_trade_str) if min_trade_str else 0
+
         # Build referral link
         bot_username = (await context.bot.get_me()).username if context.bot else "Hsnpro_bot"
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
@@ -48,6 +52,10 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         bonus_line = ""
         if bonus_idr > 0:
             bonus_line = f"• Teman Anda juga mendapat cashback/potongan <b>{format_idr(bonus_idr)}</b> di transaksi pertamanya!\n"
+
+        min_trade_line = ""
+        if min_trade_idr > 0:
+            min_trade_line = f"• Syarat pencairan: Teman menyelesaikan pembelian minimal <b>{format_idr(min_trade_idr)}</b>.\n"
 
         text = (
             f"🔗 <b>PROGRAM REFERRAL HSN STORE</b>\n\n"
@@ -60,7 +68,8 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>\n\n"
             f"💡 <i>Bagikan link di atas ke teman Anda:\n"
             f"• Anda mendapat reward <b>{format_idr(reward_idr)}</b> untuk setiap teman yang menyelesaikan transaksi pertama!\n"
-            f"{bonus_line}</i>"
+            f"{bonus_line}"
+            f"{min_trade_line}</i>"
         )
 
         share_msg = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya: {ref_link}"

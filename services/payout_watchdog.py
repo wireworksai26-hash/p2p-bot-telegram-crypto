@@ -195,7 +195,8 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
 
                     # Referral reward trigger
                     try:
-                        ref_result = crud.complete_referral(db, order.telegram_id)
+                        trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
+                        ref_result = crud.complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt)
                         if ref_result:
                             ref = crud.get_referral_by_referee(db, order.telegram_id)
                             if ref:

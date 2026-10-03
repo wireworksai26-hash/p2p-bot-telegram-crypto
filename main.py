@@ -458,8 +458,12 @@ async def _route_admin_text(update: Update, context) -> None:
     if not is_admin(user_id):
         return
 
-    # Routing input kustom referral (reward pengundang / potongan teman)
-    if context.user_data.get("admin_awaiting_ref_custom_reward") or context.user_data.get("admin_awaiting_ref_custom_bonus"):
+    # Routing input kustom referral (reward pengundang / potongan teman / min pembelian)
+    if (
+        context.user_data.get("admin_awaiting_ref_custom_reward")
+        or context.user_data.get("admin_awaiting_ref_custom_bonus")
+        or context.user_data.get("admin_awaiting_ref_custom_min_trade")
+    ):
         from bot.handlers.admin import admin_referral_text_handler
         handled = await admin_referral_text_handler(update, context)
         if handled:

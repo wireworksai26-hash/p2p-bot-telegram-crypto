@@ -470,7 +470,8 @@ class DepositDetector:
                     # Referral reward trigger on completion
                     try:
                         from database.crud import complete_referral, get_referral_by_referee
-                        ref_result = complete_referral(db, order.telegram_id)
+                        trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
+                        ref_result = complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt)
                         if ref_result:
                             ref = get_referral_by_referee(db, order.telegram_id)
                             if ref:
