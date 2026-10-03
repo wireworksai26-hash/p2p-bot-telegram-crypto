@@ -14,8 +14,8 @@ from bot.utils.emojis import (
 # Mapping simbol ke daftar network yang tersedia untuk Beli/Jual Crypto
 BUY_NETWORKS_BY_SYMBOL = {
     "USDT": ["BSC", "POLYGON", "ARB", "TON", "SOLANA", "ETH"],
-    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON"],
-    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH"],
+    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON", "MORPH"],
+    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH", "MORPH"],
     "SOL": ["SOLANA"],
     "TRX": ["TRON"],
     "BNB": ["BSC"],

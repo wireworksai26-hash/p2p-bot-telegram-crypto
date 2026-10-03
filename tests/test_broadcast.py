@@ -389,6 +389,62 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         report = update.message.reply_text.call_args_list[-1].args[0]
         self.assertIn("Terkirim        : <code>2 user</code>", report)
 
+    async def test_broadcast_ready_morph(self):
+        """/broadcast --ready Morph automatically generates the formatted coin announcement without owner header."""
+        bot = AsyncMock()
+        msg = self._msg(text="/broadcast --ready Morph")
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_message.await_count, 2)
+        sent_text = bot.send_message.call_args_list[0].kwargs["text"]
+        self.assertNotIn("PENGUMUMAN DARI OWNER", sent_text)
+        self.assertIn("Morph Ready For Now🪙", sent_text)
+        self.assertIn("USDC", sent_text)
+        self.assertIn("ETH", sent_text)
+        self.assertIn("Silakan /start bot untuk Beli/Jual/Swap token.", sent_text)
+
+    async def test_broadcast_ready_with_photo(self):
+        """Photo with caption /broadcast --ready Morph sets the auto-generated text as caption."""
+        bot = AsyncMock()
+        photo_obj = SimpleNamespace(file_id="photo_morph_123")
+        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --ready Morph")
+        msg.document = None
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_photo.await_count, 2)
+        caption = bot.send_photo.call_args_list[0].kwargs["caption"]
+        self.assertNotIn("PENGUMUMAN DARI OWNER", caption)
+        self.assertIn("Morph Ready For Now🪙", caption)
+        self.assertIn("USDC", caption)
+        self.assertIn("ETH", caption)
+
+    async def test_broadcast_no_header_in_plain_message(self):
+        """Plain broadcast does not prepend PENGUMUMAN DARI OWNER anymore."""
+        bot = AsyncMock()
+        msg = self._msg(text="/broadcast Koin Ready Boskyuh")
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        self.assertEqual(bot.send_message.await_count, 2)
+        sent_text = bot.send_message.call_args_list[0].kwargs["text"]
+        self.assertEqual(sent_text, "Koin Ready Boskyuh")
+        self.assertNotIn("PENGUMUMAN DARI OWNER", sent_text)
+
+    async def test_broadcast_ready_no_args_shows_guide(self):
+        """/broadcast --ready without network parameter returns helpful network guide."""
+        bot = AsyncMock()
+        msg = self._msg(text="/broadcast --ready")
+        update, ctx = self._run(msg, bot=bot)
+        await broadcast_handler(update, ctx)
+
+        bot.send_message.assert_not_awaited()
+        guide = update.message.reply_text.call_args.args[0]
+        self.assertIn("Format Siaran Koin Ready", guide)
+        self.assertIn("Morph", guide)
+        self.assertIn("Base", guide)
+
 
 if __name__ == "__main__":
     unittest.main()

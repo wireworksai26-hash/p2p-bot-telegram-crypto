@@ -367,13 +367,16 @@ def build_admin_broadcast_view() -> str:
         "<code>/broadcast --active [PESAN]</code> — User aktif 30 hari\n"
         "<code>/broadcast --buyers [PESAN]</code> — User yang pernah transaksi\n"
         "<code>/broadcast --balance [PESAN]</code> — User yang punya saldo\n\n"
-        "🖼️ <b>Siaran bergambar (ready coin / campaign):</b>\n"
+        "🪙 <b>Siaran Otomatis Koin Ready:</b>\n"
+        "<code>/broadcast --ready [JARINGAN]</code>\n"
+        "Contoh: <code>/broadcast --ready Morph</code> atau <code>/broadcast --ready Base</code>\n"
+        "<i>Bot otomatis menyusun daftar koin aktif untuk jaringan tersebut.</i>\n\n"
+        "🖼️ <b>Siaran Bergambar (Poster / Logo):</b>\n"
         "• Kirim poster sebagai FOTO dengan caption diawali <code>/broadcast ...</code>, ATAU\n"
         "• Reply foto poster dengan <code>/broadcast ...</code>.\n"
-        "Contoh caption: <code>/broadcast USDC jaringan ARC READY! Ketik /start untuk membeli.</code>\n\n"
-        "💡 <b>Contoh Penggunaan:</b>\n"
-        "<code>/broadcast 🚀 Promo Spesial Hari Ini! Rate USDT termurah se-Indonesia & bebas biaya admin. Transaksi sekarang di @hsn_store_bot!</code>\n\n"
+        "Contoh caption: <code>/broadcast --ready Morph</code>\n\n"
         "⚠️ <b>Catatan Penting:</b>\n"
+        "• Pesan dikirim bersih tanpa teks header otomatis.\n"
         "• Anda dapat menggunakan tag HTML seperti <code>&lt;b&gt;tebal&lt;/b&gt;</code>, <code>&lt;i&gt;miring&lt;/i&gt;</code>, dan <code>&lt;code&gt;kode&lt;/code&gt;</code>.\n"
         "• User yang memblokir bot akan otomatis dilewati tanpa menghentikan broadcast."
     )
@@ -1388,21 +1391,32 @@ async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
                                  photo_file_id: str | None = None,
                                  is_document: bool = False) -> bool:
     """Kirim 1 pesan broadcast (teks / foto / dokumen gambar); retry saat flood-limit atau format fallback."""
+    caption_val = text.strip() if text else None
     for attempt in (1, 2):
         try:
             if photo_file_id:
                 if is_document:
-                    if len(text) > 1024:
+                    if caption_val and len(caption_val) > 1024:
                         await bot.send_document(chat_id=telegram_id, document=photo_file_id)
-                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+                        await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode="HTML")
+                    elif caption_val:
+                        await bot.send_document(
+                            chat_id=telegram_id, document=photo_file_id,
+                            caption=caption_val, parse_mode="HTML",
+                        )
                     else:
-                        await bot.send_document(chat_id=telegram_id, document=photo_file_id, caption=text, parse_mode="HTML")
+                        await bot.send_document(chat_id=telegram_id, document=photo_file_id)
                 else:
-                    if len(text) > 1024:
+                    if caption_val and len(caption_val) > 1024:
                         await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
-                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+                        await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode="HTML")
+                    elif caption_val:
+                        await bot.send_photo(
+                            chat_id=telegram_id, photo=photo_file_id,
+                            caption=caption_val, parse_mode="HTML",
+                        )
                     else:
-                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id, caption=text, parse_mode="HTML")
+                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
             else:
                 await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
             return True
@@ -1417,17 +1431,27 @@ async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
                 try:
                     if photo_file_id:
                         if is_document:
-                            if len(text) > 1024:
+                            if caption_val and len(caption_val) > 1024:
                                 await bot.send_document(chat_id=telegram_id, document=photo_file_id)
-                                await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                                await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode=None)
+                            elif caption_val:
+                                await bot.send_document(
+                                    chat_id=telegram_id, document=photo_file_id,
+                                    caption=caption_val, parse_mode=None,
+                                )
                             else:
-                                await bot.send_document(chat_id=telegram_id, document=photo_file_id, caption=text, parse_mode=None)
+                                await bot.send_document(chat_id=telegram_id, document=photo_file_id)
                         else:
-                            if len(text) > 1024:
+                            if caption_val and len(caption_val) > 1024:
                                 await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
-                                await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                                await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode=None)
+                            elif caption_val:
+                                await bot.send_photo(
+                                    chat_id=telegram_id, photo=photo_file_id,
+                                    caption=caption_val, parse_mode=None,
+                                )
                             else:
-                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id, caption=text, parse_mode=None)
+                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
                     else:
                         await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
                     return True
@@ -1462,11 +1486,95 @@ def _segment_label(segment: str) -> str:
     return labels.get(segment, "👥 Semua User")
 
 
+NETWORK_ALIASES: dict[str, tuple[str, list[str]]] = {
+    "MORPH": ("Morph", ["USDC", "ETH"]),
+    "BASE": ("Base", ["USDC", "ETH"]),
+    "BSC": ("BSC", ["USDT", "USDC", "BNB"]),
+    "BEP20": ("BSC", ["USDT", "USDC", "BNB"]),
+    "ARB": ("Arbitrum", ["USDT", "USDC", "ETH", "ARB"]),
+    "ARBITRUM": ("Arbitrum", ["USDT", "USDC", "ETH", "ARB"]),
+    "POLYGON": ("Polygon", ["USDT", "USDC", "POL"]),
+    "POL": ("Polygon", ["USDT", "USDC", "POL"]),
+    "MATIC": ("Polygon", ["USDT", "USDC", "POL"]),
+    "SOLANA": ("Solana", ["SOL", "USDT", "USDC"]),
+    "SOL": ("Solana", ["SOL", "USDT", "USDC"]),
+    "TRON": ("TRON", ["TRX", "USDT"]),
+    "TRX": ("TRON", ["TRX", "USDT"]),
+    "TRC20": ("TRON", ["TRX", "USDT"]),
+    "TON": ("TON", ["TON", "USDT"]),
+    "SUI": ("Sui", ["SUI"]),
+    "APTOS": ("Aptos", ["APT"]),
+    "APT": ("Aptos", ["APT"]),
+    "ETH": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "ETHEREUM": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "ERC20": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "OPTIMISM": ("Optimism", ["ETH"]),
+    "OP": ("Optimism", ["ETH"]),
+    "ROBINHOOD": ("Robinhood", ["ETH", "USDG"]),
+    "HYPEREVM": ("HyperEVM", ["HYPE"]),
+    "HYPE": ("HyperEVM", ["HYPE"]),
+    "AVAX": ("Avalanche", ["AVAX"]),
+    "AVALANCHE": ("Avalanche", ["AVAX"]),
+    "KAIA": ("Kaia", ["KAIA"]),
+    "BERA": ("Berachain", ["BERA"]),
+    "BERACHAIN": ("Berachain", ["BERA"]),
+}
+
+
+def get_available_networks_list() -> list[str]:
+    """Mengembalikan daftar nama canonical jaringan yang didukung."""
+    return [
+        "Morph", "Base", "BSC", "Arbitrum", "Polygon", "Solana",
+        "TRON", "TON", "Sui", "Aptos", "Ethereum", "Optimism",
+        "Robinhood", "HyperEVM", "Avalanche", "Kaia", "Berachain",
+    ]
+
+
+def get_network_coins(network_query: str) -> tuple[str, list[str]]:
+    """
+    Mengambil nama canonical jaringan dan daftar simbol koin yang tersedia.
+    Secara dinamis mencari dari BUY_NETWORKS_BY_SYMBOL dan STOCK_ASSETS.
+    """
+    from bot.keyboards.crypto_select import BUY_NETWORKS_BY_SYMBOL
+    from config.assets import STOCK_ASSETS
+
+    q_upper = network_query.strip().upper()
+    if q_upper in NETWORK_ALIASES:
+        canonical_name, base_coins = NETWORK_ALIASES[q_upper]
+    else:
+        canonical_name = network_query.strip().capitalize()
+        base_coins = []
+
+    coins: list[str] = list(base_coins)
+    for sym, nets in BUY_NETWORKS_BY_SYMBOL.items():
+        if any(n.upper() in (q_upper, canonical_name.upper()) for n in nets):
+            if sym not in coins:
+                coins.append(sym)
+
+    for sym, net in STOCK_ASSETS:
+        if net.upper() in (q_upper, canonical_name.upper()):
+            if sym not in coins:
+                coins.append(sym)
+
+    return canonical_name, coins
+
+
+def build_ready_broadcast_message(network_name: str, coins: list[str]) -> str:
+    """Membangun teks siaran koin ready otomatis."""
+    coin_lines = "\n".join(f"✅ {c:<6} ({network_name}🪙)" if len(c) <= 4 else f"✅ {c} ({network_name}🪙)" for c in coins)
+    return (
+        f"{network_name} Ready For Now🪙\n\n"
+        f"{coin_lines}\n\n"
+        f"Silakan /start bot untuk Beli/Jual/Swap token."
+    )
+
+
 async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Siaran ke user terdaftar dengan segment targeting.
 
     Cara pakai (admin only):
     - Teks: /broadcast [--all|--active|--buyers|--balance] Halo member...
+    - Koin Ready: /broadcast --ready Morph (otomatis format koin ready)
     - Foto: kirim poster dengan caption diawali /broadcast ... (atau reply
       foto poster dengan /broadcast ...).
     """
@@ -1502,6 +1610,7 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await message.reply_text(
             "⚠️ Format salah.\n"
             "Teks: <code>/broadcast Halo member...</code>\n"
+            "Koin Ready: <code>/broadcast --ready Morph</code>\n"
             "Segment: <code>/broadcast --buyers Promo...</code>\n"
             "Foto: kirim poster dengan caption <code>/broadcast ...</code> "
             "atau reply foto poster dengan <code>/broadcast ...</code>.",
@@ -1522,8 +1631,43 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    header = "📢 <b>PENGUMUMAN DARI OWNER</b>"
-    full_text = f"{header}\n\n{broadcast_msg}" if broadcast_msg else header
+    # Deteksi format otomatis koin ready: --ready [JARINGAN] atau ready [JARINGAN]
+    ready_pattern = re.compile(
+        r"(?:^|\s)--ready(?:\s+([a-zA-Z0-9_\-]+))?|^ready\s+([a-zA-Z0-9_\-]+)$",
+        re.IGNORECASE,
+    )
+    ready_match = ready_pattern.search(broadcast_msg) if broadcast_msg else None
+    if ready_match:
+        target_net = ready_match.group(1) or ready_match.group(2)
+        if not target_net:
+            nets_str = ", ".join(get_available_networks_list())
+            await message.reply_text(
+                "ℹ️ <b>Format Siaran Koin Ready Otomatis:</b>\n"
+                "<code>/broadcast --ready [NAMA_JARINGAN]</code>\n\n"
+                "Contoh:\n"
+                "• <code>/broadcast --ready Morph</code>\n"
+                "• <code>/broadcast --ready Base</code>\n"
+                "• <code>/broadcast --ready BSC</code>\n"
+                "• <code>/broadcast --buyers --ready Morph</code> <i>(khusus member pembeli)</i>\n\n"
+                f"📌 <b>Jaringan Tersedia:</b>\n<code>{nets_str}</code>\n\n"
+                "💡 <i>Anda juga bisa mengirim foto poster dengan caption <code>/broadcast --ready Morph</code>.</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        canon_name, coins = get_network_coins(target_net)
+        if not coins:
+            nets_str = ", ".join(get_available_networks_list())
+            await message.reply_text(
+                f"⚠️ Koin untuk jaringan <b>{target_net}</b> belum terdaftar.\n\n"
+                f"📌 Jaringan yang tersedia:\n<code>{nets_str}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        broadcast_msg = build_ready_broadcast_message(canon_name, coins)
+
+    full_text = broadcast_msg or ""
 
     db = SessionLocal()
     try:
