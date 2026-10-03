@@ -323,8 +323,16 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await sellorders_handler(update, context)
 
     elif data.startswith("admin_panel_"):
-        from bot.handlers.admin import admin_panel_callback
-        await admin_panel_callback(update, context)
+        if data == "admin_panel_campaign":
+            from bot.handlers.admin_campaign import campaign_callback_handler
+            await campaign_callback_handler(update, context)
+        else:
+            from bot.handlers.admin import admin_panel_callback
+            await admin_panel_callback(update, context)
+
+    elif data.startswith("camp_"):
+        from bot.handlers.admin_campaign import campaign_callback_handler
+        await campaign_callback_handler(update, context)
 
     elif data == "menu_price":
         from bot.handlers.price import show_prices

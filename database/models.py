@@ -227,3 +227,51 @@ class ReferralConfig(Base):
     value = Column(String(200), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class Campaign(Base):
+    """Campaign & Giveaway: wadah promosi dan bagi-bagi saldo bot."""
+    __tablename__ = 'campaigns'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    campaign_code = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(150), nullable=False)
+    template_type = Column(String(50), default='CUSTOM', nullable=False)
+    mode = Column(String(30), nullable=False)  # 'EQUAL_SPLIT', 'RANDOM', 'MILESTONE'
+    target_segment = Column(String(30), default='ALL', nullable=False)  # 'ALL', 'BUYERS', 'ACTIVE'
+    total_pool = Column(BigInteger, nullable=False)  # Batas maksimal anggaran (Hard Budget Cap)
+    max_winners = Column(Integer, nullable=True)  # Batas jumlah pemenang (kuota)
+    reward_per_winner = Column(BigInteger, nullable=True)
+    milestone_metric = Column(String(30), nullable=True)  # 'VOLUME_IDR', 'TX_COUNT'
+    min_metric_value = Column(BigInteger, default=0)
+    custom_message = Column(String(1000), nullable=True)  # Template pesan notifikasi custom
+    status = Column(String(20), default='DRAFT', nullable=False, index=True)  # 'DRAFT', 'COMPLETED', 'CANCELLED'
+    distributed_amount = Column(BigInteger, default=0)  # Total rupiah yang terdistribusi
+    distributed_count = Column(Integer, default=0)  # Total user yang menerima
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    executed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    distributions = relationship("CampaignDistribution", back_populates="campaign", cascade="all, delete-orphan")
+
+
+class CampaignDistribution(Base):
+    """Catatan riwayat distribusi saldo per user dalam campaign."""
+    __tablename__ = 'campaign_distributions'
+    __table_args__ = (
+        UniqueConstraint('campaign_id', 'telegram_id', name='uq_campaign_user'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    campaign_id = Column(Integer, ForeignKey('campaigns.id'), nullable=False, index=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    amount_idr = Column(BigInteger, nullable=False)
+    rank = Column(Integer, nullable=True)
+    metric_value = Column(BigInteger, nullable=True)
+    status = Column(String(20), default='SUCCESS', nullable=False)
+    notified = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    campaign = relationship("Campaign", back_populates="distributions")
+

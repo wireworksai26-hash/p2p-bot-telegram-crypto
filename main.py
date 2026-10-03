@@ -63,8 +63,8 @@ from bot.handlers.admin import (
     credit_balance_handler,
     bulkcredit_handler,
     setreferral_handler,
-)
 from bot.handlers.referral import referral_menu_handler
+from bot.handlers.admin_campaign import campaign_command_handler
 
 # FastAPI app & webhook bridge
 from services.bot_runtime import bot_app, set_bot_app
@@ -391,6 +391,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("cekurl", check_api_command))
     application.add_handler(CommandHandler("credit", credit_balance_handler))
     application.add_handler(CommandHandler("bulkcredit", bulkcredit_handler))
+    application.add_handler(CommandHandler("campaign", campaign_command_handler))
+    application.add_handler(CommandHandler("giveaway", campaign_command_handler))
     application.add_handler(CommandHandler("setreferral", setreferral_handler))
     application.add_handler(CommandHandler("referral", referral_menu_handler))
 
@@ -407,6 +409,10 @@ def build_bot_application() -> Application:
     # Satu router: foto diarahkan ke alur Buy ATAU Topup (hindari forward ganda ke admin).
     application.add_handler(MessageHandler(filters.PHOTO, _route_transfer_proof))
 
+    # --- Admin Interactive Input (Text) ---
+    # Menangani input teks admin untuk wizard campaign (budget manual / kustomisasi teks notifikasi)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_admin_text))
+
     # --- Callback Query Handler (catch-all for inline keyboard buttons) ---
     # Handles menu_* callbacks and any other inline-button presses.
     application.add_handler(CallbackQueryHandler(menu_callback_handler))
@@ -416,6 +422,22 @@ def build_bot_application() -> Application:
 
     logger.info("All handlers registered")
     return application
+
+
+async def _route_admin_text(update: Update, context) -> None:
+    """
+    Router pesan teks interaktif untuk input wizard admin
+    (seperti nominal budget campaign atau kustomisasi teks notifikasi giveaway).
+    """
+    if not update.message or not update.message.text:
+        return
+    user_id = update.effective_user.id
+    from bot.handlers.admin import is_admin
+    if not is_admin(user_id):
+        return
+
+    from bot.handlers.admin_campaign import campaign_text_input_handler
+    await campaign_text_input_handler(update, context)
 
 
 async def _route_transfer_proof(update: Update, context) -> None:

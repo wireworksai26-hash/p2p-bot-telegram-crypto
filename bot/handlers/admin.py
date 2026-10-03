@@ -57,7 +57,7 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         ],
         [
             InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
-            InlineKeyboardButton("💳 Isi Saldo User", callback_data="admin_panel_credit"),
+            InlineKeyboardButton("🎁 Campaign & Giveaway", callback_data="admin_panel_campaign"),
         ],
         [
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
@@ -616,9 +616,15 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Panduan broadcast dimuat.")
 
+        elif data == "admin_panel_campaign":
+            from bot.handlers.admin_campaign import campaign_callback_handler
+            await campaign_callback_handler(update, context)
+            return
+
         elif data == "admin_panel_credit":
             text = build_admin_credit_view()
             buttons = [
+                [InlineKeyboardButton("🎁 Buka Campaign & Giveaway Wizard", callback_data="admin_panel_campaign")],
                 [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
             ]
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
