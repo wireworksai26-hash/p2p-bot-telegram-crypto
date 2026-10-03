@@ -59,11 +59,11 @@ def get_budget_selection_keyboard(tpl_key: str) -> InlineKeyboardMarkup:
     presets = tpl.get("preset_pools", [100_000, 250_000, 500_000, 1_000_000]) if tpl else [100_000, 250_000, 500_000, 1_000_000]
 
     row1 = [
-        InlineKeyboardButton(f"Rp {format_idr(p)}", callback_data=f"camp_sim_{tpl_key}_{p}")
+        InlineKeyboardButton(format_idr(p), callback_data=f"camp_sim_{tpl_key}_{p}")
         for p in presets[:2]
     ]
     row2 = [
-        InlineKeyboardButton(f"Rp {format_idr(p)}", callback_data=f"camp_sim_{tpl_key}_{p}")
+        InlineKeyboardButton(format_idr(p), callback_data=f"camp_sim_{tpl_key}_{p}")
         for p in presets[2:4]
     ]
 
@@ -346,7 +346,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 f"🎉 <b>CAMPAIGN BERHASIL DISELESAIKAN!</b>\n\n"
                 f"🎁 <b>Event:</b> {result['title']}\n"
                 f"👥 <b>Penerima:</b> <code>{result['distributed_count']} user</code>\n"
-                f"💸 <b>Total Terdistribusi:</b> <code>Rp {format_idr(result['distributed_amount'])}</code>\n"
+                f"💸 <b>Total Terdistribusi:</b> <code>{format_idr(result['distributed_amount'])}</code>\n"
                 f"📨 <b>Notifikasi Telegram:</b> <code>{result['notif_success']} terkirim</code>\n"
                 f"🛡️ <b>Budget Cap:</b> Terpenuhi aman (tidak overbudget).\n\n"
                 f"<i>Saldo penerima sudah aktif di akun bot masing-masing dan siap dipakai untuk transaksi.</i>"
@@ -369,7 +369,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     status_icon = "✅" if c.status == "COMPLETED" else ("⏳" if c.status == "DRAFT" else "❌")
                     lines.append(
                         f"{status_icon} <b>{_esc(c.title)}</b> (ID: <code>{c.id}</code>)\n"
-                        f"   💰 Budget: <code>Rp {format_idr(c.total_pool)}</code> | "
+                        f"   💰 Budget: <code>{format_idr(c.total_pool)}</code> | "
                         f"Penerima: <code>{c.distributed_count} user</code>\n"
                         f"   Status: <code>{c.status}</code> | Tgl: <code>{c.created_at.strftime('%d/%m/%Y')}</code>\n"
                     )
@@ -508,8 +508,8 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
     winners_preview = []
     for w in sim["winners"][:5]:
         rank_str = f"#{w['rank']} " if w.get("rank") else ""
-        metric_str = f" (Vol: Rp {format_idr(w['metric_value'])})" if w.get("metric_value") else ""
-        winners_preview.append(f"  • {rank_str}<b>{_esc(w['username'])}</b> — <code>+Rp {format_idr(w['amount'])}</code>{metric_str}")
+        metric_str = f" (Vol: {format_idr(w['metric_value'])})" if w.get("metric_value") else ""
+        winners_preview.append(f"  • {rank_str}<b>{_esc(w['username'])}</b> — <code>+{format_idr(w['amount'])}</code>{metric_str}")
 
     more_str = f"\n  <i>...dan {len(sim['winners']) - 5} pemenang lainnya.</i>" if len(sim["winners"]) > 5 else ""
 
@@ -518,9 +518,9 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
         f"🎯 <b>Mode:</b> <code>{camp.mode}{metric_info}</code>\n"
         f"👥 <b>Target Segmen:</b> <code>{camp.target_segment}</code>\n"
         f"👥 <b>Total Pemenang:</b> <code>{sim['winner_count']} user</code>\n"
-        f"💵 <b>Hadiah per User:</b> <code>Rp {format_idr(sim['reward_per_winner'])}</code>\n"
-        f"💰 <b>Total Anggaran Keluar:</b> <code>Rp {format_idr(sim['total_distributed'])}</code>\n"
-        f"🛡️ <b>Maksimal Anggaran (Cap):</b> <code>Rp {format_idr(camp.total_pool)}</code>\n\n"
+        f"💵 <b>Hadiah per User:</b> <code>{format_idr(sim['reward_per_winner'])}</code>\n"
+        f"💰 <b>Total Anggaran Keluar:</b> <code>{format_idr(sim['total_distributed'])}</code>\n"
+        f"🛡️ <b>Maksimal Anggaran (Cap):</b> <code>{format_idr(camp.total_pool)}</code>\n\n"
         f"📋 <b>Daftar Pemenang Terpilih:</b>\n"
         f"{''.join(winners_preview)}{more_str}\n\n"
         f"✉️ <b>Pratinjau Notifikasi ke Pemenang:</b>\n"

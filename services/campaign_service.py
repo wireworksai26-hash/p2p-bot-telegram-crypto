@@ -237,7 +237,7 @@ def simulate_campaign(
             "total_distributed": 0,
             "remaining_pool": total_pool,
             "winners": [],
-            "error": f"Budget Rp {format_idr(total_pool)} terlalu kecil untuk dibagi ke {winner_count} user (minimal Rp 100/user).",
+            "error": f"Budget {format_idr(total_pool)} terlalu kecil untuk dibagi ke {winner_count} user (minimal Rp 100/user).",
         }
 
     total_distributed = reward_per_winner * winner_count
@@ -278,8 +278,8 @@ def format_custom_notification(
     text = template or CAMPAIGN_TEMPLATES["tpl_split_all"]["default_notif"]
     replacements = {
         "{name}": name or "Sobat Crypto",
-        "{reward}": f"Rp {format_idr(reward_amount)}",
-        "{new_balance}": f"Rp {format_idr(int(new_balance))}",
+        "{reward}": format_idr(reward_amount),
+        "{new_balance}": format_idr(int(new_balance)),
         "{campaign_name}": campaign_name,
         "{rank}": str(rank) if rank else "-",
         "{bot_username}": bot_username,
@@ -379,7 +379,7 @@ def execute_campaign(
                 action="CAMPAIGN_REWARD",
                 details=(
                     f"Campaign '{campaign.title}' (ID {campaign.id}): "
-                    f"+Rp {format_idr(amount)} (saldo: {format_idr(int(old_balance))} -> {format_idr(int(new_balance))}) "
+                    f"+{format_idr(amount)} (saldo: {format_idr(int(old_balance))} -> {format_idr(int(new_balance))}) "
                     f"oleh admin {admin_id}"
                 ),
             )
