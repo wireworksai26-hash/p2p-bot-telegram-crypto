@@ -40,7 +40,7 @@ except Exception as _init_err:
 
 
 def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
-    """Keyboard menu utama pusat campaign."""
+    """Keyboard menu utama pusat campaign, giveaway, dan loyalty."""
     keyboard = [
         [
             InlineKeyboardButton("🎁 Bagi Rata Buyer Aktif", callback_data="camp_tpl_tpl_split_all"),
@@ -49,9 +49,11 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🛒 Loyalty Buyer Giveaway", callback_data="camp_tpl_tpl_loyalty_buyers"),
         ],
         [
-            InlineKeyboardButton("🏆 Top Spender Milestone", callback_data="camp_tpl_tpl_top_spenders"),
+            InlineKeyboardButton("🏆 Top Spender Leaderboard", callback_data="admin_panel_top_spenders"),
+            InlineKeyboardButton("🎲 Undi Pemenang Acak", callback_data="admin_panel_random_draw"),
         ],
         [
+            InlineKeyboardButton("⏳ Pengaturan Loyalty Reward", callback_data="admin_panel_loyalty"),
             InlineKeyboardButton("⚡ Flash Giveaway Acak", callback_data="camp_tpl_tpl_flash_random"),
         ],
         [
@@ -59,7 +61,7 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Riwayat Campaign", callback_data="camp_history"),
         ],
         [
-            InlineKeyboardButton("🔙 Panel Utama Admin", callback_data="admin_panel_main"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -124,15 +126,17 @@ def build_campaign_main_view(db=None) -> str:
             db.close()
 
     return (
-        f"{tg_emoji('GIFT', '🎁')} <b>PUSAT CAMPAIGN & GIVEAWAY BOT</b>\n\n"
+        f"{tg_emoji('GIFT', '🎁')} <b>PUSAT CAMPAIGN & GIVEAWAY BOT (LOYALTY HUB)</b>\n\n"
         f"{tg_emoji('BANK', '🏦')} <b>Saldo Kas Dompet Bot:</b> <code>{format_idr(treasury_bal)}</code>\n\n"
-        "Fitur ini memungkinkan Anda membuat event giveaway saldo bot dengan "
-        "<b>proteksi batas anggaran (Hard Budget Cap)</b> dan sistem seleksi otomatis.\n\n"
-        f"{tg_emoji('SPARKLES', '✨')} <b>Pilih Template Siap Pakai (1-Click):</b>\n"
-        "1. <b>🎁 Bagi Rata Buyer Aktif</b> — Total budget dibagi sama rata ke user yang pernah transaksi.\n"
+        "Pusat pengelolaan event giveaway saldo bot, ranking Top Spender, "
+        "undian acak, dan program loyalty otomatis dengan <b>proteksi batas anggaran (Hard Budget Cap)</b>.\n\n"
+        f"{tg_emoji('SPARKLES', '✨')} <b>Menu & Template Event Siap Pakai:</b>\n"
+        "1. <b>🎁 Bagi Rata Buyer Aktif</b> — Total budget dibagi sama rata ke user pembeli aktif.\n"
         "2. <b>🛒 Loyalty Buyer Giveaway</b> — Undian acak khusus pelanggan yang aktif bertransaksi.\n"
-        "3. <b>🏆 Top Spender Milestone</b> — Reward khusus Top Trader dengan volume terbesar.\n"
-        "4. <b>⚡ Flash Giveaway Acak</b> — Bagi-bagi hadiah kilat untuk sejumlah user acak.\n\n"
+        "3. <b>🏆 Top Spender Leaderboard</b> — Reward leaderboard untuk Top Trader dengan volume terbesar.\n"
+        "4. <b>🎲 Undi Pemenang Acak</b> — Undi pemenang instan per kategori target user.\n"
+        "5. <b>⏳ Pengaturan Loyalty Reward</b> — Reward otomatis per X transaksi dalam window waktu.\n"
+        "6. <b>⚡ Flash Giveaway Acak</b> — Bagi-bagi saldo kilat untuk sejumlah user acak.\n\n"
         f"{tg_emoji('CHECK', '🛡️')} <i>Sistem menjamin total saldo keluar tidak akan pernah melebihi budget yang Anda tetapkan.</i>"
     )
 

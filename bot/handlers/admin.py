@@ -56,30 +56,25 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
             InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
         ],
         [
-            InlineKeyboardButton("🏆 Top Spender", callback_data="admin_panel_top_spenders"),
-            InlineKeyboardButton("🎲 Undi Pemenang", callback_data="admin_panel_random_draw"),
+            InlineKeyboardButton("🎁 Pusat Campaign, Giveaway & Loyalty", callback_data="admin_panel_campaign"),
         ],
         [
-            InlineKeyboardButton("⏳ Loyalty Reward", callback_data="admin_panel_loyalty"),
-            InlineKeyboardButton("🔗 Referral Stats", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("🔗 Referral Program", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
         ],
         [
             InlineKeyboardButton("💼 Hot Wallets & Saldo", callback_data="admin_panel_wallets"),
             InlineKeyboardButton("🔄 Sync On-Chain", callback_data="admin_panel_sync_wallets"),
         ],
         [
-            InlineKeyboardButton("📜 Audit Trail Log", callback_data="admin_panel_audit"),
-            InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
-        ],
-        [
-            InlineKeyboardButton("🎁 Campaign & Giveaway", callback_data="admin_panel_campaign"),
-        ],
-        [
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
-            InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
+            InlineKeyboardButton("📜 Audit Trail Log", callback_data="admin_panel_audit"),
         ],
         [
             InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
+            InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
+        ],
+        [
             InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
         ],
     ]
@@ -652,7 +647,12 @@ def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMa
         ],
         [
             InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_top_spender_p_{period_days}"),
-            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -712,7 +712,12 @@ def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> Inline
         ],
         [
             InlineKeyboardButton("🔄 Refresh Pool", callback_data=f"admin_draw_pool_{pool_segment}"),
-            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -771,7 +776,10 @@ def build_admin_loyalty_keyboard(db) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_loyalty"),
         ],
         [
-            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
     return InlineKeyboardMarkup(buttons)
