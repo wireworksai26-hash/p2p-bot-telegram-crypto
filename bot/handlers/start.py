@@ -295,6 +295,22 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.saved_accounts import prompt_add_saved_wallet
         await prompt_add_saved_wallet(update, context)
 
+    elif data.startswith("act_add_wallet_"):
+        from bot.handlers.saved_accounts import prompt_add_wallet_specific
+        await prompt_add_wallet_specific(update, context)
+
+    elif data == "act_set_default_wallet_menu":
+        from bot.handlers.saved_accounts import show_set_default_wallet_menu
+        await show_set_default_wallet_menu(update, context)
+
+    elif data.startswith("act_set_default_"):
+        from bot.handlers.saved_accounts import handle_set_default_wallet_action
+        await handle_set_default_wallet_action(update, context)
+
+    elif data.startswith("act_evm_chain_"):
+        from bot.handlers.saved_accounts import handle_confirm_evm_chain
+        await handle_confirm_evm_chain(update, context)
+
     elif data == "act_add_saved_bank":
         from bot.handlers.saved_accounts import prompt_add_saved_bank
         await prompt_add_saved_bank(update, context)
@@ -388,7 +404,17 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import sellorders_handler
         await sellorders_handler(update, context)
 
-    elif data.startswith("admin_panel_") or data.startswith("admin_ref_"):
+    elif (
+        data.startswith("admin_panel_")
+        or data.startswith("admin_send_bal_")
+        or data.startswith("admin_treasury_")
+        or data.startswith("admin_ref_")
+        or data.startswith("admin_top_spender_")
+        or data.startswith("admin_draw_")
+        or data.startswith("admin_loyalty_")
+        or data.startswith("admin_weekly_")
+        or data.startswith("admin_export_")
+    ):
         if data == "admin_panel_campaign":
             from bot.handlers.admin_campaign import campaign_callback_handler
             await campaign_callback_handler(update, context)

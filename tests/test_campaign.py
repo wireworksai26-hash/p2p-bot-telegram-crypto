@@ -265,6 +265,32 @@ class TestCampaignHandlers(unittest.IsolatedAsyncioTestCase):
         self.db.add_all([
             User(telegram_id=301, username="alpha", balance_idr=Decimal("0"), is_banned=False),
             User(telegram_id=302, username="beta", balance_idr=Decimal("0"), is_banned=False),
+            Order(
+                order_id="ORD-CMP-301",
+                telegram_id=301,
+                order_type="buy",
+                crypto_symbol="USDT",
+                network="BSC",
+                crypto_amount=Decimal("10.0"),
+                price_per_unit=16000,
+                nominal_idr=160000,
+                fee_idr=2000,
+                total_idr=160000,
+                status="completed",
+            ),
+            Order(
+                order_id="ORD-CMP-302",
+                telegram_id=302,
+                order_type="buy",
+                crypto_symbol="USDT",
+                network="BSC",
+                crypto_amount=Decimal("10.0"),
+                price_per_unit=16000,
+                nominal_idr=160000,
+                fee_idr=2000,
+                total_idr=160000,
+                status="completed",
+            ),
         ])
         self.db.commit()
 

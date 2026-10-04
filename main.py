@@ -124,6 +124,7 @@ def init_database():
     _migrate_inventory_schema()
     _migrate_orders_schema()
     _migrate_campaign_schema()
+    _migrate_phase7_schema()   # Phase 7: Referral Discount, Loyalty, Enhanced Wallet
 
     db = db_conn.SessionLocal()
     try:
@@ -183,6 +184,85 @@ def _migrate_campaign_schema():
             logger.info("Migrasi campaign: tabel campaigns & campaign_distributions berhasil dibuat.")
     except Exception as exc:
         logger.error("Migrasi campaign gagal: %s", exc, exc_info=True)
+
+
+def _migrate_phase7_schema():
+    """
+    Phase 7: Buat tabel baru dan tambah kolom ke tabel yang sudah ada.
+    - Tabel baru: referral_discounts, loyalty_rewards, loyalty_config
+    - Kolom baru di orders: referral_discount_applied, referral_discount_pct, discount_amount_idr
+    - Kolom baru di user_saved_wallets: chain_type, is_default, auto_detected
+    - Seed default loyalty_config rows
+    """
+    from sqlalchemy import inspect
+    from database.connection import engine, Base
+    import database.models  # noqa: F401 — ensure models are loaded
+
+    try:
+        # Buat tabel baru yang belum ada (idempotent via create_all)
+        Base.metadata.create_all(bind=engine)
+        inspector = inspect(engine)
+
+        # ── Kolom baru di tabel orders ──────────────────────────────
+        if "orders" in inspector.get_table_names():
+            existing_order_cols = {c["name"] for c in inspector.get_columns("orders")}
+            new_order_cols = [
+                ("referral_discount_applied", "BOOLEAN DEFAULT FALSE"),
+                ("referral_discount_pct", "NUMERIC(5, 2)"),
+                ("discount_amount_idr", "BIGINT DEFAULT 0"),
+            ]
+            with engine.begin() as conn:
+                for col, dtype in new_order_cols:
+                    if col not in existing_order_cols:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE orders ADD COLUMN {col} {dtype}"
+                        )
+                        logger.info("Phase7 migration: orders.%s ditambahkan.", col)
+
+        # ── Kolom baru di tabel user_saved_wallets ──────────────────
+        if "user_saved_wallets" in inspector.get_table_names():
+            existing_wallet_cols = {c["name"] for c in inspector.get_columns("user_saved_wallets")}
+            new_wallet_cols = [
+                ("chain_type", "VARCHAR(20)"),
+                ("is_default", "BOOLEAN DEFAULT FALSE"),
+                ("auto_detected", "BOOLEAN DEFAULT FALSE"),
+            ]
+            with engine.begin() as conn:
+                for col, dtype in new_wallet_cols:
+                    if col not in existing_wallet_cols:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE user_saved_wallets ADD COLUMN {col} {dtype}"
+                        )
+                        logger.info("Phase7 migration: user_saved_wallets.%s ditambahkan.", col)
+
+        # ── Seed default loyalty_config ─────────────────────────────
+        from database.connection import SessionLocal
+        from database.models import LoyaltyConfig
+        DEFAULT_LOYALTY = {
+            "loyalty_enabled": "true",
+            "window_days": "5",
+            "min_tx_count": "5",
+            "reward_amount_idr": "25000",
+            "min_tx_amount_idr": "50000",
+        }
+        _db = SessionLocal()
+        try:
+            for key, val in DEFAULT_LOYALTY.items():
+                exists = _db.query(LoyaltyConfig).filter(LoyaltyConfig.key == key).first()
+                if not exists:
+                    _db.add(LoyaltyConfig(key=key, value=val))
+            _db.commit()
+            logger.info("Phase7 migration: loyalty_config defaults selesai di-seed.")
+        except Exception as seed_err:
+            _db.rollback()
+            logger.warning("Phase7 migration: seed loyalty_config gagal: %s", seed_err)
+        finally:
+            _db.close()
+
+        logger.info("Phase 7 schema migration selesai.")
+    except Exception as exc:
+        logger.error("Phase 7 migration gagal: %s", exc, exc_info=True)
+
 
 
 def _migrate_orders_schema():
@@ -411,7 +491,7 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("resetemojis", resetemojis_handler))
     application.add_handler(CommandHandler("checkapi", check_api_command))
     application.add_handler(CommandHandler("cekurl", check_api_command))
-    application.add_handler(CommandHandler("credit", credit_balance_handler))
+    application.add_handler(CommandHandler(["credit", "sendsaldo", "kirimsaldo"], credit_balance_handler))
     application.add_handler(CommandHandler("bulkcredit", bulkcredit_handler))
     application.add_handler(CommandHandler("campaign", campaign_command_handler))
     application.add_handler(CommandHandler("giveaway", campaign_command_handler))
@@ -419,7 +499,10 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("referral", referral_menu_handler))
     from bot.handlers.saved_accounts import show_saved_wallets_menu, show_saved_banks_menu
     application.add_handler(CommandHandler(["wallet", "dompet"], show_saved_wallets_menu))
-    application.add_handler(CommandHandler(["rekening", "bank"], show_saved_banks_menu))
+    from bot.handlers.admin import weekly_report_command_handler, test_testimony_command_handler, topup_bot_command_handler
+    application.add_handler(CommandHandler(["weeklyreport", "report"], weekly_report_command_handler))
+    application.add_handler(CommandHandler(["testtesti", "testchannel"], test_testimony_command_handler))
+    application.add_handler(CommandHandler(["topupbot", "saldobot", "dompetbot"], topup_bot_command_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands
@@ -435,7 +518,7 @@ def build_bot_application() -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, _route_transfer_proof))
 
     # --- Admin & Interactive User Input (Text) ---
-    # Menangani input teks user (simpan wallet/rekening) dan admin (wizard campaign / referral)
+    # Menangani input teks user (simpan wallet/rekening) dan admin (kirim saldo, kas bot, campaign, referral)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_admin_text))
 
     # --- Callback Query Handler (catch-all for inline keyboard buttons) ---
@@ -452,7 +535,7 @@ def build_bot_application() -> Application:
 async def _route_admin_text(update: Update, context) -> None:
     """
     Router pesan teks interaktif untuk input user (simpan wallet/rekening)
-    dan input wizard admin (nominal budget campaign, notifikasi, serta referral).
+    dan input wizard admin (kirim saldo, kas bot, nominal budget campaign, notifikasi, referral).
     """
     if not update.message or not update.message.text:
         return
@@ -469,17 +552,13 @@ async def _route_admin_text(update: Update, context) -> None:
     if not is_admin(user_id):
         return
 
-    # Routing input kustom referral (reward pengundang / potongan teman / min pembelian)
-    if (
-        context.user_data.get("admin_awaiting_ref_custom_reward")
-        or context.user_data.get("admin_awaiting_ref_custom_bonus")
-        or context.user_data.get("admin_awaiting_ref_custom_min_trade")
-    ):
-        from bot.handlers.admin import admin_referral_text_handler
-        handled = await admin_referral_text_handler(update, context)
-        if handled:
-            return
+    # Routing seluruh input interaktif admin (kirim saldo user, top up kas bot, config referral)
+    from bot.handlers.admin import admin_interactive_text_router
+    handled = await admin_interactive_text_router(update, context)
+    if handled:
+        return
 
+    # Fallback ke wizard campaign / giveaway
     from bot.handlers.admin_campaign import campaign_text_input_handler
     await campaign_text_input_handler(update, context)
 

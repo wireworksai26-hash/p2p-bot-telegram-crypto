@@ -135,7 +135,11 @@ async def _notify_user(bot, order, url: str) -> None:
         )
     if url:
         text += f"\n\n🌐 <a href=\"{url}\">Lihat di Explorer</a>"
-    text += "\n\nTerima kasih! 🙏"
+    text += (
+        "\n\nTerimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
+        "Testimoni : t.me/TokoKoinID\n"
+        "Channel : t.me/ROBHSN_STORE_SELLER"
+    )
     await safe_send_message(bot, order.telegram_id, text)
 
 
@@ -202,6 +206,9 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                             if ref:
                                 reward = ref.reward_idr or 0
                                 from bot.utils.formatter import format_idr as _fmt_idr
+                                # Aktifkan referral discount untuk referrer (Phase 7)
+                                from services.referral_discount_service import activate_discount_for_referrer
+                                await activate_discount_for_referrer(bot, ref.referrer_id, db)
                                 await bot.send_message(
                                     ref.referrer_id,
                                     f"🎉 <b>Referral Reward!</b>\n\n"
@@ -211,6 +218,27 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                 )
                     except Exception as exc:
                         logger.warning("Gagal proses referral reward user %s: %s", order.telegram_id, exc)
+
+                    # Loyalty time-window tracking (Phase 7)
+                    try:
+                        from services.loyalty_service import process_loyalty_after_order
+                        order_total = int(getattr(order, "total_idr", 0) or 0)
+                        await process_loyalty_after_order(
+                            telegram_id=order.telegram_id,
+                            order_amount_idr=order_total,
+                            bot=bot,
+                            db=db,
+                        )
+                    except Exception as exc:
+                        logger.warning("Gagal proses loyalty untuk user %s: %s", order.telegram_id, exc)
+
+                    # Post testimony ke channel (Phase 8)
+                    try:
+                        from services.testimony_service import post_transaction_testimony
+                        asyncio.create_task(post_transaction_testimony(bot, order, db=db))
+                    except Exception as exc:
+                        logger.warning("Gagal kirim testimoni watchdog order %s: %s", order.order_id, exc)
+
 
             elif state == "reverted":
                 if order.order_id not in _alerted:

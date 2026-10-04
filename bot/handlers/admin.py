@@ -45,7 +45,23 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         [InlineKeyboardButton("📥 Dashboard Jual Crypto", callback_data="admin_sellorders_0")],
         [
             InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
+            InlineKeyboardButton("📑 Rekap Mingguan (Sheets)", callback_data="admin_panel_weekly_report"),
+        ],
+        [
+            InlineKeyboardButton("💳 Kirim Saldo User", callback_data="admin_panel_send_balance"),
+            InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="admin_panel_treasury"),
+        ],
+        [
             InlineKeyboardButton(order_label, callback_data="admin_panel_orders"),
+            InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
+        ],
+        [
+            InlineKeyboardButton("🏆 Top Spender", callback_data="admin_panel_top_spenders"),
+            InlineKeyboardButton("🎲 Undi Pemenang", callback_data="admin_panel_random_draw"),
+        ],
+        [
+            InlineKeyboardButton("⏳ Loyalty Reward", callback_data="admin_panel_loyalty"),
+            InlineKeyboardButton("🔗 Referral Stats", callback_data="admin_panel_referral"),
         ],
         [
             InlineKeyboardButton("💼 Hot Wallets & Saldo", callback_data="admin_panel_wallets"),
@@ -56,18 +72,14 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
             InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
         ],
         [
-            InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
             InlineKeyboardButton("🎁 Campaign & Giveaway", callback_data="admin_panel_campaign"),
         ],
         [
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
-            InlineKeyboardButton("🔗 Referral Stats", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
         ],
         [
-            InlineKeyboardButton("📡 Status API & URL Koin", callback_data="admin_panel_check_apis"),
             InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
-        ],
-        [
             InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
         ],
     ]
@@ -80,6 +92,7 @@ def build_admin_dashboard_text(db) -> str:
     total_users = crud.get_user_count(db)
     pending_count = crud.get_pending_orders_count(db)
     completed_all = crud.get_completed_order_count(db)
+    bot_treasury = crud.get_bot_treasury_balance(db)
     
     now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
     
@@ -90,6 +103,7 @@ def build_admin_dashboard_text(db) -> str:
         f"🕒 <i>Status Update: {now_str}</i>\n\n"
         f"🚦 <b>Kondisi Operasional:</b> {status_indicator}\n"
         f"├── 👥 <b>Total Pengguna:</b> <code>{total_users:,} Member</code>\n"
+        f"├── 🏦 <b>Kas Dompet Bot:</b> <code>{format_idr(bot_treasury)}</code>\n"
         f"├── 🛒 <b>Order Hari Ini:</b> <code>{stats['total_orders_today']} Order</code>\n"
         f"├── ✅ <b>Total Sukses (All-Time):</b> <code>{completed_all:,} Transaksi</code>\n"
         f"├── 💳 <b>Volume Hari Ini:</b> <code>{format_idr(stats['total_volume_idr_today'])}</code>\n"
@@ -591,6 +605,403 @@ def build_admin_emojis_view() -> str:
     return text
 
 
+# ─────────────────────────────────────────────────────────
+#  Phase 7: Top Spender, Random Winner & Loyalty Config Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_top_spenders_view(db, period_days: int = 30) -> str:
+    """Membangun teks leaderboard Top Spender."""
+    from services.campaign_service import TOP_SPENDER_REWARDS
+    from bot.utils.formatter import format_idr
+
+    top_spenders = crud.get_top_spenders(db, limit=10, period_days=period_days)
+    total_pool = sum(TOP_SPENDER_REWARDS.get(i, 0) for i in range(1, 11))
+
+    lines = [
+        "🏆 <b>TOP SPENDER — LEADERBOARD TRANSAKSI</b>",
+        f"📅 Periode: <b>{period_days} Hari Terakhir</b> | Total Hadiah: <b>{format_idr(total_pool)}</b>\n",
+    ]
+
+    if not top_spenders:
+        lines.append("<i>Belum ada data transaksi pembelian selesai pada periode ini.</i>\n")
+    else:
+        for u in top_spenders:
+            rank = u["rank"]
+            reward = TOP_SPENDER_REWARDS.get(rank, 0)
+            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+            lines.append(
+                f"{medal} <b>@{u['username']}</b> (ID: <code>{u['telegram_id']}</code>)\n"
+                f"   ├── Volume : <b>{format_idr(u['total_spent_idr'])}</b>\n"
+                f"   └── Hadiah : <code>+{format_idr(reward)}</code>"
+            )
+
+    lines.append("\n💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
+    return "\n".join(lines)
+
+
+def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMarkup:
+    """Keyboard navigasi Top Spender."""
+    buttons = [
+        [
+            InlineKeyboardButton("💰 Eksekusi & Bagikan Hadiah ke Top 10", callback_data=f"admin_top_spender_exec_{period_days}"),
+        ],
+        [
+            InlineKeyboardButton("📅 7 Hari", callback_data="admin_top_spender_p_7"),
+            InlineKeyboardButton("📅 30 Hari", callback_data="admin_top_spender_p_30"),
+            InlineKeyboardButton("📅 90 Hari", callback_data="admin_top_spender_p_90"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_top_spender_p_{period_days}"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_random_draw_view(db, pool_segment: str = "ACTIVE_30D") -> str:
+    """Membangun teks menu Undian Acak (Flash Giveaway)."""
+    seg_names = {
+        "ALL": "Semua User Bot",
+        "BUYERS": "User Pernah Beli (Completed)",
+        "ACTIVE_30D": "User Aktif 30 Hari Terakhir",
+    }
+    seg_label = seg_names.get(pool_segment, pool_segment)
+    
+    # Hitung jumlah kandidat pool
+    pool_candidates = crud.get_random_winners(db, pool_segment=pool_segment, count=1000)
+    pool_count = len(pool_candidates)
+
+    text = (
+        "🎲 <b>UNDI PEMENANG ACAK (FLASH GIVEAWAY)</b>\n\n"
+        f"🎯 <b>Pool Peserta:</b> <b>{seg_label}</b>\n"
+        f"👥 <b>Total Kandidat Tersedia:</b> <code>{pool_count} user</code>\n\n"
+        "Sistem akan memilih pemenang secara acak dan langsung mengkreditkan saldo bot ke pemenang serta mengirim notifikasi kemenangan otomatis.\n\n"
+        "👇 <b>Pilih Target Pool atau Eksekusi Preset di bawah:</b>"
+    )
+    return text
+
+
+def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> InlineKeyboardMarkup:
+    """Keyboard navigasi Undi Pemenang Acak."""
+    buttons = [
+        [
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'ACTIVE_30D' else '⚪'} Aktif 30 Hari",
+                callback_data="admin_draw_pool_ACTIVE_30D"
+            ),
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'BUYERS' else '⚪'} Pernah Beli",
+                callback_data="admin_draw_pool_BUYERS"
+            ),
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'ALL' else '⚪'} Semua User",
+                callback_data="admin_draw_pool_ALL"
+            ),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 25.000", callback_data=f"admin_draw_exec_{pool_segment}_5_25000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 50.000", callback_data=f"admin_draw_exec_{pool_segment}_5_50000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 10 Orang @ Rp 20.000", callback_data=f"admin_draw_exec_{pool_segment}_10_20000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 20 Orang @ Rp 10.000", callback_data=f"admin_draw_exec_{pool_segment}_20_10000"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Pool", callback_data=f"admin_draw_pool_{pool_segment}"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_loyalty_view(db) -> str:
+    """Membangun teks status dan konfigurasi Loyalty Reward."""
+    from bot.utils.formatter import format_idr
+
+    enabled_str = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+    is_enabled = enabled_str.lower() == "true"
+    window_days = int(crud.get_loyalty_config(db, "window_days") or 5)
+    min_tx = int(crud.get_loyalty_config(db, "min_tx_count") or 5)
+    reward_idr = int(crud.get_loyalty_config(db, "reward_amount_idr") or 25_000)
+    min_tx_amt = int(crud.get_loyalty_config(db, "min_tx_amount_idr") or 50_000)
+
+    status_icon = "🟢" if is_enabled else "🔴"
+    status_text = "AKTIF" if is_enabled else "NONAKTIF"
+
+    eligible = crud.get_loyalty_eligible_users(db)
+    eligible_count = len(eligible)
+
+    text = (
+        "⏳ <b>PENGATURAN LOYALTY REWARD (TIME-WINDOW)</b>\n\n"
+        f"Status Program: {status_icon} <b>{status_text}</b>\n\n"
+        "⚙️ <b>Aturan Loyalty Saat Ini:</b>\n"
+        f"├── ⏱️ <b>Window Waktu:</b> <code>{window_days} Hari</code>\n"
+        f"├── 🔢 <b>Syarat Transaksi:</b> <code>{min_tx}x Transaksi Selesai</code>\n"
+        f"├── 💰 <b>Reward Saldo:</b> <code>{format_idr(reward_idr)} per user</code>\n"
+        f"└── 🛒 <b>Min. Nominal Transaksi:</b> <code>{format_idr(min_tx_amt)} / order</code>\n\n"
+        f"📊 <b>User Eligible Menunggu Reward:</b> <code>{eligible_count} user</code>\n\n"
+        f"💡 <i>User yang menyelesaikan minimal {min_tx}x transaksi dalam rentang {window_days} hari "
+        f"akan otomatis mendapat reward saldo {format_idr(reward_idr)}.</i>"
+    )
+    return text
+
+
+def build_admin_loyalty_keyboard(db) -> InlineKeyboardMarkup:
+    """Keyboard navigasi Loyalty Config."""
+    enabled_str = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+    is_enabled = enabled_str.lower() == "true"
+    toggle_text = "🔴 Nonaktifkan Program" if is_enabled else "🟢 Aktifkan Program"
+
+    buttons = [
+        [InlineKeyboardButton(toggle_text, callback_data="admin_loyalty_toggle")],
+        [
+            InlineKeyboardButton("⏱️ Ganti Window Hari", callback_data="admin_loyalty_pick_window"),
+            InlineKeyboardButton("🔢 Ganti Min. Tx", callback_data="admin_loyalty_pick_mintx"),
+        ],
+        [
+            InlineKeyboardButton("💰 Ganti Reward IDR", callback_data="admin_loyalty_pick_reward"),
+            InlineKeyboardButton("🛒 Min. Nominal Order", callback_data="admin_loyalty_pick_minamt"),
+        ],
+        [
+            InlineKeyboardButton("📊 Cek User Eligible", callback_data="admin_loyalty_check_eligible"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_loyalty"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_window_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat rentang hari window loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("3 Hari", callback_data="admin_loyalty_set_window_3"),
+            InlineKeyboardButton("5 Hari", callback_data="admin_loyalty_set_window_5"),
+            InlineKeyboardButton("7 Hari", callback_data="admin_loyalty_set_window_7"),
+        ],
+        [
+            InlineKeyboardButton("14 Hari", callback_data="admin_loyalty_set_window_14"),
+            InlineKeyboardButton("30 Hari", callback_data="admin_loyalty_set_window_30"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_mintx_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat jumlah transaksi minimal loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("3x Order", callback_data="admin_loyalty_set_mintx_3"),
+            InlineKeyboardButton("5x Order", callback_data="admin_loyalty_set_mintx_5"),
+            InlineKeyboardButton("7x Order", callback_data="admin_loyalty_set_mintx_7"),
+            InlineKeyboardButton("10x Order", callback_data="admin_loyalty_set_mintx_10"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_reward_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat nominal reward loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_loyalty_set_reward_10000"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_loyalty_set_reward_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_loyalty_set_reward_50000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 75.000", callback_data="admin_loyalty_set_reward_75000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_loyalty_set_reward_100000"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_minamt_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat minimal nominal order per transaksi loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Bebas)", callback_data="admin_loyalty_set_minamt_0"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_loyalty_set_minamt_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_loyalty_set_minamt_50000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_loyalty_set_minamt_100000"),
+            InlineKeyboardButton("Rp 250.000", callback_data="admin_loyalty_set_minamt_250000"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 8: Weekly Report & Spreadsheet Export Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_weekly_report_view(db, days: int = 7) -> tuple[str, InlineKeyboardMarkup]:
+    """Membangun tampilan ringkasan laporan transaksi mingguan dan keyboard aksi export."""
+    from services.report_service import (
+        get_weekly_transactions_data,
+        calculate_weekly_summary,
+        format_weekly_report_telegram_message,
+    )
+    transactions = get_weekly_transactions_data(db, days=days)
+    summary = calculate_weekly_summary(transactions, days=days)
+    text = format_weekly_report_telegram_message(summary)
+
+    buttons = [
+        [
+            InlineKeyboardButton("📥 Download File Spreadsheet (.CSV)", callback_data=f"admin_export_csv_{days}"),
+        ],
+        [
+            InlineKeyboardButton(f"{'🔘' if days == 7 else '⚪'} 7 Hari", callback_data="admin_weekly_p_7"),
+            InlineKeyboardButton(f"{'🔘' if days == 14 else '⚪'} 14 Hari", callback_data="admin_weekly_p_14"),
+            InlineKeyboardButton(f"{'🔘' if days == 30 else '⚪'} 30 Hari", callback_data="admin_weekly_p_30"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_weekly_p_{days}"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 8: Admin Send Balance & Bot Treasury Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_send_balance_user_prompt() -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan instruksi pencarian pengguna untuk transfer saldo admin."""
+    text = (
+        f"{tg_emoji('CARD', '💳')} <b>KIRIM SALDO KE PENGGUNA</b>\n\n"
+        "Silakan kirimkan <b>@username</b> atau <b>Telegram User ID</b> pengguna yang ingin Anda kirimkan saldo:\n\n"
+        "📌 <b>Contoh Input:</b>\n"
+        "• <code>@johndoe</code>\n"
+        "• <code>123456789</code>\n\n"
+        "<i>Sistem akan mencari data profil pengguna secara instan di database.</i>"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🔙 Batal & Dashboard Utama", callback_data="admin_panel_main")],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_admin_send_balance_amount_view(user: User) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan pemilihan nominal saldo untuk pengguna tertentu."""
+    uname = f"@{user.username}" if user.username else f"User_{user.telegram_id}"
+    full_name = f" ({_esc(user.full_name)})" if user.full_name else ""
+    current_bal = format_idr(int(user.balance_idr or 0))
+    total_orders = user.total_orders or 0
+    total_spent = format_idr(int(user.total_spent_idr or 0))
+
+    text = (
+        f"👤 <b>PROFIL PENERIMA DITEMUKAN</b>\n\n"
+        f"• <b>Pengguna:</b> <b>{uname}</b>{full_name}\n"
+        f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"• <b>Saldo Saat Ini:</b> <b>{current_bal}</b>\n"
+        f"• <b>Riwayat Transaksi:</b> <code>{total_orders}x Order ({total_spent})</code>\n\n"
+        f"👇 <i>Pilih nominal saldo yang ingin dikirimkan ke akun di atas:</i>"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("+Rp 10.000", callback_data=f"admin_send_bal_amt_10000"),
+            InlineKeyboardButton("+Rp 25.000", callback_data=f"admin_send_bal_amt_25000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 50.000", callback_data=f"admin_send_bal_amt_50000"),
+            InlineKeyboardButton("+Rp 100.000", callback_data=f"admin_send_bal_amt_100000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 250.000", callback_data=f"admin_send_bal_amt_250000"),
+            InlineKeyboardButton("+Rp 500.000", callback_data=f"admin_send_bal_amt_500000"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Ketik Nominal Kustom", callback_data="admin_send_bal_custom_amt"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Ganti Penerima", callback_data="admin_panel_send_balance"),
+            InlineKeyboardButton("🔙 Dashboard", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_send_balance_confirm_view(user: User, amount: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan konfirmasi eksekusi transfer saldo admin."""
+    uname = f"@{user.username}" if user.username else f"User_{user.telegram_id}"
+    old_bal = int(user.balance_idr or 0)
+    new_bal = old_bal + amount
+
+    text = (
+        f"⚠️ <b>KONFIRMASI PENGIRIMAN SALDO USER</b>\n\n"
+        f"• <b>Penerima:</b> <b>{uname}</b> (<code>{user.telegram_id}</code>)\n"
+        f"• <b>Nominal Kirim:</b> <code>+{format_idr(amount)}</code>\n"
+        f"• <b>Saldo Sebelumnya:</b> <code>{format_idr(old_bal)}</code>\n"
+        f"• <b>Saldo Setelah Kirim:</b> <b>{format_idr(new_bal)}</b>\n\n"
+        f"<i>User akan otomatis menerima notifikasi saldo masuk 3D dan tercatat di Audit Log.</i>\n\n"
+        f"Apakah Anda yakin ingin memproses transfer saldo ini sekarang?"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("🚀 Ya, Kirim Saldo Sekarang!", callback_data=f"admin_send_bal_confirm_{user.telegram_id}_{amount}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Batal / Ganti Nominal", callback_data=f"admin_send_bal_user_{user.telegram_id}"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan manajemen Kas & Dompet Bot (Campaign Pool)."""
+    treasury_bal = crud.get_bot_treasury_balance(db)
+
+    text = (
+        f"{tg_emoji('BANK', '🏦')} <b>KAS & DOMPET CAMPAIGN BOT</b>\n\n"
+        f"💰 <b>Saldo Kas Bot Saat Ini:</b> <b>{format_idr(treasury_bal)}</b>\n\n"
+        "📌 <b>Fungsi Dompet Kas Bot:</b>\n"
+        "• Menyimpan cadangan dana untuk event Giveaway & Campaign\n"
+        "• Sumber dana otomatisasi reward Loyalty & Milestone Top Spender\n"
+        "• Memastikan kelancaran distribusi hadiah bagi para pemenang\n\n"
+        "👇 <i>Pilih tombol cepat di bawah untuk Top Up kas bot atau atur nominal:</i>"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("+Rp 100.000", callback_data="admin_treasury_topup_100000"),
+            InlineKeyboardButton("+Rp 250.000", callback_data="admin_treasury_topup_250000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 500.000", callback_data="admin_treasury_topup_500000"),
+            InlineKeyboardButton("+Rp 1.000.000", callback_data="admin_treasury_topup_1000000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 2.500.000", callback_data="admin_treasury_topup_2500000"),
+            InlineKeyboardButton("+Rp 5.000.000", callback_data="admin_treasury_topup_5000000"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Top Up Nominal Kustom", callback_data="admin_treasury_custom"),
+            InlineKeyboardButton("🔄 Atur Saldo Manual", callback_data="admin_treasury_set_manual"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Buka Wizard Campaign", callback_data="admin_panel_campaign"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Tampilkan Executive Admin Dashboard Control Center."""
     user_id = update.effective_user.id
@@ -738,11 +1149,157 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "admin_panel_credit":
             text = build_admin_credit_view()
             buttons = [
+                [InlineKeyboardButton("💳 Kirim Saldo Interaktif", callback_data="admin_panel_send_balance")],
                 [InlineKeyboardButton("🎁 Buka Campaign & Giveaway Wizard", callback_data="admin_panel_campaign")],
                 [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
             ]
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Panduan isi saldo dimuat.")
+
+        # ─── SEND SALDO ADMIN (Phase 8) ──────────────────────
+        elif data == "admin_panel_send_balance":
+            context.user_data["admin_awaiting_send_bal_user"] = True
+            context.user_data.pop("admin_send_bal_target_id", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_user_prompt()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Ketik username/ID user di chat.")
+
+        elif data.startswith("admin_send_bal_user_"):
+            target_id = int(data.replace("admin_send_bal_user_", ""))
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan.", show_alert=True)
+                return
+            context.user_data["admin_send_bal_target_id"] = target_id
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_amount_view(target_user)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_send_bal_amt_"):
+            amount = int(data.replace("admin_send_bal_amt_", ""))
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await query.answer("Target user belum dipilih.", show_alert=True)
+                return
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan di DB.", show_alert=True)
+                return
+            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data == "admin_send_bal_custom_amt":
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await query.answer("Target user belum dipilih.", show_alert=True)
+                return
+            context.user_data["admin_awaiting_send_bal_custom_amt"] = True
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Saldo yang Ingin Dikirim</b>\n\n"
+                "Kirim pesan angka nominal dalam Rupiah (contoh: <code>75000</code> atau <code>150000</code>):\n"
+                "<i>Minimal: Rp 1.000 | Maksimal: Rp 10.000.000</i>",
+                parse_mode="HTML",
+            )
+
+        elif data.startswith("admin_send_bal_confirm_"):
+            parts = data.replace("admin_send_bal_confirm_", "").split("_")
+            target_id = int(parts[0])
+            amount = int(parts[1])
+
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan.", show_alert=True)
+                return
+
+            old_bal = float(target_user.balance_idr or 0)
+            new_bal = crud.credit_user_balance(db, target_id, float(amount))
+
+            # Audit log
+            db.add(AuditLog(
+                telegram_id=target_id,
+                action="ADMIN_SEND_BALANCE",
+                details=f"Admin {user_id} kirim saldo Rp {amount:,} ke {target_id}. Saldo: Rp {old_bal:,.0f} -> Rp {new_bal:,.0f}",
+            ))
+            db.commit()
+
+            # Bersihkan state
+            context.user_data.pop("admin_send_bal_target_id", None)
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+
+            # Kirim notifikasi animated 3D ke penerima
+            uname_target = f"@{target_user.username}" if target_user.username else str(target_id)
+            user_notif_text = (
+                f"{tg_emoji('PARTY', '🎉')} <b>SALDO BERTAMBAH DARI ADMIN!</b>\n\n"
+                f"Halo <b>{uname_target}</b>, Anda menerima penambahan saldo bot langsung dari Tim Admin!\n\n"
+                f"{tg_emoji('MONEY_BAG', '💰')} <b>Nominal:</b> <code>+{format_idr(amount)}</code>\n"
+                f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{format_idr(int(new_bal))}</code>\n"
+                f"{tg_emoji('HISTORY', '📝')} <b>Keterangan:</b> Top up / Bonus Saldo Admin\n\n"
+                f"{tg_emoji('ROCKET', '🚀')} <i>Saldo ini sudah aktif dan siap langsung digunakan untuk transaksi Beli/Swap crypto di bot!</i>"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=user_notif_text,
+                    parse_mode="HTML",
+                )
+            except Exception as notif_err:
+                logger.warning(f"Gagal kirim notif send saldo ke {target_id}: {notif_err}")
+
+            success_text = (
+                f"✅ <b>SALDO BERHASIL DIKIRIM!</b>\n\n"
+                f"👤 <b>Penerima:</b> {uname_target} (<code>{target_id}</code>)\n"
+                f"💰 <b>Nominal Terkirim:</b> <code>+{format_idr(amount)}</code>\n"
+                f"💳 <b>Saldo Baru User:</b> <b>{format_idr(int(new_bal))}</b>\n"
+                f"📨 <b>Notifikasi Telegram:</b> Berhasil diteruskan ke user.\n"
+                f"📜 <b>Audit Trail:</b> Tercatat aman di sistem."
+            )
+            keyboard_done = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Kirim Saldo User Lain", callback_data="admin_panel_send_balance")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ])
+            await query.edit_message_text(success_text, reply_markup=keyboard_done, parse_mode="HTML")
+            await query.answer("Saldo berhasil dikirim!", show_alert=True)
+
+        # ─── BOT TREASURY / DOMPET BOT (Phase 8) ─────────────
+        elif data == "admin_panel_treasury" or data == "camp_treasury_view":
+            text, markup = build_admin_treasury_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Kas bot dimuat.")
+
+        elif data.startswith("admin_treasury_topup_"):
+            amount = int(data.replace("admin_treasury_topup_", ""))
+            new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note="Admin Panel Preset Topup")
+            await query.answer(f"✅ Kas bot berhasil di-topup +{format_idr(amount)}!\nSaldo sekarang: {format_idr(new_bal)}", show_alert=True)
+            text, markup = build_admin_treasury_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_treasury_custom":
+            context.user_data["admin_awaiting_treasury_custom"] = True
+            context.user_data["admin_awaiting_treasury_set_manual"] = False
+            await query.answer()
+            await query.message.reply_text(
+                f"{tg_emoji('BANK', '🏦')} <b>Top Up Saldo Kas Bot Kustom</b>\n\n"
+                "Ketik nominal saldo yang ingin Anda tambahkan ke Kas Bot (contoh: <code>1500000</code>):",
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_treasury_set_manual":
+            context.user_data["admin_awaiting_treasury_set_manual"] = True
+            context.user_data["admin_awaiting_treasury_custom"] = False
+            curr_bal = crud.get_bot_treasury_balance(db)
+            await query.answer()
+            await query.message.reply_text(
+                f"⚙️ <b>Atur Ulang Saldo Kas Bot Manual</b>\n\n"
+                f"Saldo saat ini: <b>{format_idr(curr_bal)}</b>\n\n"
+                "Ketik angka saldo baru yang diinginkan (contoh: <code>5000000</code> atau <code>0</code>):",
+                parse_mode="HTML"
+            )
 
         elif data == "admin_panel_referral":
             text = build_admin_referral_view(db)
@@ -881,6 +1438,248 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Daftar emoji aktif dimuat.")
 
+        # ─── TOP SPENDER (Phase 7) ──────────────────────────
+        elif data == "admin_panel_top_spenders" or data.startswith("admin_top_spender_p_"):
+            period = 30
+            if data.startswith("admin_top_spender_p_"):
+                try:
+                    period = int(data.replace("admin_top_spender_p_", ""))
+                except Exception:
+                    period = 30
+            text = build_admin_top_spenders_view(db, period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Top Spender ({period} hari) dimuat.")
+
+        elif data.startswith("admin_top_spender_exec_"):
+            period = 30
+            try:
+                period = int(data.replace("admin_top_spender_exec_", ""))
+            except Exception:
+                period = 30
+
+            await query.answer("⏳ Sedang memproses pembagian reward Top Spender...", show_alert=False)
+            from services.campaign_service import execute_top_spender_campaign
+            bot_me = await context.bot.get_me() if context.bot else None
+            bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+
+            result = await execute_top_spender_campaign(
+                db=db,
+                bot=context.bot,
+                admin_id=user_id,
+                period_days=period,
+                bot_username=bot_username,
+            )
+
+            if result.get("error"):
+                await query.answer(f"⚠️ {result['error']}", show_alert=True)
+            else:
+                from bot.utils.formatter import format_idr
+                cnt = result.get("distributed_count", 0)
+                tot = result.get("total_amount", 0)
+                ns = result.get("notif_success", 0)
+                await query.answer(
+                    f"✅ Sukses! {cnt} pemenang menerima reward (Total: {format_idr(tot)}). Notif: {ns}/{cnt}",
+                    show_alert=True,
+                )
+
+            text = build_admin_top_spenders_view(db, period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        # ─── RANDOM DRAW / UNDI PEMENANG (Phase 7) ───────────
+        elif data == "admin_panel_random_draw" or data.startswith("admin_draw_pool_"):
+            pool_seg = "ACTIVE_30D"
+            if data.startswith("admin_draw_pool_"):
+                pool_seg = data.replace("admin_draw_pool_", "")
+            text = build_admin_random_draw_view(db, pool_segment=pool_seg)
+            markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Pool {pool_seg} dimuat.")
+
+        elif data.startswith("admin_draw_exec_"):
+            # format: admin_draw_exec_{pool_segment}_{winner_count}_{reward_per_winner}
+            parts = data.replace("admin_draw_exec_", "").split("_")
+            if len(parts) >= 3:
+                pool_seg = parts[0]
+                winner_cnt = int(parts[1])
+                reward_amt = int(parts[2])
+
+                await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
+                from services.campaign_service import execute_random_winner_campaign
+                bot_me = await context.bot.get_me() if context.bot else None
+                bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+
+                res = await execute_random_winner_campaign(
+                    db=db,
+                    bot=context.bot,
+                    admin_id=user_id,
+                    pool_segment=pool_seg,
+                    winner_count=winner_cnt,
+                    reward_per_winner=reward_amt,
+                    bot_username=bot_username,
+                )
+
+                if res.get("error"):
+                    await query.answer(f"⚠️ {res['error']}", show_alert=True)
+                else:
+                    from bot.utils.formatter import format_idr
+                    cnt = res.get("distributed_count", 0)
+                    tot = res.get("total_amount", 0)
+                    ns = res.get("notif_success", 0)
+                    await query.answer(
+                        f"🎉 {cnt} pemenang acak terpilih! Total: {format_idr(tot)}. Notif: {ns}/{cnt}",
+                        show_alert=True,
+                    )
+
+                text = build_admin_random_draw_view(db, pool_segment=pool_seg)
+                markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        # ─── LOYALTY CONFIG (Phase 7) ─────────────────────────
+        elif data == "admin_panel_loyalty":
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Pengaturan loyalty dimuat.")
+
+        elif data == "admin_loyalty_toggle":
+            curr = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+            is_on = curr.lower() == "true"
+            new_val = "false" if is_on else "true"
+            crud.set_loyalty_config(db, "loyalty_enabled", new_val)
+            status_str = "dinonaktifkan" if new_val == "false" else "diaktifkan"
+            await query.answer(f"Program loyalty berhasil {status_str}!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_window":
+            text = (
+                "⏱️ <b>ATUR RENTANG WAKTU (WINDOW) LOYALTY</b>\n\n"
+                "Pilih batas durasi hari untuk menghitung target transaksi user:\n"
+                "<i>(Contoh: 5 hari = user harus menyelesaikan transaksi dalam kurun waktu 5 hari)</i>"
+            )
+            markup = build_admin_pick_loyalty_window_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_window_"):
+            val = int(data.replace("admin_loyalty_set_window_", ""))
+            crud.set_loyalty_config(db, "window_days", str(val))
+            await query.answer(f"Window loyalty diset ke {val} hari!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_mintx":
+            text = (
+                "🔢 <b>ATUR TARGET JUMLAH TRANSAKSI LOYALTY</b>\n\n"
+                "Pilih berapa transaksi selesai yang harus dicapai user dalam window waktu:"
+            )
+            markup = build_admin_pick_loyalty_mintx_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_mintx_"):
+            val = int(data.replace("admin_loyalty_set_mintx_", ""))
+            crud.set_loyalty_config(db, "min_tx_count", str(val))
+            await query.answer(f"Target transaksi loyalty diset ke {val}x order!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_reward":
+            text = (
+                "💰 <b>ATUR BESARAN REWARD LOYALTY</b>\n\n"
+                "Pilih jumlah saldo bot yang akan dikreditkan otomatis saat user lolos target:"
+            )
+            markup = build_admin_pick_loyalty_reward_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_reward_"):
+            val = int(data.replace("admin_loyalty_set_reward_", ""))
+            crud.set_loyalty_config(db, "reward_amount_idr", str(val))
+            await query.answer(f"Reward loyalty diset ke Rp {val:,}!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_minamt":
+            text = (
+                "🛒 <b>ATUR MINIMAL NOMINAL TRANSAKSI PER ORDER</b>\n\n"
+                "Hanya order dengan nominal >= nilai ini yang akan dihitung ke progress loyalty:"
+            )
+            markup = build_admin_pick_loyalty_minamt_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_minamt_"):
+            val = int(data.replace("admin_loyalty_set_minamt_", ""))
+            crud.set_loyalty_config(db, "min_tx_amount_idr", str(val))
+            msg = f"Min. nominal diset ke Rp {val:,}!" if val > 0 else "Min. nominal order dinonaktifkan (bebas nominal)!"
+            await query.answer(msg, show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_check_eligible":
+            eligible = crud.get_loyalty_eligible_users(db)
+            if not eligible:
+                await query.answer("ℹ️ Saat ini belum ada user yang menunggu reward loyalty.", show_alert=True)
+            else:
+                lines = [f"📊 <b>DAFTAR USER QUALIFIED ({len(eligible)} User):</b>\n"]
+                for item in eligible[:15]:
+                    lines.append(f"• User ID <code>{item['telegram_id']}</code>: {item['tx_count']} transaksi selesai")
+                buttons = [
+                    [InlineKeyboardButton("🔙 Kembali ke Loyalty", callback_data="admin_panel_loyalty")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ]
+                await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+                await query.answer()
+
+        # ─── WEEKLY REPORT (Phase 8) ──────────────────────────
+        elif data == "admin_panel_weekly_report" or data.startswith("admin_weekly_p_"):
+            days = 7
+            if data.startswith("admin_weekly_p_"):
+                try:
+                    days = int(data.replace("admin_weekly_p_", ""))
+                except Exception:
+                    days = 7
+            text, markup = build_admin_weekly_report_view(db, days=days)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Rekap transaksi {days} hari dimuat.")
+
+        elif data.startswith("admin_export_csv_"):
+            days = 7
+            try:
+                days = int(data.replace("admin_export_csv_", ""))
+            except Exception:
+                days = 7
+
+            await query.answer("⏳ Menyiapkan file spreadsheet (.CSV)...", show_alert=False)
+            from services.report_service import (
+                get_weekly_transactions_data,
+                generate_weekly_report_csv_buffer,
+            )
+            transactions = get_weekly_transactions_data(db, days=days)
+            csv_buf = generate_weekly_report_csv_buffer(transactions)
+            filename = f"laporan_transaksi_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = (
+                f"📑 <b>File Laporan Transaksi ({days} Hari Terakhir)</b>\n"
+                f"Total: <b>{len(transactions)} baris data transaksi</b>.\n\n"
+                f"💡 <i>Dapat langsung di-import ke Google Sheets atau dibuka di Microsoft Excel.</i>"
+            )
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=csv_buf,
+                filename=filename,
+                caption=caption,
+                parse_mode="HTML",
+            )
+            await query.answer("✅ File laporan .CSV berhasil dikirim!", show_alert=True)
+
         elif data == "admin_panel_close":
             await query.answer("Panel ditutup.")
             await query.message.delete()
@@ -890,6 +1689,97 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer(f"❌ Error: {exc}", show_alert=True)
     finally:
         db.close()
+
+
+async def weekly_report_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /weeklyreport atau /report: kirim ringkasan & file export CSV mingguan ke Admin."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    days = 7
+    if context.args:
+        try:
+            days = int(context.args[0].lower().replace("d", "").replace("hari", ""))
+        except Exception:
+            days = 7
+
+    db = SessionLocal()
+    try:
+        from services.report_service import (
+            get_weekly_transactions_data,
+            calculate_weekly_summary,
+            generate_weekly_report_csv_buffer,
+            format_weekly_report_telegram_message,
+        )
+        transactions = get_weekly_transactions_data(db, days=days)
+        summary = calculate_weekly_summary(transactions, days=days)
+        text = format_weekly_report_telegram_message(summary)
+        csv_buf = generate_weekly_report_csv_buffer(transactions)
+        filename = f"laporan_transaksi_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+
+        await update.message.reply_text(text, parse_mode="HTML")
+        await update.message.reply_document(
+            document=csv_buf,
+            filename=filename,
+            caption=f"📑 <b>Export Laporan {days} Hari</b> ({len(transactions)} data transaksi)",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error in weekly_report_command_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal membuat laporan mingguan.")
+    finally:
+        db.close()
+
+
+async def test_testimony_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /testtesti untuk admin: uji kirim postingan contoh ke channel testimoni."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    from services.testimony_service import DEFAULT_TESTIMONY_CHANNEL, format_testimony_message
+    channel_target = os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+    
+    bot_username = (await context.bot.get_me()).username if context.bot else "TokoKoinID_Bot"
+
+    sample_msg = (
+        "🧪 <b>[TEST KONEKSI BOT]</b>\n"
+        + format_testimony_message(
+            order_type="buy",
+            crypto_symbol="USDT",
+            network="BSC",
+            nominal_idr=520000,
+            username="test_buyer",
+            telegram_id=12345678,
+            tx_hash="0x1234567890abcdef1234567890abcdef12345678",
+            bot_username=bot_username,
+        )
+    )
+
+    try:
+        sent = await context.bot.send_message(
+            chat_id=channel_target,
+            text=sample_msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        await update.message.reply_text(
+            f"✅ <b>Koneksi Channel Berhasil!</b>\n\n"
+            f"Pesan uji coba berhasil diposting ke <code>{channel_target}</code> (Message ID: {sent.message_id}).",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error test_testimony: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ <b>Gagal Kirim ke Channel ({channel_target}):</b>\n\n"
+            f"<code>{html.escape(str(e))}</code>\n\n"
+            f"💡 <b>Langkah Perbaikan:</b>\n"
+            f"1. Buka channel <code>{channel_target}</code> di Telegram.\n"
+            f"2. Buka menu <b>Administrators (Pengurus)</b> ➔ <b>Add Administrator</b>.\n"
+            f"3. Cari username bot Anda (<code>@{bot_username}</code>) dan tambahkan sebagai Admin dengan izin <b>Post Messages (Posting Pesan)</b>.",
+            parse_mode="HTML",
+        )
 
 
 
@@ -1559,7 +2449,10 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             f"{bank_info_str}\n\n"
             f"📸 <i>Bukti transfer pembayaran terlampir di atas.</i>\n\n"
             f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
-            f"Silakan periksa saldo / mutasi rekening Anda. Terima kasih banyak telah bertransaksi bersama kami! 🙏✨"
+            f"Silakan periksa saldo / mutasi rekening Anda.\n\n"
+            f"Terimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
+            f"Testimoni : t.me/TokoKoinID\n"
+            f"Channel : t.me/ROBHSN_STORE_SELLER"
         )
 
         menu_keyboard = InlineKeyboardMarkup([[
@@ -1578,6 +2471,13 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             sent_to_user = True
         except Exception as send_err:
             logger.error(f"Gagal mengirim foto bukti ke user {order.telegram_id}: {send_err}")
+
+        # Post testimony ke channel (Phase 8)
+        try:
+            from services.testimony_service import post_transaction_testimony
+            asyncio.create_task(post_transaction_testimony(context.bot, order, db=db))
+        except Exception as texc:
+            logger.warning(f"Gagal trigger testimony sell order {order.order_id}: {texc}")
 
         notif_admin = (
             f"✅ <b>BUKTI TRANSFER BERHASIL DITERUSKAN!</b>\n\n"
@@ -2694,70 +3594,215 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         db.close()
 
 
-async def admin_referral_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Menangani input nominal kustom reward pengundang, potongan teman, atau minimal pembelian dari admin."""
+async def admin_interactive_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Router terpusat untuk seluruh input teks interaktif admin:
+    - Pencarian pengguna & nominal kirim saldo admin
+    - Top up & atur ulang saldo kas bot (Bot Treasury)
+    - Konfigurasi nominal kustom referral (reward, bonus, min trade)
+    """
     if not update.message or not update.message.text:
         return False
 
-    is_reward = context.user_data.get("admin_awaiting_ref_custom_reward")
-    is_bonus = context.user_data.get("admin_awaiting_ref_custom_bonus")
-    is_min_trade = context.user_data.get("admin_awaiting_ref_custom_min_trade")
-
-    if not is_reward and not is_bonus and not is_min_trade:
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
         return False
 
-    raw_text = update.message.text.strip().replace(".", "").replace(",", "").replace("Rp", "").replace("rp", "").strip()
-    try:
-        val = int(raw_text)
-        max_limit = 50_000_000 if is_min_trade else 1_000_000
-        if val < 0 or val > max_limit:
-            await update.message.reply_text(f"❌ Nominal harus antara Rp 0 sampai Rp {max_limit:,}. Silakan ketik angka kembali:")
-            return True
-    except ValueError:
-        await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 50000):")
-        return True
-
+    raw_text = update.message.text.strip()
     db = SessionLocal()
-    try:
-        if is_reward:
-            crud.set_referral_config(db, "reward_per_referral", str(val))
-            context.user_data["admin_awaiting_ref_custom_reward"] = False
-            await update.message.reply_text(
-                f"✅ <b>Reward Pengundang Berhasil Diperbarui!</b>\n\n"
-                f"💰 Nominal reward baru: <b>Rp {val:,}</b> per teman yang selesai transaksi.",
-                parse_mode="HTML"
-            )
-        elif is_bonus:
-            crud.set_referral_config(db, "referee_discount_idr", str(val))
-            context.user_data["admin_awaiting_ref_custom_bonus"] = False
-            await update.message.reply_text(
-                f"✅ <b>Potongan / Bonus Teman Berhasil Diperbarui!</b>\n\n"
-                f"🎁 Nominal potongan baru: <b>Rp {val:,}</b> untuk transaksi pertama teman.",
-                parse_mode="HTML"
-            )
-        elif is_min_trade:
-            crud.set_referral_config(db, "min_trade_amount_idr", str(val))
-            context.user_data["admin_awaiting_ref_custom_min_trade"] = False
-            desc_val = f"Rp {val:,}" if val > 0 else "Tanpa Minimal (Bebas)"
-            await update.message.reply_text(
-                f"✅ <b>Syarat Minimal Pembelian Diperbarui!</b>\n\n"
-                f"🛒 Minimal pembelian teman baru: <b>{desc_val}</b>.",
-                parse_mode="HTML"
-            )
 
-        # Kirimkan kembali panel referral terkini beserta tombol aksi
-        view_text = build_admin_referral_view(db)
-        markup = build_admin_referral_keyboard(db)
-        await update.message.reply_text(
-            text=view_text,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
-        return True
+    try:
+        # 1. Admin Send Balance — Input Target User (@username atau ID)
+        if context.user_data.get("admin_awaiting_send_bal_user"):
+            target_user = crud.get_user_by_identifier(db, raw_text)
+            if not target_user:
+                await update.message.reply_text(
+                    f"❌ <b>Pengguna Tidak Ditemukan!</b>\n\n"
+                    f"Tidak ditemukan pengguna dengan username atau ID: <code>{_esc(raw_text)}</code>.\n"
+                    f"Pastikan pengguna sudah pernah memulai bot (<code>/start</code>).\n\n"
+                    f"<i>Silakan ketik ulang @username atau ID Telegram yang benar:</i>",
+                    parse_mode="HTML",
+                )
+                return True
+
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data["admin_send_bal_target_id"] = target_user.telegram_id
+            text, markup = build_admin_send_balance_amount_view(target_user)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 2. Admin Send Balance — Input Nominal Kustom
+        if context.user_data.get("admin_awaiting_send_bal_custom_amt"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits:
+                await update.message.reply_text("❌ Mohon ketik angka nominal yang valid (contoh: <code>50000</code>):", parse_mode="HTML")
+                return True
+
+            amount = int(clean_digits)
+            if amount < 1000 or amount > 10_000_000:
+                await update.message.reply_text(
+                    "❌ Nominal harus antara <b>Rp 1.000</b> sampai <b>Rp 10.000.000</b>.\nSilakan ketik angka kembali:",
+                    parse_mode="HTML"
+                )
+                return True
+
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await update.message.reply_text("⚠️ Sesi transfer kedaluwarsa. Silakan mulai kembali dari menu Kirim Saldo.")
+                context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+                return True
+
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await update.message.reply_text("❌ Pengguna tidak ditemukan di database.")
+                context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+                return True
+
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 3. Bot Treasury — Topup Saldo Kas Bot Kustom
+        if context.user_data.get("admin_awaiting_treasury_custom"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits or int(clean_digits) < 1000:
+                await update.message.reply_text("❌ Nominal minimal top up adalah Rp 1.000. Silakan ketik angka kembali:")
+                return True
+
+            amount = int(clean_digits)
+            new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note="Admin Custom Topup")
+            context.user_data.pop("admin_awaiting_treasury_custom", None)
+
+            await update.message.reply_text(
+                f"✅ <b>TOP UP KAS BOT BERHASIL!</b>\n\n"
+                f"💰 <b>Nominal Ditambahkan:</b> <code>+{format_idr(amount)}</code>\n"
+                f"🏦 <b>Total Saldo Kas Bot Sekarang:</b> <b>{format_idr(new_bal)}</b>\n\n"
+                f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>",
+                parse_mode="HTML"
+            )
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 4. Bot Treasury — Atur Ulang Saldo Manual
+        if context.user_data.get("admin_awaiting_treasury_set_manual"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits:
+                await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: <code>5000000</code> atau <code>0</code>):", parse_mode="HTML")
+                return True
+
+            amount = int(clean_digits)
+            new_bal = crud.set_bot_treasury_balance(db, amount, admin_id=user_id, note="Admin Set Manual")
+            context.user_data.pop("admin_awaiting_treasury_set_manual", None)
+
+            await update.message.reply_text(
+                f"✅ <b>SALDO KAS BOT DIPERBARUI!</b>\n\n"
+                f"🏦 <b>Saldo Kas Baru:</b> <b>{format_idr(new_bal)}</b>",
+                parse_mode="HTML"
+            )
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 5. Referral Configurations (Reward, Bonus, Min Trade)
+        is_reward = context.user_data.get("admin_awaiting_ref_custom_reward")
+        is_bonus = context.user_data.get("admin_awaiting_ref_custom_bonus")
+        is_min_trade = context.user_data.get("admin_awaiting_ref_custom_min_trade")
+
+        if is_reward or is_bonus or is_min_trade:
+            clean_val = raw_text.replace(".", "").replace(",", "").replace("Rp", "").replace("rp", "").strip()
+            try:
+                val = int(clean_val)
+                max_limit = 50_000_000 if is_min_trade else 1_000_000
+                if val < 0 or val > max_limit:
+                    await update.message.reply_text(f"❌ Nominal harus antara Rp 0 sampai Rp {max_limit:,}. Silakan ketik angka kembali:")
+                    return True
+            except ValueError:
+                await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 50000):")
+                return True
+
+            if is_reward:
+                crud.set_referral_config(db, "reward_per_referral", str(val))
+                context.user_data["admin_awaiting_ref_custom_reward"] = False
+                await update.message.reply_text(
+                    f"✅ <b>Reward Pengundang Berhasil Diperbarui!</b>\n\n"
+                    f"💰 Nominal reward baru: <b>Rp {val:,}</b> per teman yang selesai transaksi.",
+                    parse_mode="HTML"
+                )
+            elif is_bonus:
+                crud.set_referral_config(db, "referee_discount_idr", str(val))
+                context.user_data["admin_awaiting_ref_custom_bonus"] = False
+                await update.message.reply_text(
+                    f"✅ <b>Potongan / Bonus Teman Berhasil Diperbarui!</b>\n\n"
+                    f"🎁 Nominal potongan baru: <b>Rp {val:,}</b> untuk transaksi pertama teman.",
+                    parse_mode="HTML"
+                )
+            elif is_min_trade:
+                crud.set_referral_config(db, "min_trade_amount_idr", str(val))
+                context.user_data["admin_awaiting_ref_custom_min_trade"] = False
+                desc_val = f"Rp {val:,}" if val > 0 else "Tanpa Minimal (Bebas)"
+                await update.message.reply_text(
+                    f"✅ <b>Syarat Minimal Pembelian Diperbarui!</b>\n\n"
+                    f"🛒 Minimal pembelian teman baru: <b>{desc_val}</b>.",
+                    parse_mode="HTML"
+                )
+
+            view_text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await update.message.reply_text(
+                text=view_text,
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
+            return True
+
+        return False
     except Exception as e:
-        logger.error(f"Error in admin_referral_text_handler: {e}", exc_info=True)
-        await update.message.reply_text("❌ Gagal menyimpan konfigurasi referral.")
+        logger.error(f"Error in admin_interactive_text_router: {e}", exc_info=True)
+        await update.message.reply_text("❌ Terjadi kesalahan saat memproses input admin.")
         return True
     finally:
         db.close()
+
+
+# Alias untuk backwards compatibility
+admin_referral_text_handler = admin_interactive_text_router
+
+
+async def topup_bot_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /topupbot <nominal> atau /saldobot untuk melihat dan topup saldo kas bot."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    db = SessionLocal()
+    try:
+        if not context.args:
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return
+
+        clean_digits = "".join(ch for ch in context.args[0] if ch.isdigit())
+        if not clean_digits or int(clean_digits) < 1000:
+            await update.message.reply_text("⚠️ Nominal topup kas bot minimal Rp 1.000.")
+            return
+
+        amount = int(clean_digits)
+        note = " ".join(context.args[1:]) if len(context.args) > 1 else "Command Topup Bot"
+        new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note=note)
+
+        await update.message.reply_text(
+            f"✅ <b>TOP UP KAS BOT BERHASIL!</b>\n\n"
+            f"💰 <b>Nominal Ditambahkan:</b> <code>+{format_idr(amount)}</code>\n"
+            f"🏦 <b>Total Saldo Kas Bot:</b> <b>{format_idr(new_bal)}</b>\n"
+            f"📝 <b>Keterangan:</b> {_esc(note)}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error in topup_bot_command_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses topup kas bot.")
+    finally:
+        db.close()
+
 

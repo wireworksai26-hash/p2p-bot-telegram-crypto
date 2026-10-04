@@ -76,6 +76,11 @@ class Order(Base):
     # Payment info
     payment_method = Column(String(30), nullable=True)   # 'GOPAY_QRIS', 'BOT_BALANCE'
     
+    # Referral Discount (Phase 7)
+    referral_discount_applied = Column(Boolean, default=False)           # True jika diskon referral diterapkan
+    referral_discount_pct = Column(Numeric(5, 2), nullable=True)         # Persen diskon yang diaplikasikan
+    discount_amount_idr = Column(BigInteger, default=0)                  # Nilai diskon dalam IDR
+
     # Status Machine (15 States)
     # DRAFT, QUOTED, WAITING_IDR_PAYMENT, WAITING_IDR_VERIFICATION, WAITING_CRYPTO_DEPOSIT,
     # CRYPTO_DETECTED, CRYPTO_CONFIRMED, PAYOUT_QUEUED, PAYOUT_PROCESSING,
@@ -283,8 +288,11 @@ class UserSavedWallet(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
     label = Column(String(50), nullable=True)
-    network = Column(String(30), nullable=True)  # BSC, ETH, SOLANA, TRON, etc. atau None (semua)
+    network = Column(String(30), nullable=True)      # BSC, ETH, SOLANA, TRON, SUI, TON, BTC, dll.
+    chain_type = Column(String(20), nullable=True)   # 'EVM', 'SOLANA', 'TRON', 'SUI', 'TON', 'BITCOIN'
     wallet_address = Column(String(250), nullable=False)
+    is_default = Column(Boolean, default=False)      # Wallet default untuk chain_type ini
+    auto_detected = Column(Boolean, default=False)   # True jika jaringan dideteksi otomatis dari format alamat
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -309,3 +317,56 @@ class UserSavedBank(Base):
     user = relationship("User", backref="saved_banks")
 
 
+# ─────────────────────────────────────────────────────────
+#  Phase 7: Advanced Rewards, Loyalty & Enhanced Wallet
+# ─────────────────────────────────────────────────────────
+
+class ReferralDiscount(Base):
+    """
+    Pelacak sisa quota diskon 10% untuk referrer yang berhasil mengundang user baru.
+    Dibuat otomatis saat referee menyelesaikan transaksi pertama.
+    """
+    __tablename__ = 'referral_discounts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, unique=True, index=True)
+    remaining_uses = Column(Integer, default=10, nullable=False)   # Sisa slot diskon (mulai dari 10)
+    discount_pct = Column(Numeric(5, 2), default=10.0, nullable=False)  # Default 10%
+    activated_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)    # Opsional: bisa dibatasi waktu oleh admin
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="referral_discount")
+
+
+class LoyaltyReward(Base):
+    """
+    Reward loyalitas berbasis time-window: jika user transaksi >= N kali
+    dalam rentang M hari, maka mendapat reward saldo bot.
+    Setiap user bisa punya banyak windows (satu per periode).
+    """
+    __tablename__ = 'loyalty_rewards'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    window_start = Column(DateTime, nullable=False)    # Hari ke-1 transaksi pertama dalam window ini
+    window_end = Column(DateTime, nullable=False)      # Batas akhir window (window_start + M hari)
+    tx_count_in_window = Column(Integer, default=0)   # Jumlah transaksi yang sudah tercatat
+    qualified = Column(Boolean, default=False)         # True = sudah memenuhi syarat (>= min_tx_count)
+    reward_idr = Column(BigInteger, nullable=True)     # Besaran reward yang diberikan (setelah lolos)
+    rewarded_at = Column(DateTime, nullable=True)      # Kapan reward dikreditkan
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="loyalty_rewards")
+
+
+class LoyaltyConfig(Base):
+    """Konfigurasi program loyalty yang dapat diubah oleh admin via panel."""
+    __tablename__ = 'loyalty_config'
+
+    # Default keys: loyalty_enabled, window_days, min_tx_count, reward_amount_idr, min_tx_amount_idr
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

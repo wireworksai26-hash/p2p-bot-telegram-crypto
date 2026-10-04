@@ -17,6 +17,7 @@ from database.crud import (
     get_referral_stats,
     get_referral_config,
     get_top_referrers,
+    get_referral_discount_info,
 )
 from database.models import User
 from bot.utils.formatter import format_idr
@@ -32,6 +33,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
     db = SessionLocal()
     try:
         stats = get_referral_stats(db, user.id)
+        disc_info = get_referral_discount_info(db, user.id)
 
         # Get reward config
         reward_str = get_referral_config(db, "reward_per_referral")
@@ -57,6 +59,22 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if min_trade_idr > 0:
             min_trade_line = f"• Syarat pencairan: Teman menyelesaikan pembelian minimal <b>{format_idr(min_trade_idr)}</b>.\n"
 
+        # Discount status block
+        if disc_info.get("active"):
+            discount_status_text = (
+                f"🎁 <b>Status Diskon Transaksi Anda:</b>\n"
+                f"├── Status : ✅ <b>AKTIF</b>\n"
+                f"├── Diskon : <b>{disc_info['discount_pct']:.0f}%</b> dari biaya transaksi\n"
+                f"└── Sisa   : <b>{disc_info['remaining']} dari 10 transaksi</b>\n"
+                f"💡 <i>Diskon otomatis diterapkan saat Anda membuat order.</i>\n\n"
+            )
+        else:
+            discount_status_text = (
+                f"🎁 <b>Status Diskon Transaksi:</b>\n"
+                f"├── Status : ⚪ <i>Belum Aktif</i>\n"
+                f"└── Info   : Undang teman & dapatkan diskon 10% untuk 10x transaksi!\n\n"
+            )
+
         text = (
             f"🔗 <b>PROGRAM REFERRAL HSN STORE</b>\n\n"
             f"🎁 <b>Link Referral Anda:</b>\n"
@@ -66,13 +84,14 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"├── ✅ Selesai Trade   : <b>{stats['completed']} orang</b>\n"
             f"├── ⏳ Belum Selesai   : <b>{stats['pending']} orang</b>\n"
             f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>\n\n"
+            f"{discount_status_text}"
             f"💡 <i>Bagikan link di atas ke teman Anda:\n"
             f"• Anda mendapat reward <b>{format_idr(reward_idr)}</b> untuk setiap teman yang menyelesaikan transaksi pertama!\n"
             f"{bonus_line}"
             f"{min_trade_line}</i>"
         )
 
-        share_msg = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya: {ref_link}"
+        share_msg = "Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:"
         share_url = f"https://t.me/share/url?url={quote(ref_link)}&text={quote(share_msg)}"
 
         keyboard = [

@@ -258,7 +258,27 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         # Hitung fee dinamis (termasuk tambahan fee gas Rp 2.000 untuk ETH/TRX jika berlaku)
         fee_category = get_fee_category(symbol)
-        fee_idr = calculate_fee_idr(nominal_idr, category=fee_category, symbol=symbol, network=network)
+        base_fee_idr = calculate_fee_idr(nominal_idr, category=fee_category, symbol=symbol, network=network)
+
+        # Phase 7: Cek diskon referral aktif milik user
+        user_id = update.effective_user.id
+        from database.crud import get_referral_discount_info
+        disc_info = get_referral_discount_info(db, user_id)
+        discount_applied = False
+        discount_pct = 0.0
+        discount_amount = 0
+        discount_note = ""
+
+        fee_idr = base_fee_idr
+        if disc_info.get("active") and base_fee_idr > 0:
+            discount_pct = float(disc_info["discount_pct"])
+            discount_amount = int(base_fee_idr * discount_pct / 100)
+            fee_idr = max(0, base_fee_idr - discount_amount)
+            discount_applied = True
+            discount_note = (
+                f"\n🎁 <b>Diskon Referral:</b> -{format_idr(discount_amount)} "
+                f"({discount_pct:.0f}%, sisa {disc_info['remaining']}x transaksi)"
+            )
 
         # Revisi skema fee: nominal pembelian DIKURANGI fee (bukan ditambah ke total bayar).
         # Contoh: beli Rp 10.000 -> fee Rp 3.000 -> nilai koin diterima Rp 7.000.
@@ -282,7 +302,11 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Simpan rincian perhitungan ke context
         context.user_data["buy_nominal_idr"] = nominal_idr
+        context.user_data["buy_base_fee_idr"] = base_fee_idr
         context.user_data["buy_fee_idr"] = fee_idr
+        context.user_data["buy_discount_applied"] = discount_applied
+        context.user_data["buy_discount_pct"] = discount_pct
+        context.user_data["buy_discount_amount"] = discount_amount
         context.user_data["buy_received_idr"] = received_idr
         context.user_data["buy_total_idr"] = nominal_idr
         context.user_data["buy_price_per_unit"] = buy_price_idr
@@ -324,17 +348,22 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         input_wallet_keyboard = saved_buttons + keyboard
 
+        fee_display = f"-{format_idr(fee_idr)}"
+        if discount_applied:
+            fee_display = f"<s>{format_idr(base_fee_idr)}</s> <b>{format_idr(fee_idr)}</b>"
+
         await update.message.reply_text(
             text=(
                 f"🪙 <b>Simulasi Perhitungan Pembelian:</b>\n"
                 f"• Aset: <code>{format_crypto(crypto_amount, symbol)}</code>\n"
                 f"• Kurs Beli: <code>{format_idr(buy_price_idr)}</code>\n"
                 f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
-                f"• Fee Layanan (dipotong): <code>-{format_idr(fee_idr)}</code>\n"
-                f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>"
+                f"• Fee Layanan (dipotong): {fee_display}"
+                f"{discount_note}"
                 f"{quote_info}"
                 f"{gas_surcharge_note(symbol, network)}"
                 f"{qris_mdr_note(nominal_idr)}\n\n"
+                f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
                 f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
@@ -529,6 +558,12 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         received_idr_str=format_idr(received_idr),
         buyer_wallet=buyer_wallet
     )
+
+    # Tambahkan baris informasi diskon referral jika berlaku
+    if context.user_data.get("buy_discount_applied"):
+        disc_amt = context.user_data.get("buy_discount_amount", 0)
+        disc_pct = context.user_data.get("buy_discount_pct", 10.0)
+        summary_text += f"\n🎁 <b>Diskon Referral:</b> -{format_idr(disc_amt)} ({disc_pct:.0f}%)"
     
     # Tambahkan baris informasi metode pembayaran
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
@@ -539,7 +574,7 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     if method_code == "GOPAY_QRIS":
         summary_text += qris_mdr_note(nominal_idr)
         summary_text += (
-            "\nℹ️ <i>Kode unik (01-200) akan ditambahkan ke total bayar "
+            "\nℹ️ <i>Kode unik akan ditambahkan ke total bayar "
             "untuk verifikasi otomatis.</i>"
         )
     
@@ -608,6 +643,9 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         total_idr = context.user_data["buy_total_idr"]
         buyer_wallet = context.user_data["buy_wallet"]
         method_code = context.user_data["buy_pay_method"]
+        discount_applied = context.user_data.get("buy_discount_applied", False)
+        discount_pct = context.user_data.get("buy_discount_pct")
+        discount_amount = context.user_data.get("buy_discount_amount", 0)
         
         if network.upper() in MANUAL_PAYOUT_NETWORKS:
             await query.edit_message_text(
@@ -649,6 +687,25 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             )
             return ConversationHandler.END
 
+        # Helper: konsumsi diskon referral jika diterapkan
+        def _consume_discount_if_needed():
+            if discount_applied:
+                try:
+                    from database.crud import consume_referral_discount, get_referral_discount_info
+                    from services.referral_discount_service import notify_discount_used
+                    consume_referral_discount(db, user_id)
+                    info_after = get_referral_discount_info(db, user_id)
+                    asyncio.create_task(
+                        notify_discount_used(
+                            context.bot,
+                            user_id,
+                            info_after.get("remaining", 0),
+                            discount_amount,
+                        )
+                    )
+                except Exception as dexc:
+                    logger.warning(f"Gagal consume/notify discount untuk {user_id}: {dexc}")
+
         # --- 2. Handle Payment Method ---
         if method_code == "BOT_BALANCE":
             # [FIX KRITIS-1] Atomic: Buat order DULU, baru potong saldo.
@@ -668,7 +725,10 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "payment_method": "BOT_BALANCE",
                 "status": "pending",
                 "quoted_at": datetime.utcnow(),
-                "quote_expires_at": datetime.utcnow() + timedelta(minutes=30)
+                "quote_expires_at": datetime.utcnow() + timedelta(minutes=30),
+                "referral_discount_applied": discount_applied,
+                "referral_discount_pct": discount_pct,
+                "discount_amount_idr": discount_amount,
             }
             order = create_order(db, order_data)
 
@@ -693,6 +753,9 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             order.paid_at = datetime.utcnow()
             db.commit()
             db.refresh(order)
+
+            # Konsumsi kuota diskon jika ada
+            _consume_discount_if_needed()
 
             # Kirim notifikasi sukses ke user
             received_idr = context.user_data["buy_received_idr"]
@@ -737,9 +800,15 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "buyer_wallet": buyer_wallet,
                 "payment_method": "GOPAY_QRIS",
                 "status": "pending",
-                "expired_at": datetime.utcnow() + timedelta(minutes=30)
+                "expired_at": datetime.utcnow() + timedelta(minutes=30),
+                "referral_discount_applied": discount_applied,
+                "referral_discount_pct": discount_pct,
+                "discount_amount_idr": discount_amount,
             }
             create_order(db, order_data)
+
+            # Konsumsi kuota diskon jika ada
+            _consume_discount_if_needed()
 
             # Kirim QRIS dinamis + instruksi pembayaran otomatis
             received_idr = context.user_data["buy_received_idr"]
@@ -957,9 +1026,20 @@ async def finalize_gopay_buy_payment(
             )
             if result.get("explorer_url"):
                 user_msg += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
-            user_msg += "\n\nTerima kasih! 🙏"
+            user_msg += (
+                "\n\nTerimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
+                "Testimoni : t.me/TokoKoinID\n"
+                "Channel : t.me/ROBHSN_STORE_SELLER"
+            )
             menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
             await safe_send_message(bot or bot_app, order.telegram_id, user_msg, reply_markup=menu_keyboard)
+
+            # Post testimony ke channel (Phase 8)
+            try:
+                from services.testimony_service import post_transaction_testimony
+                asyncio.create_task(post_transaction_testimony(bot or bot_app, order, db=db))
+            except Exception as texc:
+                logger.warning(f"Gagal trigger testimony buy order {order.order_id}: {texc}")
         else:
             # Hash tetap disimpan walau receipt belum terkonfirmasi — supaya
             # watchdog (services/payout_watchdog.py) bisa menyelesaikan order

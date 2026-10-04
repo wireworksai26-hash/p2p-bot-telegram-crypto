@@ -25,6 +25,11 @@ from database.models import (
     MonthlyReport,
     GopaySession,
     AuditLog,
+    Referral,
+    ReferralConfig,
+    ReferralDiscount,
+    LoyaltyReward,
+    LoyaltyConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +87,45 @@ def get_user(db: Session, telegram_id: int) -> Optional[User]:
     except Exception as e:
         logger.error(f"Gagal get user {telegram_id}: {e}")
         raise
+
+
+def get_user_by_identifier(db: Session, identifier: str) -> Optional[User]:
+    """
+    Mencari user berdasarkan @username (case-insensitive) atau telegram_id numerik.
+    Mendukung format: '@alice', 'alice', '123456789'.
+    """
+    if not identifier:
+        return None
+
+    clean = str(identifier).strip()
+    if not clean:
+        return None
+
+    # 1. Jika numerik murni -> cari by telegram_id
+    if clean.isdigit():
+        try:
+            tid = int(clean)
+            user_by_id = db.query(User).filter(User.telegram_id == tid).first()
+            if user_by_id:
+                return user_by_id
+        except Exception:
+            pass
+
+    # 2. Cari by username (dengan atau tanpa '@')
+    username_clean = clean.lstrip("@").strip()
+    if username_clean:
+        try:
+            return (
+                db.query(User)
+                .filter(func.lower(User.username) == username_clean.lower())
+                .first()
+            )
+        except Exception as e:
+            logger.error(f"Gagal get_user_by_identifier '{identifier}': {e}")
+            return None
+
+    return None
+
 
 
 # ============================================================
@@ -1567,4 +1611,615 @@ def delete_user_saved_bank(db: Session, bank_id: int, telegram_id: int) -> bool:
         return True
     return False
 
+
+# ============================================================
+# PHASE 7 — REFERRAL DISCOUNT CRUD
+# ============================================================
+
+def get_referral_discount(db: Session, telegram_id: int) -> Optional["ReferralDiscount"]:
+    """Ambil data diskon aktif milik user. Return None jika tidak ada atau remaining_uses=0."""
+    disc = db.query(ReferralDiscount).filter(ReferralDiscount.telegram_id == telegram_id).first()
+    if disc and disc.remaining_uses <= 0:
+        return None
+    return disc
+
+
+def activate_referral_discount(
+    db: Session, telegram_id: int, uses: int = 10, pct: float = 10.0
+) -> "ReferralDiscount":
+    """
+    Aktifkan atau reset diskon referral untuk user.
+    Jika sudah ada, reset remaining_uses ke nilai baru.
+    """
+    disc = db.query(ReferralDiscount).filter(ReferralDiscount.telegram_id == telegram_id).first()
+    if disc:
+        disc.remaining_uses = uses
+        disc.discount_pct = Decimal(str(pct))
+        disc.activated_at = datetime.utcnow()
+        disc.updated_at = datetime.utcnow()
+    else:
+        disc = ReferralDiscount(
+            telegram_id=telegram_id,
+            remaining_uses=uses,
+            discount_pct=Decimal(str(pct)),
+        )
+        db.add(disc)
+    db.commit()
+    db.refresh(disc)
+    logger.info(f"Referral discount aktif untuk {telegram_id}: {uses}x {pct}%")
+    return disc
+
+
+def consume_referral_discount(db: Session, telegram_id: int) -> Optional[float]:
+    """
+    Gunakan 1 slot diskon. Kurangi remaining_uses.
+    Return: nilai diskon (%) jika berhasil, None jika tidak ada diskon aktif.
+    """
+    disc = get_referral_discount(db, telegram_id)
+    if not disc:
+        return None
+    pct = float(disc.discount_pct)
+    disc.remaining_uses -= 1
+    disc.updated_at = datetime.utcnow()
+    db.commit()
+    logger.info(f"Diskon referral dikonsumsi oleh {telegram_id}: sisa {disc.remaining_uses}")
+    return pct
+
+
+def get_referral_discount_info(db: Session, telegram_id: int) -> dict:
+    """
+    Informasi diskon referral user.
+    Return: {active: bool, remaining: int, discount_pct: float}
+    """
+    disc = db.query(ReferralDiscount).filter(ReferralDiscount.telegram_id == telegram_id).first()
+    if not disc or disc.remaining_uses <= 0:
+        return {"active": False, "remaining": 0, "discount_pct": 0.0}
+    return {
+        "active": True,
+        "remaining": disc.remaining_uses,
+        "discount_pct": float(disc.discount_pct),
+    }
+
+
+# ============================================================
+# PHASE 7 — LOYALTY REWARD CRUD
+# ============================================================
+
+DEFAULT_LOYALTY_CONFIG = {
+    "loyalty_enabled": "true",
+    "window_days": "5",
+    "min_tx_count": "5",
+    "reward_amount_idr": "25000",
+    "min_tx_amount_idr": "50000",
+}
+
+
+def get_loyalty_config(db: Session, key: str) -> Optional[str]:
+    """Ambil satu nilai konfigurasi loyalty. Return None jika tidak ada."""
+    cfg = db.query(LoyaltyConfig).filter(LoyaltyConfig.key == key).first()
+    if cfg:
+        return cfg.value
+    return DEFAULT_LOYALTY_CONFIG.get(key)
+
+
+def set_loyalty_config(db: Session, key: str, value: str) -> None:
+    """Simpan atau update nilai konfigurasi loyalty."""
+    cfg = db.query(LoyaltyConfig).filter(LoyaltyConfig.key == key).first()
+    if cfg:
+        cfg.value = value
+        cfg.updated_at = datetime.utcnow()
+    else:
+        cfg = LoyaltyConfig(key=key, value=value)
+        db.add(cfg)
+    db.commit()
+
+
+def get_or_create_loyalty_window(
+    db: Session, telegram_id: int, window_days: int = 5
+) -> "LoyaltyReward":
+    """
+    Ambil loyalty window yang aktif (window_end >= now).
+    Jika tidak ada atau sudah expired, buat window baru untuk siklus berikutnya.
+    """
+    now = datetime.utcnow()
+    # Cari window aktif: window_end di masa depan
+    active = (
+        db.query(LoyaltyReward)
+        .filter(
+            LoyaltyReward.telegram_id == telegram_id,
+            LoyaltyReward.window_end >= now,
+        )
+        .order_by(LoyaltyReward.window_start.desc())
+        .first()
+    )
+    if active:
+        return active
+
+    # Buat window baru
+    window_start = now
+    window_end = now + timedelta(days=window_days)
+    new_window = LoyaltyReward(
+        telegram_id=telegram_id,
+        window_start=window_start,
+        window_end=window_end,
+        tx_count_in_window=0,
+        qualified=False,
+    )
+    db.add(new_window)
+    db.commit()
+    db.refresh(new_window)
+    logger.info(f"Loyalty window baru dibuat untuk {telegram_id}: {window_start} - {window_end}")
+    return new_window
+
+
+def increment_loyalty_tx(
+    db: Session, telegram_id: int, tx_amount_idr: int = 0
+) -> dict:
+    """
+    Tambah 1 hitungan transaksi ke loyalty window aktif.
+    Validasi minimum nominal transaksi (dari config).
+    Return: {qualified: bool, current_count: int, needed: int, window_end: datetime, already_rewarded: bool}
+    """
+    window_days = int(get_loyalty_config(db, "window_days") or 5)
+    min_tx_count = int(get_loyalty_config(db, "min_tx_count") or 5)
+    min_tx_amount = int(get_loyalty_config(db, "min_tx_amount_idr") or 0)
+
+    # Validasi minimum nominal per transaksi
+    if tx_amount_idr < min_tx_amount:
+        logger.info(f"Loyalty: transaksi {tx_amount_idr} < min {min_tx_amount}, tidak dihitung.")
+        window = get_or_create_loyalty_window(db, telegram_id, window_days)
+        return {
+            "qualified": window.qualified,
+            "current_count": window.tx_count_in_window,
+            "needed": max(0, min_tx_count - window.tx_count_in_window),
+            "window_end": window.window_end,
+            "already_rewarded": window.rewarded_at is not None,
+            "skipped": True,
+        }
+
+    window = get_or_create_loyalty_window(db, telegram_id, window_days)
+
+    if window.rewarded_at is not None:
+        # Sudah direward, tidak perlu increment
+        return {
+            "qualified": True,
+            "current_count": window.tx_count_in_window,
+            "needed": 0,
+            "window_end": window.window_end,
+            "already_rewarded": True,
+        }
+
+    window.tx_count_in_window += 1
+    newly_qualified = False
+    if not window.qualified and window.tx_count_in_window >= min_tx_count:
+        window.qualified = True
+        newly_qualified = True
+
+    db.commit()
+    db.refresh(window)
+    logger.info(
+        f"Loyalty tx increment untuk {telegram_id}: "
+        f"{window.tx_count_in_window}/{min_tx_count} (qualified={window.qualified})"
+    )
+    return {
+        "qualified": window.qualified,
+        "newly_qualified": newly_qualified,
+        "current_count": window.tx_count_in_window,
+        "needed": max(0, min_tx_count - window.tx_count_in_window),
+        "window_end": window.window_end,
+        "already_rewarded": False,
+        "window_id": window.id,
+    }
+
+
+def mark_loyalty_rewarded(
+    db: Session, window_id: int, reward_idr: int
+) -> bool:
+    """Tandai window loyalty sebagai sudah direward dan catat jumlahnya."""
+    window = db.query(LoyaltyReward).filter(LoyaltyReward.id == window_id).first()
+    if not window:
+        return False
+    window.reward_idr = reward_idr
+    window.rewarded_at = datetime.utcnow()
+    db.commit()
+    return True
+
+
+def get_loyalty_eligible_users(db: Session) -> list[dict]:
+    """
+    Ambil semua loyalty windows yang qualified tapi belum di-reward.
+    Berguna untuk job scheduler periodik.
+    """
+    qualified = (
+        db.query(LoyaltyReward)
+        .filter(
+            LoyaltyReward.qualified == True,  # noqa: E712
+            LoyaltyReward.rewarded_at.is_(None),
+        )
+        .all()
+    )
+    result = []
+    for w in qualified:
+        result.append({
+            "window_id": w.id,
+            "telegram_id": w.telegram_id,
+            "tx_count": w.tx_count_in_window,
+            "window_start": w.window_start,
+            "window_end": w.window_end,
+        })
+    return result
+
+
+# ============================================================
+# PHASE 7 — TOP SPENDER CRUD
+# ============================================================
+
+def get_top_spenders(
+    db: Session, limit: int = 10, period_days: int = 30
+) -> list[dict]:
+    """
+    Ambil top N spender berdasarkan total nominal transaksi COMPLETED dalam periode tertentu.
+    Return: [{rank, telegram_id, username, full_name, total_spent_idr}, ...]
+    """
+    cutoff = datetime.utcnow() - timedelta(days=period_days)
+    rows = (
+        db.query(
+            Order.telegram_id,
+            User.username,
+            User.full_name,
+            func.sum(Order.total_idr).label("total_spent"),
+        )
+        .join(User, User.telegram_id == Order.telegram_id)
+        .filter(
+            func.lower(Order.status) == "completed",
+            Order.order_type == "buy",
+            Order.created_at >= cutoff,
+            or_(User.is_banned == False, User.is_banned.is_(None)),  # noqa: E712
+        )
+        .group_by(Order.telegram_id, User.username, User.full_name)
+        .order_by(func.sum(Order.total_idr).desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for rank, row in enumerate(rows, start=1):
+        result.append({
+            "rank": rank,
+            "telegram_id": row[0],
+            "username": row[1] or f"User_{row[0]}",
+            "full_name": row[2] or "",
+            "total_spent_idr": int(row[3] or 0),
+        })
+    return result
+
+
+# ============================================================
+# PHASE 7 — RANDOM WINNER CRUD
+# ============================================================
+
+def get_random_winners(
+    db: Session, pool_segment: str, count: int, min_tx_amount: int = 0
+) -> list[dict]:
+    """
+    Pilih N pemenang random dari pool berdasarkan segmen.
+    pool_segment: 'ALL' | 'BUYERS' | 'ACTIVE_30D'
+    Return: [{telegram_id, username, full_name}, ...]
+    """
+    import secrets as _secrets
+
+    segment = pool_segment.upper()
+    query = db.query(User).filter(
+        or_(User.is_banned == False, User.is_banned.is_(None))  # noqa: E712
+    )
+
+    if segment == "BUYERS":
+        # User yang pernah punya order COMPLETED
+        buyer_ids = (
+            db.query(Order.telegram_id)
+            .filter(func.lower(Order.status) == "completed")
+            .distinct()
+            .subquery()
+        )
+        query = query.filter(User.telegram_id.in_(buyer_ids))
+
+    elif segment == "ACTIVE_30D":
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        active_ids = (
+            db.query(Order.telegram_id)
+            .filter(
+                func.lower(Order.status) == "completed",
+                Order.created_at >= cutoff,
+            )
+            .distinct()
+            .subquery()
+        )
+        query = query.filter(User.telegram_id.in_(active_ids))
+
+    # else ALL: tidak ada filter tambahan
+
+    pool = query.all()
+
+    if not pool:
+        return []
+
+    # Filter minimal transaksi jika diperlukan
+    if min_tx_amount > 0:
+        pool = [u for u in pool if (u.total_spent_idr or 0) >= min_tx_amount]
+
+    # Pilih N random tanpa duplikat
+    n = min(count, len(pool))
+    chosen = _secrets.SystemRandom().sample(pool, n)
+
+    return [
+        {
+            "telegram_id": u.telegram_id,
+            "username": u.username or f"User_{u.telegram_id}",
+            "full_name": u.full_name or "",
+        }
+        for u in chosen
+    ]
+
+
+# ============================================================
+# PHASE 7 — ENHANCED WALLET CRUD
+# ============================================================
+
+def get_saved_wallets_grouped(db: Session, telegram_id: int) -> dict:
+    """
+    Ambil semua wallet tersimpan user, dikelompokkan per chain_type.
+    Return: {'EVM': [...], 'SOLANA': [...], 'TRON': [...], ...}
+    """
+    from database.models import UserSavedWallet
+    from services.wallet_detector import get_chain_type_for_network
+
+    wallets = (
+        db.query(UserSavedWallet)
+        .filter(UserSavedWallet.telegram_id == telegram_id)
+        .order_by(UserSavedWallet.is_default.desc(), UserSavedWallet.updated_at.desc())
+        .all()
+    )
+
+    grouped: dict = {}
+    for w in wallets:
+        # Gunakan chain_type yang tersimpan, atau deteksi dari network
+        ct = w.chain_type
+        if not ct and w.network:
+            ct = get_chain_type_for_network(w.network)
+        if not ct:
+            ct = "OTHER"
+        grouped.setdefault(ct, []).append(w)
+
+    return grouped
+
+
+def set_default_wallet(db: Session, wallet_id: int, telegram_id: int) -> bool:
+    """
+    Set wallet tertentu sebagai default untuk chain_type-nya.
+    Un-set semua wallet lain yang sama chain_type-nya.
+    Return: True jika berhasil.
+    """
+    from database.models import UserSavedWallet
+
+    target = (
+        db.query(UserSavedWallet)
+        .filter(
+            UserSavedWallet.id == wallet_id,
+            UserSavedWallet.telegram_id == telegram_id,
+        )
+        .first()
+    )
+    if not target:
+        return False
+
+    chain_type = target.chain_type
+    # Un-set default lainnya untuk chain_type yang sama
+    if chain_type:
+        db.query(UserSavedWallet).filter(
+            UserSavedWallet.telegram_id == telegram_id,
+            UserSavedWallet.chain_type == chain_type,
+            UserSavedWallet.id != wallet_id,
+        ).update({"is_default": False})
+
+    target.is_default = True
+    db.commit()
+    return True
+
+
+def save_user_wallet_v2(
+    db: Session,
+    telegram_id: int,
+    wallet_address: str,
+    network: str = None,
+    chain_type: str = None,
+    label: str = None,
+    auto_detected: bool = False,
+):
+    """
+    Simpan wallet dengan informasi chain_type (Phase 7 enhanced).
+    Jika alamat yang sama sudah ada, update chain_type dan network-nya.
+    """
+    from database.models import UserSavedWallet
+
+    clean_addr = wallet_address.strip()
+    existing = (
+        db.query(UserSavedWallet)
+        .filter(
+            UserSavedWallet.telegram_id == telegram_id,
+            UserSavedWallet.wallet_address == clean_addr,
+        )
+        .first()
+    )
+    if existing:
+        if network:
+            existing.network = network.upper()
+        if chain_type:
+            existing.chain_type = chain_type.upper()
+        if label:
+            existing.label = label
+        if auto_detected:
+            existing.auto_detected = True
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_wallet = UserSavedWallet(
+        telegram_id=telegram_id,
+        wallet_address=clean_addr,
+        network=network.upper() if network else None,
+        chain_type=chain_type.upper() if chain_type else None,
+        label=label,
+        auto_detected=auto_detected,
+    )
+    db.add(new_wallet)
+    db.commit()
+    db.refresh(new_wallet)
+    return new_wallet
+
+
+# ============================================================
+# BOT TREASURY & USER IDENTIFIER LOOKUP CRUD
+# ============================================================
+
+def get_user_by_identifier(db: Session, identifier: str) -> Optional[User]:
+    """
+    Mencari data user berdasarkan username (@username atau username)
+    atau berdasarkan Telegram ID numerik.
+    """
+    if not identifier:
+        return None
+    
+    clean_id = str(identifier).strip()
+    if clean_id.startswith("@"):
+        clean_id = clean_id[1:].strip()
+
+    # Cek jika numerik (Telegram ID)
+    if clean_id.isdigit():
+        t_id = int(clean_id)
+        user = db.query(User).filter(User.telegram_id == t_id).first()
+        if user:
+            return user
+
+    # Cari berdasarkan username (case-insensitive)
+    user_by_uname = db.query(User).filter(func.lower(User.username) == clean_id.lower()).first()
+    if user_by_uname:
+        return user_by_uname
+
+    return None
+
+
+def get_bot_treasury_balance(db: Session) -> int:
+    """
+    Mengambil total saldo kas/dompet internal bot untuk alokasi campaign & giveaway.
+    Default: 0 jika belum diset.
+    """
+    try:
+        val = get_loyalty_config(db, "bot_treasury_balance_idr")
+        if val is not None and str(val).strip().isdigit():
+            return int(val)
+        return 0
+    except Exception as exc:
+        logger.warning("Gagal membaca bot treasury balance: %s", exc)
+        return 0
+
+
+def topup_bot_treasury(
+    db: Session,
+    amount_idr: int,
+    admin_id: Optional[int] = None,
+    note: str = "Admin Topup Kas Bot"
+) -> int:
+    """
+    Menambahkan saldo ke kas/dompet bot untuk event campaign & giveaway.
+    Mencatat transaksi ke AuditLog.
+    """
+    if amount_idr <= 0:
+        raise ValueError("Nominal topup kas bot harus lebih besar dari 0.")
+
+    current_bal = get_bot_treasury_balance(db)
+    new_bal = current_bal + amount_idr
+    set_loyalty_config(db, "bot_treasury_balance_idr", str(new_bal))
+
+    try:
+        audit = AuditLog(
+            telegram_id=admin_id,
+            action="TOPUP_BOT_TREASURY",
+            details=(
+                f"Topup Kas Bot: +Rp {amount_idr:,} (Saldo: Rp {current_bal:,} -> Rp {new_bal:,}) "
+                f"oleh admin {admin_id}. Note: {note}"
+            ),
+        )
+        db.add(audit)
+        db.commit()
+    except Exception as audit_err:
+        logger.warning("Gagal mencatat audit topup kas bot: %s", audit_err)
+
+    logger.info("Bot Treasury Topup: +Rp %d -> New Balance: Rp %d by Admin %s", amount_idr, new_bal, admin_id)
+    return new_bal
+
+
+def set_bot_treasury_balance(
+    db: Session,
+    amount_idr: int,
+    admin_id: Optional[int] = None,
+    note: str = "Admin Set Kas Bot"
+) -> int:
+    """
+    Mengatur ulang saldo kas/dompet bot ke nilai tertentu.
+    """
+    if amount_idr < 0:
+        raise ValueError("Nominal saldo kas bot tidak boleh negatif.")
+
+    current_bal = get_bot_treasury_balance(db)
+    set_loyalty_config(db, "bot_treasury_balance_idr", str(amount_idr))
+
+    try:
+        audit = AuditLog(
+            telegram_id=admin_id,
+            action="SET_BOT_TREASURY",
+            details=(
+                f"Set Kas Bot: Rp {current_bal:,} -> Rp {amount_idr:,} "
+                f"oleh admin {admin_id}. Note: {note}"
+            ),
+        )
+        db.add(audit)
+        db.commit()
+    except Exception as audit_err:
+        logger.warning("Gagal mencatat audit set kas bot: %s", audit_err)
+
+    return amount_idr
+
+
+def deduct_bot_treasury(
+    db: Session,
+    amount_idr: int,
+    admin_id: Optional[int] = None,
+    note: str = "Campaign Execution"
+) -> int:
+    """
+    Memotong saldo kas/dompet bot (misal saat campaign dieksekusi).
+    Tidak boleh membuat saldo menjadi negatif (di-floor ke 0).
+    """
+    if amount_idr <= 0:
+        return get_bot_treasury_balance(db)
+
+    current_bal = get_bot_treasury_balance(db)
+    new_bal = max(0, current_bal - amount_idr)
+    set_loyalty_config(db, "bot_treasury_balance_idr", str(new_bal))
+
+    try:
+        audit = AuditLog(
+            telegram_id=admin_id,
+            action="DEDUCT_BOT_TREASURY",
+            details=(
+                f"Potong Kas Bot: -Rp {amount_idr:,} (Saldo: Rp {current_bal:,} -> Rp {new_bal:,}) "
+                f"oleh admin {admin_id}. Note: {note}"
+            ),
+        )
+        db.add(audit)
+        db.commit()
+    except Exception as audit_err:
+        logger.warning("Gagal mencatat audit potong kas bot: %s", audit_err)
+
+    return new_bal
 

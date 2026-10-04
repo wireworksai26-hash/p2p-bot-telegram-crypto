@@ -18,8 +18,10 @@ from config.settings import settings
 from database.connection import SessionLocal, engine, Base
 import database.models
 from database.models import Campaign, CampaignDistribution
+from database import crud
 from bot.handlers.admin import is_admin
 from bot.utils.formatter import format_idr
+from bot.utils.emojis import tg_emoji
 from services.campaign_service import (
     CAMPAIGN_TEMPLATES,
     get_template,
@@ -41,7 +43,7 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
     """Keyboard menu utama pusat campaign."""
     keyboard = [
         [
-            InlineKeyboardButton("🎁 Bagi Rata Semua User", callback_data="camp_tpl_tpl_split_all"),
+            InlineKeyboardButton("🎁 Bagi Rata Buyer Aktif", callback_data="camp_tpl_tpl_split_all"),
         ],
         [
             InlineKeyboardButton("🛒 Loyalty Buyer Giveaway", callback_data="camp_tpl_tpl_loyalty_buyers"),
@@ -53,8 +55,11 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚡ Flash Giveaway Acak", callback_data="camp_tpl_tpl_flash_random"),
         ],
         [
+            InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="camp_treasury_view"),
             InlineKeyboardButton("📋 Riwayat Campaign", callback_data="camp_history"),
-            InlineKeyboardButton("🔙 Panel Utama", callback_data="admin_panel_main"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Panel Utama Admin", callback_data="admin_panel_main"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -104,18 +109,31 @@ def get_preview_action_keyboard(campaign_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def build_campaign_main_view() -> str:
+def build_campaign_main_view(db=None) -> str:
     """Teks tampilan utama pusat campaign & giveaway."""
+    close_db = False
+    if db is None:
+        db = SessionLocal()
+        close_db = True
+    try:
+        treasury_bal = crud.get_bot_treasury_balance(db)
+    except Exception:
+        treasury_bal = 0
+    finally:
+        if close_db:
+            db.close()
+
     return (
-        "🎁 <b>PUSAT CAMPAIGN & GIVEAWAY BOT</b>\n\n"
+        f"{tg_emoji('GIFT', '🎁')} <b>PUSAT CAMPAIGN & GIVEAWAY BOT</b>\n\n"
+        f"{tg_emoji('BANK', '🏦')} <b>Saldo Kas Dompet Bot:</b> <code>{format_idr(treasury_bal)}</code>\n\n"
         "Fitur ini memungkinkan Anda membuat event giveaway saldo bot dengan "
         "<b>proteksi batas anggaran (Hard Budget Cap)</b> dan sistem seleksi otomatis.\n\n"
-        "✨ <b>Pilih Template Siap Pakai (1-Click):</b>\n"
-        "1. <b>🎁 Bagi Rata Semua User</b> — Total budget dibagi sama rata ke seluruh user aktif.\n"
-        "2. <b>🛒 Loyalty Buyer Giveaway</b> — Undian acak khusus pelanggan yang pernah transaksi.\n"
+        f"{tg_emoji('SPARKLES', '✨')} <b>Pilih Template Siap Pakai (1-Click):</b>\n"
+        "1. <b>🎁 Bagi Rata Buyer Aktif</b> — Total budget dibagi sama rata ke user yang pernah transaksi.\n"
+        "2. <b>🛒 Loyalty Buyer Giveaway</b> — Undian acak khusus pelanggan yang aktif bertransaksi.\n"
         "3. <b>🏆 Top Spender Milestone</b> — Reward khusus Top Trader dengan volume terbesar.\n"
         "4. <b>⚡ Flash Giveaway Acak</b> — Bagi-bagi hadiah kilat untuk sejumlah user acak.\n\n"
-        "🛡️ <i>Sistem menjamin total saldo keluar tidak akan pernah melebihi budget yang Anda tetapkan.</i>"
+        f"{tg_emoji('CHECK', '🛡️')} <i>Sistem menjamin total saldo keluar tidak akan pernah melebihi budget yang Anda tetapkan.</i>"
     )
 
 
@@ -279,21 +297,58 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
             context.user_data["awaiting_campaign_custom_msg_id"] = camp_id
             keyboard_cancel_msg = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Batal (Tetap Pakai Pesan Lama)", callback_data=f"camp_back_preview_{camp_id}")]
+                [InlineKeyboardButton("📋 Pakai Template Standar Bawaan", callback_data=f"camp_set_default_msg_{camp_id}")],
+                [InlineKeyboardButton("🔙 Batal (Tetap Pakai Pesan Lama)", callback_data=f"camp_back_preview_{camp_id}")],
             ])
+            edit_prompt_text = (
+                f"{tg_emoji('HISTORY', '✏️')} <b>KUSTOMISASI PESAN NOTIFIKASI PEMENANG</b>\n\n"
+                "Pesan ini akan otomatis dikirimkan bot langsung ke DM Telegram setiap pemenang saat tombol <b>Eksekusi</b> ditekan.\n\n"
+                "📌 <b>Daftar Tag / Placeholder Otomatis:</b>\n"
+                "• <code>{name}</code> ➔ Nama / username pemenang (contoh: <i>@budi</i>)\n"
+                "• <code>{reward}</code> ➔ Nominal hadiah yang didapat (contoh: <i>Rp 25.000</i>)\n"
+                "• <code>{new_balance}</code> ➔ Total saldo akun baru user (contoh: <i>Rp 75.000</i>)\n"
+                "• <code>{campaign_name}</code> ➔ Judul event campaign ini\n"
+                "• <code>{rank}</code> ➔ Posisi juara (khusus event Top Spender / Rank)\n"
+                "• <code>{bot_username}</code> ➔ Username bot Anda (contoh: <i>@TokoKoinID_Bot</i>)\n\n"
+                "📋 <b>Contoh Template Siap Copy (Salin & Edit Sesuai Selera):</b>\n"
+                "<code>🎉 <b>SELAMAT {name}!</b>\n\n"
+                "Anda terpilih memenangkan hadiah saldo gratis dari event <b>{campaign_name}</b>!\n\n"
+                "💰 <b>Hadiah:</b> {reward}\n"
+                "💳 <b>Saldo Baru Anda:</b> {new_balance}\n\n"
+                "Saldo sudah aktif dan siap langsung digunakan untuk transaksi di @{bot_username} 🚀</code>\n\n"
+                "👇 <i>Ketik pesan notifikasi kustom Anda sekarang di chat ini...</i>"
+            )
             await query.edit_message_text(
-                "✏️ <b>Kustomisasi Pesan Notifikasi Pemenang</b>\n\n"
-                "Ketik dan kirim teks notifikasi baru yang akan diterima user.\n"
-                "Anda dapat menggunakan placeholder berikut:\n"
-                "• <code>{name}</code> — Nama / username penerima\n"
-                "• <code>{reward}</code> — Nominal hadiah (contoh: Rp 10.000)\n"
-                "• <code>{new_balance}</code> — Saldo baru user setelah klaim\n"
-                "• <code>{campaign_name}</code> — Judul campaign\n"
-                "• <code>{rank}</code> — Peringkat (khusus milestone)\n\n"
-                "<i>Kirim pesan sekarang melalui chat ini...</i>",
+                edit_prompt_text,
                 reply_markup=keyboard_cancel_msg,
                 parse_mode="HTML",
             )
+            return
+
+        # Kembalikan ke Template Notifikasi Default
+        if data.startswith("camp_set_default_msg_"):
+            camp_id = int(data.replace("camp_set_default_msg_", ""))
+            context.user_data.pop("awaiting_campaign_custom_msg_id", None)
+            camp = db.query(Campaign).filter_by(id=camp_id).first()
+            if camp:
+                tpl = get_template(camp.template_type) or get_template("tpl_split_all")
+                camp.custom_message = tpl.get("default_notif") if tpl else None
+                db.commit()
+                await query.answer("✅ Pesan notifikasi dikembalikan ke template standar bawaan.", show_alert=True)
+                sim = simulate_campaign(
+                    db=db,
+                    mode=camp.mode,
+                    total_pool=camp.total_pool,
+                    target_segment=camp.target_segment,
+                    max_winners=camp.max_winners,
+                    milestone_metric=camp.milestone_metric or "VOLUME_IDR",
+                )
+                text = _build_preview_text(camp, sim)
+                await query.edit_message_text(
+                    text,
+                    reply_markup=get_preview_action_keyboard(camp.id),
+                    parse_mode="HTML",
+                )
             return
 
         # Kembali ke Preview Simulasi

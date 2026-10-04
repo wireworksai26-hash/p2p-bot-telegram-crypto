@@ -27,10 +27,14 @@ os.environ.update({
     "EVM_PRIVATE_KEY": "",
 })
 
-from nacl.signing import VerifyKey
-from pytoniq_core.boc import Builder, Cell as PyCell
-from pytoniq_core.boc.address import Address
-from pytoniq_core.tlb.transaction import MessageAny
+try:
+    from nacl.signing import VerifyKey
+    from pytoniq_core.boc import Builder, Cell as PyCell
+    from pytoniq_core.boc.address import Address
+    from pytoniq_core.tlb.transaction import MessageAny
+    HAS_PYTONIQ = True
+except ImportError:
+    HAS_PYTONIQ = False
 
 from services.crypto_sender import SendResult
 from services.crypto_sender.ton_sender import (
@@ -43,12 +47,16 @@ from services.tx_verifier import ton_address
 # Kunci uji (bukan milik siapa pun): seed = 00..1f
 TEST_SEED_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 TEST_W5_ADDRESS = "EQDygBQZqqGzcEoNULWIjcy1UR7W4xkbmdFEoE6p6jkMUpdb"
-TEST_WALLET_ID = 2147483409
-RECIPIENT = Address((0, bytes(32))).to_str(is_user_friendly=True, is_bounceable=False)
+if HAS_PYTONIQ:
+    RECIPIENT = Address((0, bytes(32))).to_str(is_user_friendly=True, is_bounceable=False)
+else:
+    RECIPIENT = ""
 
 
 class TestTonW5Send(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        if not HAS_PYTONIQ:
+            self.skipTest("pytoniq_core not installed")
         patcher = patch.multiple(
             "config.settings.settings",
             TON_PRIVATE_KEY=TEST_SEED_HEX,

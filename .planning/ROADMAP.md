@@ -86,3 +86,32 @@
 - Test suite untuk buy, sell, swap, topup, balance
 - Regression test setelah setiap deployment
 - Automated smoke test via CI/CD
+
+---
+
+## Phase 7 — Advanced Rewards, Loyalty & Enhanced Wallet
+**Status:** `completed`
+**Priority:** 🔴 High
+**Description:** Implementasi fitur reward & loyalitas lanjutan dan peningkatan manajemen wallet.
+
+**Scope:**
+- **7.A Referral Discount:** Referrer yang berhasil mengundang user mendapat diskon 10% biaya transaksi untuk 10 transaksi berikutnya
+- **7.B Top Spender Milestone:** Reward otomatis tiered ke top 10 spender (Top 1: Rp 150k, Top 2: 100k, Top 3: 50k, Top 4: 30k, Top 5: 25k, Top 6-10: 20k masing-masing)
+- **7.C Random Winner Draw:** Admin pilih pool peserta, sistem undi N pemenang secara random, saldo dikreditkan otomatis
+- **7.D Time-based Loyalty:** User yang melakukan >= 5 transaksi dalam window 5 hari mendapat reward giveaway (konfigurasi admin)
+- **7.E Enhanced Wallet Management:** Auto-detect jaringan wallet dari format alamat (EVM/Solana/TRON/SUI/TON/BTC), tampilan dikelompokkan per chain, tombol tambah wallet terpisah per jaringan
+
+---
+
+## Phase 8 — Operational Polish, Testimonial Channel & Weekly Reporting
+**Status:** `completed`
+**Priority:** 🔴 High
+**Description:** Penyempurnaan operasional bot, channel testimoni transaksi otomatis, copy checkout/referral fix, dan rekapitulasi laporan transaksi mingguan Google Sheets/CSV.
+
+**Scope:**
+- **8.A Campaign Target & Template Update:** Ubah template Bagi Rata hanya untuk buyer aktif (min. 1x transaksi) dan sinkronkan copy Loyalty Buyer Giveaway.
+- **8.B Checkout Copy Cleanup:** Hapus range `(01-200)` pada teks konfirmasi checkout beli.
+- **8.C Testimonial Channel Integration:** Otomatis kirim log transaksi sukses (Beli, Jual, Swap) ke channel testimoni `@TokoKoinID` dengan username disensor.
+- **8.D Post-Transaction Footer Update:** Tambahkan link channel & testimoni resmi pada pesan penutup setelah transaksi sukses.
+- **8.E Weekly Transaction Report & Sheets Export:** Rekapitulasi transaksi 1 minggu untuk admin (data user, jenis, nominal, tujuan, txhash) + download CSV / Sheets sync.
+- **8.F Referral Share Link Bug Fix:** Hilangkan duplikasi URL pada tombol bagikan referral Telegram.
