@@ -46,7 +46,7 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🎁 Bagi Rata Buyer Aktif", callback_data="camp_tpl_tpl_split_all"),
         ],
         [
-            InlineKeyboardButton("🛒 Loyalty Buyer Giveaway", callback_data="camp_tpl_tpl_loyalty_buyers"),
+            InlineKeyboardButton("🛒 Loyalty Buyer Reward", callback_data="camp_tpl_tpl_loyalty_buyers"),
         ],
         [
             InlineKeyboardButton("🏆 Top Spender Leaderboard", callback_data="admin_panel_top_spenders"),
@@ -132,7 +132,7 @@ def build_campaign_main_view(db=None) -> str:
         "undian acak, dan program loyalty otomatis dengan <b>proteksi batas anggaran (Hard Budget Cap)</b>.\n\n"
         f"{tg_emoji('SPARKLES', '✨')} <b>Menu & Template Event Siap Pakai:</b>\n"
         "1. <b>🎁 Bagi Rata Buyer Aktif</b> — Total budget dibagi sama rata ke user pembeli aktif.\n"
-        "2. <b>🛒 Loyalty Buyer Giveaway</b> — Undian acak khusus pelanggan yang aktif bertransaksi.\n"
+        "2. <b>🛒 Loyalty Buyer Reward</b> — Reward untuk pelanggan setia yang mencapai target transaksi dalam rentang waktu tertentu.\n"
         "3. <b>🏆 Top Spender Leaderboard</b> — Reward leaderboard untuk Top Trader dengan volume terbesar.\n"
         "4. <b>🎲 Undi Pemenang Acak</b> — Undi pemenang instan per kategori target user.\n"
         "5. <b>⏳ Pengaturan Loyalty Reward</b> — Reward otomatis per X transaksi dalam window waktu.\n"
@@ -222,6 +222,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 target_segment=tpl.get("target_segment", "all"),
                 max_winners=tpl.get("default_winners"),
                 milestone_metric=tpl.get("milestone_metric", "VOLUME_IDR"),
+                days_lookback=tpl.get("days_lookback"),
             )
 
             if sim.get("error"):
@@ -339,6 +340,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 camp.custom_message = tpl.get("default_notif") if tpl else None
                 db.commit()
                 await query.answer("✅ Pesan notifikasi dikembalikan ke template standar bawaan.", show_alert=True)
+                tpl = get_template(camp.template_type) if camp.template_type else None
                 sim = simulate_campaign(
                     db=db,
                     mode=camp.mode,
@@ -346,6 +348,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     target_segment=camp.target_segment,
                     max_winners=camp.max_winners,
                     milestone_metric=camp.milestone_metric or "VOLUME_IDR",
+                    days_lookback=tpl.get("days_lookback") if tpl else None,
                 )
                 text = _build_preview_text(camp, sim)
                 await query.edit_message_text(
@@ -364,6 +367,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await query.answer("Campaign tidak ditemukan.", show_alert=True)
                 return
 
+            tpl = get_template(camp.template_type) if camp.template_type else None
             sim = simulate_campaign(
                 db=db,
                 mode=camp.mode,
@@ -371,6 +375,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 target_segment=camp.target_segment,
                 max_winners=camp.max_winners,
                 milestone_metric=camp.milestone_metric or "VOLUME_IDR",
+                days_lookback=tpl.get("days_lookback") if tpl else None,
             )
             text = _build_preview_text(camp, sim)
             await query.edit_message_text(
@@ -532,6 +537,7 @@ async def campaign_text_input_handler(update: Update, context: ContextTypes.DEFA
                 target_segment=tpl.get("target_segment", "all"),
                 max_winners=tpl.get("default_winners"),
                 milestone_metric=tpl.get("milestone_metric", "VOLUME_IDR"),
+                days_lookback=tpl.get("days_lookback"),
             )
 
             if sim.get("error"):
@@ -575,6 +581,7 @@ async def campaign_text_input_handler(update: Update, context: ContextTypes.DEFA
             camp.custom_message = raw_text
             db.commit()
 
+            tpl = get_template(camp.template_type) if camp.template_type else None
             sim = simulate_campaign(
                 db=db,
                 mode=camp.mode,
@@ -582,6 +589,7 @@ async def campaign_text_input_handler(update: Update, context: ContextTypes.DEFA
                 target_segment=camp.target_segment,
                 max_winners=camp.max_winners,
                 milestone_metric=camp.milestone_metric or "VOLUME_IDR",
+                days_lookback=tpl.get("days_lookback") if tpl else None,
             )
 
             text = _build_preview_text(camp, sim)
@@ -614,10 +622,14 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
     winners_preview = []
     for w in sim["winners"][:5]:
         rank_str = f"#{w['rank']} " if w.get("rank") else ""
-        metric_str = f" (Vol: {format_idr(w['metric_value'])})" if w.get("metric_value") else ""
+        if camp.milestone_metric == "TX_COUNT":
+            metric_str = f" ({w['metric_value']} Transaksi)" if w.get("metric_value") else ""
+        else:
+            metric_str = f" (Vol: {format_idr(w['metric_value'])})" if w.get("metric_value") else ""
         winners_preview.append(f"  • {rank_str}<b>{_esc(w['username'])}</b> — <code>+{format_idr(w['amount'])}</code>{metric_str}")
 
     more_str = f"\n  <i>...dan {len(sim['winners']) - 5} pemenang lainnya.</i>" if len(sim["winners"]) > 5 else ""
+    winners_list_str = "\n".join(winners_preview) if winners_preview else "  <i>Belum ada user yang memenuhi kriteria</i>"
 
     return (
         f"📊 <b>PREVIEW CAMPAIGN: {camp.title}</b>\n\n"
@@ -628,7 +640,7 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
         f"💰 <b>Total Anggaran Keluar:</b> <code>{format_idr(sim['total_distributed'])}</code>\n"
         f"🛡️ <b>Maksimal Anggaran (Cap):</b> <code>{format_idr(camp.total_pool)}</code>\n\n"
         f"📋 <b>Daftar Pemenang Terpilih:</b>\n"
-        f"{''.join(winners_preview)}{more_str}\n\n"
+        f"{winners_list_str}{more_str}\n\n"
         f"✉️ <b>Pratinjau Notifikasi ke Pemenang:</b>\n"
         f"<blockquote>{notif_sample}</blockquote>\n\n"
         f"<i>Klik '🚀 Eksekusi' untuk langsung membagikan saldo ke akun user, atau edit pesan notifikasi di bawah.</i>"

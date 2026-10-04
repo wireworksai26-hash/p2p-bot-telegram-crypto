@@ -68,7 +68,10 @@ class TestCampaignTemplateRefinements(unittest.TestCase):
         tpl = get_template("tpl_loyalty_buyers")
         self.assertIsNotNone(tpl)
         self.assertEqual(tpl["target_segment"], "buyers")
-        self.assertIn("loyalty", tpl["description"].lower())
+        self.assertEqual(tpl["mode"], "MILESTONE")
+        self.assertEqual(tpl["milestone_metric"], "TX_COUNT")
+        self.assertEqual(tpl["days_lookback"], 30)
+        self.assertIn("loyal", tpl["description"].lower())
 
     def test_simulate_campaign_split_all_selects_only_buyers(self):
         Base.metadata.create_all(bind=engine)

@@ -41,20 +41,22 @@ CAMPAIGN_TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "tpl_loyalty_buyers": {
         "key": "tpl_loyalty_buyers",
-        "title": "🛒 Loyalty Buyer Giveaway",
-        "description": "Undi pemenang secara acak khusus pelanggan yang aktif bertransaksi (program loyalty).",
-        "mode": "RANDOM",
+        "title": "🛒 Loyalty Buyer Reward",
+        "description": "Reward untuk pelanggan setia dengan frekuensi/keaktifan transaksi terbanyak dalam interval waktu tertentu (Program Loyalitas).",
+        "mode": "MILESTONE",
+        "milestone_metric": "TX_COUNT",
+        "days_lookback": 30,
         "target_segment": "buyers",
         "default_winners": 20,
         "preset_winners": [5, 10, 20, 30, 50],
         "default_pool": 500_000,
         "preset_pools": [100_000, 250_000, 500_000, 1_000_000],
         "default_notif": (
-            f"{tg_emoji('PARTY', '🎉')} <b>SELAMAT! ANDA TERPILIH SEBAGAI PEMENANG!</b>\n\n"
-            "Halo <b>{name}</b>, sebagai apresiasi atas keaktifan transaksi Anda, ID Anda beruntung terpilih memenangkan Giveaway Loyalty Buyer!\n"
+            f"{tg_emoji('PARTY', '🎉')} <b>SELAMAT! REWARD LOYALITAS ANDA CAIR!</b>\n\n"
+            "Halo <b>{name}</b>, sebagai apresiasi atas keaktifan dan loyalitas transaksi Anda, Anda berhasil mendapatkan reward program Loyalty Buyer!\n"
             f"{tg_emoji('MONEY_BAG', '💰')} <b>Reward:</b> <code>+{{reward}}</code>\n"
             f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{{new_balance}}</code>\n\n"
-            f"{tg_emoji('SPARKLES', '✨')} Terima kasih telah setia bertransaksi bersama kami. Saldo ini siap dipakai untuk order berikutnya!"
+            f"{tg_emoji('SPARKLES', '✨')} Terima kasih telah setia bertransaksi bersama kami. Saldo ini siap langsung digunakan untuk transaksi berikutnya!"
         ).replace("{name}", "{name}"),
     },
     "tpl_top_spenders": {
@@ -312,6 +314,8 @@ def execute_campaign(
         raise ValueError(f"Campaign tidak dalam status DRAFT (status saat ini: {campaign.status}).")
 
     # Jalankan simulasi ulang untuk mendapatkan snapshot kandidat terkini
+    tpl = get_template(campaign.template_type) if campaign.template_type else None
+    days_lookback = tpl.get("days_lookback") if tpl else None
     sim = simulate_campaign(
         db=db,
         mode=campaign.mode,
@@ -320,6 +324,7 @@ def execute_campaign(
         max_winners=campaign.max_winners,
         milestone_metric=campaign.milestone_metric or "VOLUME_IDR",
         min_metric_value=campaign.min_metric_value or 0,
+        days_lookback=days_lookback,
     )
 
     if sim.get("error"):
