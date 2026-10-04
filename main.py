@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from telegram import BotCommand, Update
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -448,9 +449,19 @@ def build_bot_application() -> Application:
     """
     logger.info("Building Telegram bot application...")
 
+    # Konfigurasi request HTTPX yang tangguh untuk long-polling & auto-reconnect
+    trequest = HTTPXRequest(
+        connection_pool_size=100,
+        read_timeout=30.0,
+        write_timeout=20.0,
+        connect_timeout=15.0,
+        pool_timeout=15.0,
+    )
+
     application = (
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
+        .request(trequest)
         .post_init(set_bot_commands)
         .build()
     )
@@ -602,7 +613,15 @@ async def error_handler(update: object, context) -> None:
     Global error handler for the Telegram bot.
     Logs the error and notifies the user + all admins.
     """
-    logger.error("Unhandled exception: %s", context.error, exc_info=context.error)
+    from telegram.error import NetworkError, TimedOut, RetryAfter
+
+    err = context.error
+    # Abaikan error jaringan sementara (ReadError/Timeout) yang otomatis di-retry oleh updater
+    if isinstance(err, (NetworkError, TimedOut, RetryAfter)):
+        logger.warning("Transient Telegram NetworkError (auto-reconnect): %s", err)
+        return
+
+    logger.error("Unhandled exception: %s", err, exc_info=err)
 
     # Notify user (if we know who they are)
     if update and isinstance(update, Update) and update.effective_chat:
@@ -1142,6 +1161,11 @@ async def main():
         await application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
+            bootstrap_retries=-1,
+            read_timeout=30.0,
+            write_timeout=20.0,
+            connect_timeout=15.0,
+            pool_timeout=15.0,
         )
 
         logger.info("=" * 50)
