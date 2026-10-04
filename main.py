@@ -910,20 +910,51 @@ async def _job_low_balance_alert():
 
 
 async def _complete_topup(db, topup):
-    """Tandai topup SUCCESS (atomic claim), credit saldo user, dan kirim notifikasi Telegram."""
+    """Tandai topup SUCCESS (atomic claim), credit saldo user atau kas bot, dan kirim notifikasi Telegram."""
     from services.bot_runtime import bot_app
-    from database.crud import claim_topup_success, credit_user_balance
+    from database.crud import claim_topup_success, credit_user_balance, topup_bot_treasury
     from bot.utils.formatter import format_idr
+    from bot.utils.emojis import tg_emoji
 
     if not claim_topup_success(db, topup.topup_id):
         return
-    new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+
+    topup_mdr = int(topup.mdr_idr or 0)
+    net_amt = topup.amount_idr - topup_mdr
+
+    if str(topup.topup_id).startswith("TREASURY-") or str(topup.topup_id).startswith("TOPUP-TREASURY-"):
+        new_treasury_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+        if bot_app:
+            try:
+                msg = (
+                    f"{tg_emoji('BANK', '🏦')} ✅ <b>PEMBAYARAN QRIS KAS BOT TERVERIFIKASI (OTOMATIS)!</b>\n\n"
+                    f"🎉 Top up kas bot sebesar <b>{format_idr(net_amt)}</b> telah berhasil masuk!\n"
+                    f"💰 <b>Total Saldo Kas Bot Sekarang:</b> <b>{format_idr(new_treasury_bal)}</b>\n\n"
+                    f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>"
+                )
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                menu_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Buka Wizard Campaign", callback_data="admin_panel_campaign")],
+                    [InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="camp_treasury_view")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ])
+                await bot_app.bot.send_message(
+                    chat_id=topup.telegram_id,
+                    text=msg,
+                    reply_markup=menu_keyboard,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Gagal kirim notifikasi treasury topup ke admin {topup.telegram_id}: {e}")
+        return
+
+    new_bal = credit_user_balance(db, topup.telegram_id, net_amt)
 
     if bot_app:
         try:
             msg = (
                 f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
-                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
+                f"🎉 Topup saldo sebesar <b>{format_idr(net_amt)}</b> telah berhasil!\n"
                 f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
                 f"<i>Anda dapat langsung menggunakan saldo ini untuk membeli koin crypto secara instan.</i>"
             )

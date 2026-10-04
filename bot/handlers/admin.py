@@ -985,13 +985,16 @@ def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
         f"{tg_emoji('BANK', '🏦')} <b>KAS & DOMPET CAMPAIGN BOT</b>\n\n"
         f"💰 <b>Saldo Kas Bot Saat Ini:</b> <b>{format_idr(treasury_bal)}</b>\n\n"
         "📌 <b>Fungsi Dompet Kas Bot:</b>\n"
-        "• Menyimpan cadangan dana untuk event Giveaway & Campaign\n"
+        "• Menyimpan cadangan dana uang asli untuk event Giveaway & Campaign\n"
         "• Sumber dana otomatisasi reward Loyalty & Milestone Top Spender\n"
         "• Memastikan kelancaran distribusi hadiah bagi para pemenang\n\n"
-        "👇 <i>Pilih tombol cepat di bawah untuk Top Up kas bot atau atur nominal:</i>"
+        "👇 <i>Pilih Top-Up via QRIS Uang Asli atau gunakan tombol instan di bawah:</i>"
     )
 
     buttons = [
+        [
+            InlineKeyboardButton("📲 Top-Up Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu"),
+        ],
         [
             InlineKeyboardButton("+Rp 100.000", callback_data="admin_treasury_topup_100000"),
             InlineKeyboardButton("+Rp 250.000", callback_data="admin_treasury_topup_250000"),
@@ -1014,6 +1017,129 @@ def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
         ],
     ]
     return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_treasury_qris_menu() -> tuple[str, InlineKeyboardMarkup]:
+    """Menu pilihan nominal Top-Up Kas Bot via QRIS (Uang Asli)."""
+    text = (
+        f"{tg_emoji('BANK', '🏦')} <b>TOP-UP KAS BOT VIA QRIS (UANG ASLI)</b>\n\n"
+        "Silakan pilih nominal deposit saldo Kas Bot yang ingin Anda bayar via QRIS:\n\n"
+        "📌 <i>Metode Pembayaran Didukung:</i>\n"
+        "• <b>Mobile Banking:</b> BCA, Mandiri, BRI, BNI, CIMB, Permata, dll.\n"
+        "• <b>E-Wallet:</b> GoPay, OVO, DANA, ShopeePay, LinkAja.\n\n"
+        "<i>Uang asli langsung masuk ke akun merchant GoPay/Bank Anda dan saldo Kas Bot otomatis terisi seketika.</i>"
+    )
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_treasury_qris_50000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_treasury_qris_100000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 250.000", callback_data="admin_treasury_qris_250000"),
+            InlineKeyboardButton("Rp 500.000", callback_data="admin_treasury_qris_500000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 1.000.000", callback_data="admin_treasury_qris_1000000"),
+            InlineKeyboardButton("Rp 2.500.000", callback_data="admin_treasury_qris_2500000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 5.000.000", callback_data="admin_treasury_qris_5000000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_treasury_qris_custom"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Batal / Kembali ke Kas Bot", callback_data="camp_treasury_view"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int) -> None:
+    """Menyajikan invoice QRIS Dinamis untuk Top-Up Kas Bot Admin."""
+    user = update.effective_user
+    status_msg = None
+    if update.callback_query:
+        status_msg = await update.callback_query.edit_message_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+    else:
+        status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+
+    topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}"
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+
+    db = SessionLocal()
+    try:
+        from database.crud import generate_unique_payment_code, create_topup_order
+        from services.fee_service import calculate_qris_mdr
+        unique_code = generate_unique_payment_code(db)
+        mdr_idr = calculate_qris_mdr(amount)
+        final_amount = amount + mdr_idr + unique_code
+        topup_order = create_topup_order(
+            db=db,
+            topup_id=topup_id,
+            telegram_id=user.id,
+            amount_idr=final_amount,
+            expires_at=expires_at,
+        )
+        topup_order.unique_code = unique_code
+        topup_order.mdr_idr = mdr_idr
+        db.commit()
+    finally:
+        db.close()
+
+    context.user_data["active_topup_id"] = topup_id
+
+    mdr_line = f"\n🧾 <b>Biaya QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
+    caption_text = (
+        f"{tg_emoji('BANK', '🏦')} <b>INVOICE TOP-UP KAS BOT (QRIS UANG ASLI)</b>\n\n"
+        f"🎫 <b>ID Transaksi:</b> <code>{topup_id}</code>\n"
+        f"💵 <b>Nominal Masuk Kas:</b> <b>{format_idr(amount)}</b>\n"
+        f"💰 <b>Total Transfer:</b> <b>{format_idr(final_amount)}</b>"
+        f"{mdr_line}\n"
+        f"⏰ <b>Batas Waktu:</b> 30 Menit\n\n"
+        f"📌 <b>Cara Bayar:</b>\n"
+        f"1. Scan QRIS di atas dengan <b>BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay</b>, dll.\n"
+        f"2. Nominal <b>{format_idr(final_amount)}</b> akan terisi otomatis.\n"
+        f"3. Selesaikan transfer di aplikasi Bank / E-Wallet Anda.\n"
+        f"4. Saldo Kas Bot akan <b>otomatis bertambah</b> seketika setelah pembayaran terverifikasi!\n\n"
+        f"ℹ️ <i>Pastikan nominal transfer tepat ({format_idr(final_amount)}) agar verifikasi instan.</i>"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Saya Sudah Transfer", callback_data=f"check_topup_{topup_id}")],
+        [InlineKeyboardButton("❌ Batalkan Invoice", callback_data=f"cancel_topup_{topup_id}")],
+        [InlineKeyboardButton("🔙 Kembali ke Kas Bot", callback_data="camp_treasury_view")],
+    ]
+
+    try:
+        if update.callback_query:
+            await update.callback_query.message.delete()
+        elif status_msg:
+            await status_msg.delete()
+    except Exception:
+        pass
+
+    from services.qris_generator import get_qris_image_stream
+    qris_stream = get_qris_image_stream(final_amount)
+    sent = False
+    if qris_stream:
+        try:
+            await context.bot.send_photo(
+                chat_id=user.id,
+                photo=qris_stream.getvalue(),
+                caption=caption_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+            sent = True
+        except Exception as err:
+            logger.warning("Gagal kirim QRIS photo treasury: %s", err)
+
+    if not sent:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=caption_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
 
 
 
@@ -1326,6 +1452,29 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 reply_markup=cancel_markup,
                 parse_mode="HTML"
             )
+
+        elif data == "admin_treasury_qris_menu":
+            text, markup = build_admin_treasury_qris_menu()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Menu QRIS Kas Bot dimuat.")
+
+        elif data == "admin_treasury_qris_custom":
+            context.user_data["admin_awaiting_treasury_qris_custom"] = True
+            await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="admin_treasury_qris_menu")]
+            ])
+            await query.message.reply_text(
+                f"{tg_emoji('BANK', '🏦')} <b>Top Up Kas Bot via QRIS (Nominal Kustom)</b>\n\n"
+                "Ketik nominal Rupiah (Uang Asli) yang ingin Anda bayar via QRIS (contoh: <code>750000</code>):\n\n"
+                "<i>Minimal: Rp 5.000 (Maksimal: Rp 10.000.000)</i>",
+                reply_markup=cancel_markup,
+                parse_mode="HTML"
+            )
+
+        elif data.startswith("admin_treasury_qris_"):
+            amount = int(data.replace("admin_treasury_qris_", ""))
+            await generate_and_send_treasury_qris(update, context, amount)
 
         elif data == "admin_panel_referral":
             text = build_admin_referral_view(db)
@@ -3729,6 +3878,22 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
             )
             text, markup = build_admin_treasury_view(db)
             await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 5. Bot Treasury — Topup QRIS Kustom (Uang Asli)
+        if context.user_data.get("admin_awaiting_treasury_qris_custom"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits or int(clean_digits) < 5000:
+                await update.message.reply_text("❌ Minimal deposit QRIS adalah Rp 5.000. Silakan ketik angka kembali:")
+                return True
+
+            amount = int(clean_digits)
+            if amount > 10_000_000:
+                await update.message.reply_text("❌ Maksimal deposit QRIS adalah Rp 10.000.000 per transaksi (Limit BI). Silakan masukkan nominal yang lebih kecil:")
+                return True
+
+            context.user_data.pop("admin_awaiting_treasury_qris_custom", None)
+            await generate_and_send_treasury_qris(update, context, amount)
             return True
 
         # 5. Referral Configurations (Reward, Bonus, Min Trade)

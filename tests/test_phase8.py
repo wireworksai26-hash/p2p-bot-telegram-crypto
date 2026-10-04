@@ -387,6 +387,32 @@ class TestTopSpendersAndTreasuryFlow(unittest.TestCase):
         call_kwargs = query.edit_message_text.call_args[1]
         self.assertIn("KAS & DOMPET", call_kwargs["text"])
 
+    def test_build_admin_treasury_qris_menu(self):
+        from bot.handlers.admin import build_admin_treasury_qris_menu
+        text, markup = build_admin_treasury_qris_menu()
+        self.assertIn("TOP-UP KAS BOT VIA QRIS", text)
+        self.assertIn("UANG ASLI", text)
+        self.assertIsNotNone(markup)
+
+    def test_treasury_qris_complete_credits_treasury(self):
+        from main import _complete_topup
+        from database.models import TopupOrder
+        t_order = TopupOrder(
+            topup_id="TREASURY-TEST-001",
+            telegram_id=99999,
+            amount_idr=250000,
+            mdr_idr=750,
+            status="PENDING",
+        )
+        self.db.add(t_order)
+        self.db.commit()
+
+        asyncio.run(_complete_topup(self.db, t_order))
+
+        # Check treasury balance increased
+        bal = crud.get_bot_treasury_balance(self.db)
+        self.assertEqual(bal, 250000 - 750)
+
 
 if __name__ == "__main__":
     unittest.main()
