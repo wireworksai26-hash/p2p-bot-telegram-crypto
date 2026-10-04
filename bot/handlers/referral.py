@@ -91,8 +91,8 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"{min_trade_line}</i>"
         )
 
-        share_msg = "Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:"
-        share_url = f"https://t.me/share/url?url={quote(ref_link)}&text={quote(share_msg)}"
+        share_text = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\n{ref_link}"
+        share_url = f"https://t.me/share/url?url={quote(share_text)}"
 
         keyboard = [
             [InlineKeyboardButton("📤 Bagikan Link ke Teman", url=share_url)],

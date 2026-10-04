@@ -307,9 +307,9 @@ class TestReferralShareLink(unittest.TestCase):
         with open(ROOT / "bot" / "handlers" / "referral.py", "r", encoding="utf-8") as f:
             ref_code = f.read()
 
-        # share_msg should not concatenate ref_link inside the message text
-        self.assertIn('share_msg = "Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:"', ref_code)
-        self.assertNotIn('share_msg = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya: {ref_link}"', ref_code)
+        # share_text places the message on top and the link below cleanly
+        self.assertIn("share_text = f\"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\\n{ref_link}\"", ref_code)
+        self.assertIn("share_url = f\"https://t.me/share/url?url={quote(share_text)}\"", ref_code)
 
 
 if __name__ == "__main__":
