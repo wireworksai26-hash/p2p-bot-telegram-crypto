@@ -1054,10 +1054,18 @@ async def finalize_gopay_buy_payment(
                 **extra,
             )
             jejak = f"\nTX (broadcast): <code>{tx_hash_gagal}</code>" if tx_hash_gagal else ""
-            if result.get("explorer_url"):
-                jejak += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
+            pm = (getattr(order, "payment_method", "") or "").lower()
+            if pm in ("balance", "saldo"):
+                pay_label = "Saldo Bot"
+            elif pm in ("qris", "gopay"):
+                pay_label = "GoPay QRIS"
+            elif pm in ("bank", "manual_transfer", "bank_transfer"):
+                pay_label = "Transfer Bank"
+            else:
+                pay_label = (order.payment_method or "Manual").upper()
+
             admin_msg = (
-                f"🚨 <b>MANUAL REVIEW REQUIRED (GoPay QRIS)</b>\n\n"
+                f"🚨 <b>MANUAL REVIEW REQUIRED ({pay_label})</b>\n\n"
                 f"Order: <code>{order.order_id}</code>\n"
                 f"User: {order.telegram_id}\n"
                 f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
