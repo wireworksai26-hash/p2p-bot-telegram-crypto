@@ -605,32 +605,38 @@ def build_admin_emojis_view() -> str:
 # ─────────────────────────────────────────────────────────
 
 def build_admin_top_spenders_view(db, period_days: int = 30) -> str:
-    """Membangun teks leaderboard Top Spender."""
+    """Membangun teks leaderboard Top Spender yang transparan memuat daftar Top 10."""
     from services.campaign_service import TOP_SPENDER_REWARDS
     from bot.utils.formatter import format_idr
+    from html import escape as _esc
 
     top_spenders = crud.get_top_spenders(db, limit=10, period_days=period_days)
     total_pool = sum(TOP_SPENDER_REWARDS.get(i, 0) for i in range(1, 11))
+    period_label = f"{period_days} Hari Terakhir" if period_days > 0 else "Semua Waktu (All-Time)"
 
     lines = [
-        "🏆 <b>TOP SPENDER — LEADERBOARD TRANSAKSI</b>",
-        f"📅 Periode: <b>{period_days} Hari Terakhir</b> | Total Hadiah: <b>{format_idr(total_pool)}</b>\n",
+        f"{tg_emoji('TROPHY', '🏆')} <b>TOP SPENDER — LEADERBOARD TRANSAKSI TERBANYAK</b>",
+        f"📅 <b>Periode:</b> <code>{period_label}</code> | 💰 <b>Total Hadiah:</b> <code>{format_idr(total_pool)}</code>\n",
     ]
 
     if not top_spenders:
         lines.append("<i>Belum ada data transaksi pembelian selesai pada periode ini.</i>\n")
     else:
+        lines.append(f"📊 <b>Daftar Peringkat Top {len(top_spenders)} Spender Terbesar:</b>\n")
         for u in top_spenders:
             rank = u["rank"]
             reward = TOP_SPENDER_REWARDS.get(rank, 0)
-            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"<b>#{rank}</b>"
+            name_str = f" ({_esc(u['full_name'])})" if u.get("full_name") else ""
+            tx_str = f" • {u['tx_count']}x Transaksi" if u.get("tx_count") else ""
+            uname = f"@{_esc(u['username'])}" if u.get("username") and not u['username'].startswith("User_") else f"ID: {u['telegram_id']}"
             lines.append(
-                f"{medal} <b>@{u['username']}</b> (ID: <code>{u['telegram_id']}</code>)\n"
-                f"   ├── Volume : <b>{format_idr(u['total_spent_idr'])}</b>\n"
-                f"   └── Hadiah : <code>+{format_idr(reward)}</code>"
+                f"{medal} <b>{uname}</b>{name_str} (<code>{u['telegram_id']}</code>)\n"
+                f"   ├── 💸 <b>Total Volume :</b> <code>{format_idr(u['total_spent_idr'])}</code>{tx_str}\n"
+                f"   └── 🎁 <b>Alokasi Hadiah:</b> <code>+{format_idr(reward)}</code>\n"
             )
 
-    lines.append("\n💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
+    lines.append("💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
     return "\n".join(lines)
 
 
@@ -644,6 +650,7 @@ def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMa
             InlineKeyboardButton("📅 7 Hari", callback_data="admin_top_spender_p_7"),
             InlineKeyboardButton("📅 30 Hari", callback_data="admin_top_spender_p_30"),
             InlineKeyboardButton("📅 90 Hari", callback_data="admin_top_spender_p_90"),
+            InlineKeyboardButton("♾️ Semua", callback_data="admin_top_spender_p_0"),
         ],
         [
             InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_top_spender_p_{period_days}"),

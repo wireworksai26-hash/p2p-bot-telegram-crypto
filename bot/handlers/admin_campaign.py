@@ -179,6 +179,33 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             await query.edit_message_text(text, reply_markup=get_campaign_main_keyboard(), parse_mode="HTML")
             return
 
+        # Dompet & Kas Bot
+        if data in ("camp_treasury_view", "admin_panel_treasury"):
+            from bot.handlers.admin import build_admin_treasury_view
+            text, markup = build_admin_treasury_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            return
+
+        # Top Spender Leaderboard
+        if data == "admin_panel_top_spenders" or data.startswith("admin_top_spender_p_"):
+            from bot.handlers.admin import build_admin_top_spenders_view, build_admin_top_spenders_keyboard
+            period = 30
+            if data.startswith("admin_top_spender_p_"):
+                try:
+                    period = int(data.replace("admin_top_spender_p_", ""))
+                except Exception:
+                    period = 30
+            text = build_admin_top_spenders_view(db, period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            return
+
+        # Routing ke handler admin_panel untuk Undi Pemenang, Loyalty Setting, atau Dashboard Utama
+        if data in ("admin_panel_random_draw", "admin_panel_loyalty", "admin_panel_main") or data.startswith("admin_draw_") or data.startswith("admin_loyalty_"):
+            from bot.handlers.admin import admin_panel_callback
+            await admin_panel_callback(update, context)
+            return
+
         # Pemilihan template -> Tampilkan tombol budget
         if data.startswith("camp_tpl_"):
             tpl_key = data.replace("camp_tpl_", "")

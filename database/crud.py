@@ -1855,27 +1855,31 @@ def get_loyalty_eligible_users(db: Session) -> list[dict]:
 # ============================================================
 
 def get_top_spenders(
-    db: Session, limit: int = 10, period_days: int = 30
+    db: Session, limit: int = 10, period_days: Optional[int] = 30
 ) -> list[dict]:
     """
     Ambil top N spender berdasarkan total nominal transaksi COMPLETED dalam periode tertentu.
-    Return: [{rank, telegram_id, username, full_name, total_spent_idr}, ...]
+    Return: [{rank, telegram_id, username, full_name, total_spent_idr, tx_count}, ...]
     """
-    cutoff = datetime.utcnow() - timedelta(days=period_days)
+    filters = [
+        func.lower(Order.status) == "completed",
+        func.lower(Order.order_type) == "buy",
+        or_(User.is_banned == False, User.is_banned.is_(None)),  # noqa: E712
+    ]
+    if period_days and period_days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=period_days)
+        filters.append(Order.created_at >= cutoff)
+
     rows = (
         db.query(
             Order.telegram_id,
             User.username,
             User.full_name,
             func.sum(Order.total_idr).label("total_spent"),
+            func.count(Order.id).label("tx_count"),
         )
         .join(User, User.telegram_id == Order.telegram_id)
-        .filter(
-            func.lower(Order.status) == "completed",
-            Order.order_type == "buy",
-            Order.created_at >= cutoff,
-            or_(User.is_banned == False, User.is_banned.is_(None)),  # noqa: E712
-        )
+        .filter(*filters)
         .group_by(Order.telegram_id, User.username, User.full_name)
         .order_by(func.sum(Order.total_idr).desc())
         .limit(limit)
@@ -1889,6 +1893,7 @@ def get_top_spenders(
             "username": row[1] or f"User_{row[0]}",
             "full_name": row[2] or "",
             "total_spent_idr": int(row[3] or 0),
+            "tx_count": int(row[4] or 0),
         })
     return result
 

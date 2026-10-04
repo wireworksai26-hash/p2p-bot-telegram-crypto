@@ -315,5 +315,79 @@ class TestReferralShareLink(unittest.TestCase):
         self.assertIn("share_url = f\"https://t.me/share/url?url={quote(share_text)}\"", ref_code)
 
 
+class TestTopSpendersAndTreasuryFlow(unittest.TestCase):
+    """Test Top Spender 10-Rank Breakdown & Treasury Hub Callback."""
+
+    def setUp(self):
+        Base.metadata.create_all(bind=engine)
+        self.db = SessionLocal()
+        # Seed 10 buyers with different spending volumes
+        for i in range(1, 11):
+            t_id = 90000 + i
+            u = crud.create_user(self.db, telegram_id=t_id, username=f"trader_{i}", full_name=f"Trader #{i}")
+            crud.create_order(self.db, {
+                "order_id": f"ORD-TS-{i}",
+                "telegram_id": t_id,
+                "order_type": "buy",
+                "crypto_symbol": "USDT",
+                "network": "BSC",
+                "crypto_amount": Decimal(str(i * 10)),
+                "price_per_unit": 16000,
+                "nominal_idr": i * 1_000_000,
+                "fee_idr": 5000,
+                "total_idr": i * 1_000_000,
+                "status": "completed",
+            })
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+        Base.metadata.drop_all(bind=engine)
+
+    def test_get_top_10_spenders_ranking(self):
+        top = crud.get_top_spenders(self.db, limit=10, period_days=30)
+        self.assertEqual(len(top), 10)
+        # Highest volume first (trader_10 with 10_000_000)
+        self.assertEqual(top[0]["username"], "trader_10")
+        self.assertEqual(top[0]["total_spent_idr"], 10_000_000)
+        self.assertEqual(top[0]["rank"], 1)
+        self.assertEqual(top[0]["tx_count"], 1)
+        # 10th rank is trader_1 with 1_000_000
+        self.assertEqual(top[9]["username"], "trader_1")
+        self.assertEqual(top[9]["total_spent_idr"], 1_000_000)
+        self.assertEqual(top[9]["rank"], 10)
+
+    def test_build_admin_top_spenders_view_text(self):
+        from bot.handlers.admin import build_admin_top_spenders_view, build_admin_top_spenders_keyboard
+        text = build_admin_top_spenders_view(self.db, period_days=30)
+        self.assertIn("TOP SPENDER", text)
+        self.assertIn("@trader_10", text)
+        self.assertIn("@trader_1", text)
+        self.assertIn("10.000.000", text)
+        self.assertIn("Total Volume", text)
+
+        markup = build_admin_top_spenders_keyboard(period_days=30)
+        self.assertIsNotNone(markup)
+
+    def test_campaign_callback_treasury_view(self):
+        from bot.handlers.admin_campaign import campaign_callback_handler
+        update = MagicMock()
+        query = MagicMock()
+        query.data = "camp_treasury_view"
+        query.edit_message_text = AsyncMock()
+        query.answer = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 999
+        context = MagicMock()
+
+        with patch("bot.handlers.admin_campaign.is_admin", return_value=True):
+            asyncio.run(campaign_callback_handler(update, context))
+
+        query.edit_message_text.assert_called_once()
+        call_kwargs = query.edit_message_text.call_args[1]
+        self.assertIn("KAS & DOMPET", call_kwargs["text"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
