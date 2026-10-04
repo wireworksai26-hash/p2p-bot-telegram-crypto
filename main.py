@@ -1162,10 +1162,6 @@ async def main():
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
             bootstrap_retries=-1,
-            read_timeout=30.0,
-            write_timeout=20.0,
-            connect_timeout=15.0,
-            pool_timeout=15.0,
         )
 
         logger.info("=" * 50)
