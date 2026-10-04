@@ -1283,6 +1283,8 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # ─── BOT TREASURY / DOMPET BOT (Phase 8) ─────────────
         elif data == "admin_panel_treasury" or data == "camp_treasury_view":
+            context.user_data.pop("admin_awaiting_treasury_custom", None)
+            context.user_data.pop("admin_awaiting_treasury_set_manual", None)
             text, markup = build_admin_treasury_view(db)
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Kas bot dimuat.")
@@ -1298,9 +1300,14 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["admin_awaiting_treasury_custom"] = True
             context.user_data["admin_awaiting_treasury_set_manual"] = False
             await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="camp_treasury_view")]
+            ])
             await query.message.reply_text(
                 f"{tg_emoji('BANK', '🏦')} <b>Top Up Saldo Kas Bot Kustom</b>\n\n"
-                "Ketik nominal saldo yang ingin Anda tambahkan ke Kas Bot (contoh: <code>1500000</code>):",
+                "Ketik nominal saldo yang ingin Anda tambahkan ke Kas Bot (contoh: <code>1500000</code>):\n\n"
+                "<i>Minimal: Rp 1.000</i>",
+                reply_markup=cancel_markup,
                 parse_mode="HTML"
             )
 
@@ -1309,10 +1316,14 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data["admin_awaiting_treasury_custom"] = False
             curr_bal = crud.get_bot_treasury_balance(db)
             await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="camp_treasury_view")]
+            ])
             await query.message.reply_text(
                 f"⚙️ <b>Atur Ulang Saldo Kas Bot Manual</b>\n\n"
                 f"Saldo saat ini: <b>{format_idr(curr_bal)}</b>\n\n"
                 "Ketik angka saldo baru yang diinginkan (contoh: <code>5000000</code> atau <code>0</code>):",
+                reply_markup=cancel_markup,
                 parse_mode="HTML"
             )
 
