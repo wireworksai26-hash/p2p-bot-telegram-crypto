@@ -418,24 +418,32 @@ class TestCoinAPIMonitor(unittest.IsolatedAsyncioTestCase):
 
             mock_check.return_value = [down_res]
 
-            # 1. First run -> Should notify admins
+            # 1. DOWN pertama -> belum terkonfirmasi, diam (anti-flap).
+            await self.monitor.check_all_and_alert(mock_sender)
+            self.assertEqual(mock_notify.call_count, 0)
+
+            # 2. DOWN kedua beruntun -> ALARM terkonfirmasi.
             await self.monitor.check_all_and_alert(mock_sender)
             self.assertEqual(mock_notify.call_count, 1)
             alarm_call = mock_notify.call_args[0][1]
             self.assertIn("ALARM DETEKSI DINI", alarm_call)
             mock_notify.reset_mock()
 
-            # 2. Second run immediately -> Endpoint still DOWN, debounce prevents duplicate spam
+            # 3. DOWN ketiga beruntun -> debounce, tidak spam ulang.
             await self.monitor.check_all_and_alert(mock_sender)
             self.assertEqual(mock_notify.call_count, 0)
 
-            # 3. Third run -> Endpoint recovers to OK -> Should send recovery notification
+            # 4. OK sekali setelah DOWN -> belum terkonfirmasi pulih, diam.
             up_res = dict(down_res)
             up_res["status"] = "OK"
             up_res["latency_ms"] = 80
             up_res["block_info"] = "Block #30,000,000"
             mock_check.return_value = [up_res]
 
+            await self.monitor.check_all_and_alert(mock_sender)
+            self.assertEqual(mock_notify.call_count, 0)
+
+            # 5. OK kedua beruntun -> notifikasi PEMULIHAN.
             await self.monitor.check_all_and_alert(mock_sender)
             self.assertEqual(mock_notify.call_count, 1)
             recovery_call = mock_notify.call_args[0][1]
