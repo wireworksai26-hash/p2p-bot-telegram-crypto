@@ -33,6 +33,7 @@ os.environ.update({
     "ADMIN_CHAT_IDS": "999",
 })
 
+from config.settings import settings
 from database.connection import Base, engine, SessionLocal
 from database.models import User, Order, Campaign, CampaignDistribution, AuditLog
 from services.campaign_service import (
@@ -262,6 +263,8 @@ class TestCampaignHandlers(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
+        self._orig_admins = list(getattr(settings, "ADMIN_CHAT_IDS", []))
+        settings.ADMIN_CHAT_IDS = [999]
         self.db.add_all([
             User(telegram_id=301, username="alpha", balance_idr=Decimal("0"), is_banned=False),
             User(telegram_id=302, username="beta", balance_idr=Decimal("0"), is_banned=False),
@@ -295,6 +298,7 @@ class TestCampaignHandlers(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
     def tearDown(self):
+        settings.ADMIN_CHAT_IDS = self._orig_admins
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 

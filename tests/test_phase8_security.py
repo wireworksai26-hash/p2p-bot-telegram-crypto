@@ -28,6 +28,7 @@ os.environ.update({
     "EVM_PRIVATE_KEY": "",
 })
 
+from config.settings import settings
 from database.connection import Base, engine, SessionLocal
 from database.models import User, Order, AuditLog, Campaign, LoyaltyConfig
 from database import crud
@@ -70,6 +71,8 @@ class TestAdminSendBalanceSecurity(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
+        self._orig_admins = list(getattr(settings, "ADMIN_CHAT_IDS", []))
+        settings.ADMIN_CHAT_IDS = [999, 888]
         # Seed users
         self.db.add_all([
             User(telegram_id=101, username="satoshi", full_name="Satoshi N", balance_idr=Decimal("50000"), total_orders=3),
@@ -79,6 +82,7 @@ class TestAdminSendBalanceSecurity(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
     def tearDown(self):
+        settings.ADMIN_CHAT_IDS = self._orig_admins
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
@@ -177,8 +181,11 @@ class TestBotCampaignTreasurySecurity(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
+        self._orig_admins = list(getattr(settings, "ADMIN_CHAT_IDS", []))
+        settings.ADMIN_CHAT_IDS = [999, 888]
 
     def tearDown(self):
+        settings.ADMIN_CHAT_IDS = self._orig_admins
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
