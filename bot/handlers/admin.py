@@ -5,6 +5,8 @@ Berisi perintah dan kontrol administratif khusus untuk owner/admin bot.
 Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfirmasi order.
 """
 
+import os
+import html
 import asyncio
 import logging
 import re
@@ -1955,6 +1957,104 @@ async def test_testimony_command_handler(update: Update, context: ContextTypes.D
             f"3. Cari username bot Anda (<code>@{bot_username}</code>) dan tambahkan sebagai Admin dengan izin <b>Post Messages (Posting Pesan)</b>.",
             parse_mode="HTML",
         )
+
+
+async def resend_testimony_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /posttesti atau /resendtesti <ORDER_ID> untuk admin: kirim testimoni transaksi order ke channel."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "📌 <b>Format Perintah:</b>\n"
+            "<code>/posttesti &lt;ORDER_ID&gt;</code>\n\n"
+            "Contoh:\n"
+            "<code>/posttesti ORD-20261004-479</code>\n\n"
+            "💡 <i>Gunakan perintah ini untuk memposting testimoni order lama yang belum sempat masuk ke channel.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    order_id = args[0].strip()
+    db = SessionLocal()
+    try:
+        from database.models import Order
+        from services.testimony_service import post_transaction_testimony, DEFAULT_TESTIMONY_CHANNEL
+
+        order = db.query(Order).filter(Order.order_id == order_id).first()
+        if not order:
+            await update.message.reply_text(f"❌ Order <code>{html.escape(order_id)}</code> tidak ditemukan di database.", parse_mode="HTML")
+            return
+
+        channel_target = os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+        success = await post_transaction_testimony(context.bot, order, db=db, channel=channel_target)
+        if success:
+            await update.message.reply_text(
+                f"✅ <b>Testimoni Terkirim!</b>\n\n"
+                f"Order <code>{html.escape(order.order_id)}</code> ({order.crypto_amount} {order.crypto_symbol}) berhasil diposting ke channel <code>{channel_target}</code>.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Gagal Mengirim Testimoni:</b>\n\n"
+                f"Pastikan bot sudah menjadi Administrator di channel <code>{channel_target}</code> dengan hak akses <b>Post Messages</b>.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error(f"Error resend testimony {order_id}: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Terjadi kesalahan: {html.escape(str(e))}")
+    finally:
+        db.close()
+
+
+async def resend_recent_testimonies_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /postlasttesti [limit] untuk memposting transaksi completed terakhir ke channel testimoni."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    args = context.args or []
+    limit = 5
+    if args and args[0].isdigit():
+        limit = min(max(1, int(args[0])), 20)
+
+    db = SessionLocal()
+    try:
+        from database.models import Order
+        from services.testimony_service import post_transaction_testimony, DEFAULT_TESTIMONY_CHANNEL
+
+        orders = (
+            db.query(Order)
+            .filter(Order.status == "completed")
+            .order_by(Order.id.desc())
+            .limit(limit)
+            .all()
+        )
+
+        if not orders:
+            await update.message.reply_text("ℹ️ Tidak ada order completed yang ditemukan di database.")
+            return
+
+        channel_target = os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+        sent_count = 0
+        for o in reversed(orders):
+            ok = await post_transaction_testimony(context.bot, o, db=db, channel=channel_target)
+            if ok:
+                sent_count += 1
+            await asyncio.sleep(0.5)
+
+        await update.message.reply_text(
+            f"✅ <b>Selesai!</b>\n\n"
+            f"Berhasil memposting <b>{sent_count}/{len(orders)}</b> testimoni transaksi ke channel <code>{channel_target}</code>.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error resend recent testimonies: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Terjadi kesalahan: {html.escape(str(e))}")
+    finally:
+        db.close()
 
 
 

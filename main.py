@@ -510,9 +510,17 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("referral", referral_menu_handler))
     from bot.handlers.saved_accounts import show_saved_wallets_menu, show_saved_banks_menu
     application.add_handler(CommandHandler(["wallet", "dompet"], show_saved_wallets_menu))
-    from bot.handlers.admin import weekly_report_command_handler, test_testimony_command_handler, topup_bot_command_handler
+    from bot.handlers.admin import (
+        weekly_report_command_handler,
+        test_testimony_command_handler,
+        topup_bot_command_handler,
+        resend_testimony_command_handler,
+        resend_recent_testimonies_command_handler,
+    )
     application.add_handler(CommandHandler(["weeklyreport", "report"], weekly_report_command_handler))
     application.add_handler(CommandHandler(["testtesti", "testchannel"], test_testimony_command_handler))
+    application.add_handler(CommandHandler(["posttesti", "resendtesti"], resend_testimony_command_handler))
+    application.add_handler(CommandHandler(["postlasttesti", "resendlasttesti"], resend_recent_testimonies_command_handler))
     application.add_handler(CommandHandler(["topupbot", "saldobot", "dompetbot"], topup_bot_command_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
