@@ -76,6 +76,11 @@ class Order(Base):
     # Payment info
     payment_method = Column(String(30), nullable=True)   # 'GOPAY_QRIS', 'BOT_BALANCE'
     
+    # Referral Discount (Phase 7)
+    referral_discount_applied = Column(Boolean, default=False)           # True jika diskon referral diterapkan
+    referral_discount_pct = Column(Numeric(5, 2), nullable=True)         # Persen diskon yang diaplikasikan
+    discount_amount_idr = Column(BigInteger, default=0)                  # Nilai diskon dalam IDR
+
     # Status Machine (15 States)
     # DRAFT, QUOTED, WAITING_IDR_PAYMENT, WAITING_IDR_VERIFICATION, WAITING_CRYPTO_DEPOSIT,
     # CRYPTO_DETECTED, CRYPTO_CONFIRMED, PAYOUT_QUEUED, PAYOUT_PROCESSING,
@@ -199,4 +204,169 @@ class NotificationTarget(Base):
     chat_id = Column(String(32), nullable=False)
     thread_id = Column(String(32), nullable=True)  # id topik forum (None bila bukan forum)
     title = Column(String(150), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Referral(Base):
+    """Tracking referral: siapa yang invite siapa."""
+    __tablename__ = 'referrals'
+    __table_args__ = (
+        UniqueConstraint('referee_id', name='uq_referee_one_referrer'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    referrer_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    referee_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, unique=True)
+    status = Column(String(20), default='PENDING', nullable=False)
+    # PENDING = referee belum transaksi, COMPLETED = reward sudah diberikan
+    reward_idr = Column(BigInteger, default=0)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReferralConfig(Base):
+    """Konfigurasi referral program (reward amount, enabled flag, dll)."""
+    __tablename__ = 'referral_config'
+
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Campaign(Base):
+    """Campaign & Giveaway: wadah promosi dan bagi-bagi saldo bot."""
+    __tablename__ = 'campaigns'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    campaign_code = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(150), nullable=False)
+    template_type = Column(String(50), default='CUSTOM', nullable=False)
+    mode = Column(String(30), nullable=False)  # 'EQUAL_SPLIT', 'RANDOM', 'MILESTONE'
+    target_segment = Column(String(30), default='ALL', nullable=False)  # 'ALL', 'BUYERS', 'ACTIVE'
+    total_pool = Column(BigInteger, nullable=False)  # Batas maksimal anggaran (Hard Budget Cap)
+    max_winners = Column(Integer, nullable=True)  # Batas jumlah pemenang (kuota)
+    reward_per_winner = Column(BigInteger, nullable=True)
+    milestone_metric = Column(String(30), nullable=True)  # 'VOLUME_IDR', 'TX_COUNT'
+    min_metric_value = Column(BigInteger, default=0)
+    custom_message = Column(String(1000), nullable=True)  # Template pesan notifikasi custom
+    status = Column(String(20), default='DRAFT', nullable=False, index=True)  # 'DRAFT', 'COMPLETED', 'CANCELLED'
+    distributed_amount = Column(BigInteger, default=0)  # Total rupiah yang terdistribusi
+    distributed_count = Column(Integer, default=0)  # Total user yang menerima
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    executed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    distributions = relationship("CampaignDistribution", back_populates="campaign", cascade="all, delete-orphan")
+
+
+class CampaignDistribution(Base):
+    """Catatan riwayat distribusi saldo per user dalam campaign."""
+    __tablename__ = 'campaign_distributions'
+    __table_args__ = (
+        UniqueConstraint('campaign_id', 'telegram_id', name='uq_campaign_user'),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    campaign_id = Column(Integer, ForeignKey('campaigns.id'), nullable=False, index=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    amount_idr = Column(BigInteger, nullable=False)
+    rank = Column(Integer, nullable=True)
+    metric_value = Column(BigInteger, nullable=True)
+    status = Column(String(20), default='SUCCESS', nullable=False)
+    notified = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    campaign = relationship("Campaign", back_populates="distributions")
+
+
+class UserSavedWallet(Base):
+    """Menyimpan alamat wallet crypto milik user agar bisa dipilih instan saat Beli."""
+    __tablename__ = 'user_saved_wallets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    label = Column(String(50), nullable=True)
+    network = Column(String(30), nullable=True)      # BSC, ETH, SOLANA, TRON, SUI, TON, BTC, dll.
+    chain_type = Column(String(20), nullable=True)   # 'EVM', 'SOLANA', 'TRON', 'SUI', 'TON', 'BITCOIN'
+    wallet_address = Column(String(250), nullable=False)
+    is_default = Column(Boolean, default=False)      # Wallet default untuk chain_type ini
+    auto_detected = Column(Boolean, default=False)   # True jika jaringan dideteksi otomatis dari format alamat
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="saved_wallets")
+
+
+class UserSavedBank(Base):
+    """Menyimpan rekening bank & e-wallet user untuk pencairan dana saat Jual."""
+    __tablename__ = 'user_saved_banks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    bank_name = Column(String(50), nullable=False)  # BCA, Mandiri, BRI, BNI, Seabank, GoPay, OVO, DANA, ShopeePay, etc.
+    account_number = Column(String(50), nullable=False)  # Nomor rekening atau nomor HP e-wallet
+    account_name = Column(String(100), nullable=False)  # Nama pemilik rekening
+    account_type = Column(String(20), default='BANK', nullable=False)  # 'BANK' atau 'EWALLET'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="saved_banks")
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 7: Advanced Rewards, Loyalty & Enhanced Wallet
+# ─────────────────────────────────────────────────────────
+
+class ReferralDiscount(Base):
+    """
+    Pelacak sisa quota diskon 10% untuk referrer yang berhasil mengundang user baru.
+    Dibuat otomatis saat referee menyelesaikan transaksi pertama.
+    """
+    __tablename__ = 'referral_discounts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, unique=True, index=True)
+    remaining_uses = Column(Integer, default=10, nullable=False)   # Sisa slot diskon (mulai dari 10)
+    discount_pct = Column(Numeric(5, 2), default=10.0, nullable=False)  # Default 10%
+    activated_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)    # Opsional: bisa dibatasi waktu oleh admin
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="referral_discount")
+
+
+class LoyaltyReward(Base):
+    """
+    Reward loyalitas berbasis time-window: jika user transaksi >= N kali
+    dalam rentang M hari, maka mendapat reward saldo bot.
+    Setiap user bisa punya banyak windows (satu per periode).
+    """
+    __tablename__ = 'loyalty_rewards'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    window_start = Column(DateTime, nullable=False)    # Hari ke-1 transaksi pertama dalam window ini
+    window_end = Column(DateTime, nullable=False)      # Batas akhir window (window_start + M hari)
+    tx_count_in_window = Column(Integer, default=0)   # Jumlah transaksi yang sudah tercatat
+    qualified = Column(Boolean, default=False)         # True = sudah memenuhi syarat (>= min_tx_count)
+    reward_idr = Column(BigInteger, nullable=True)     # Besaran reward yang diberikan (setelah lolos)
+    rewarded_at = Column(DateTime, nullable=True)      # Kapan reward dikreditkan
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationship
+    user = relationship("User", backref="loyalty_rewards")
+
+
+class LoyaltyConfig(Base):
+    """Konfigurasi program loyalty yang dapat diubah oleh admin via panel."""
+    __tablename__ = 'loyalty_config'
+
+    # Default keys: loyalty_enabled, window_days, min_tx_count, reward_amount_idr, min_tx_amount_idr
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

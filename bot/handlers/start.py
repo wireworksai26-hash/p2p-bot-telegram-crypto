@@ -163,6 +163,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Handler untuk command /start.
     Mendaftarkan user ke database jika baru, mereset state percakapan lama,
     kemudian mengirim welcome message & dashboard menu.
+    Mendukung deep-link referral: /start ref_<TELEGRAM_ID>
     """
     try:
         user = update.effective_user
@@ -179,6 +180,53 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 username=user.username,
                 full_name=user.full_name
             )
+
+            # Deep-link referral detection
+            if context.args and context.args[0].startswith("ref_"):
+                try:
+                    referrer_id = int(context.args[0].replace("ref_", ""))
+                    if referrer_id != user.id:  # Tidak bisa refer diri sendiri
+                        from database.crud import create_referral, get_referral_by_referee, get_referral_config
+                        existing_ref = get_referral_by_referee(db, user.id)
+                        if not existing_ref:
+                            ref = create_referral(db, referrer_id, user.id)
+                            if ref:
+                                reward_cfg = get_referral_config(db, "reward_per_referral")
+                                reward_idr = int(reward_cfg) if reward_cfg else 5000
+                                bonus_cfg = get_referral_config(db, "referee_discount_idr")
+                                bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+                                min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
+                                min_trade_idr = int(min_trade_cfg) if min_trade_cfg else 0
+
+                                min_trade_note = f" minimal <b>Rp {min_trade_idr:,}</b>" if min_trade_idr > 0 else ""
+
+                                # Notifikasi ke referee (user baru) jika ada potongan/bonus
+                                if bonus_idr > 0:
+                                    try:
+                                        await update.message.reply_text(
+                                            f"🎁 <b>Selamat Datang!</b>\n\n"
+                                            f"Anda bergabung lewat link undangan teman.\n"
+                                            f"Dapatkan potongan / bonus cashback saldo sebesar <b>Rp {bonus_idr:,}</b> "
+                                            f"setelah Anda menyelesaikan transaksi pertama{min_trade_note} Anda!",
+                                            parse_mode="HTML"
+                                        )
+                                    except Exception:
+                                        pass
+
+                                # Notifikasi ke referrer
+                                try:
+                                    await context.bot.send_message(
+                                        referrer_id,
+                                        f"🎉 <b>Referral Baru!</b>\n\n"
+                                        f"Teman baru bergabung via link referral Anda.\n"
+                                        f"Reward <b>Rp {reward_idr:,}</b> akan otomatis masuk ke saldo Anda "
+                                        f"setelah mereka menyelesaikan transaksi pertama{min_trade_note}!",
+                                        parse_mode="HTML",
+                                    )
+                                except Exception:
+                                    pass
+                except (ValueError, TypeError):
+                    pass  # Invalid referral link, ignore silently
         finally:
             db.close()
             
@@ -224,6 +272,65 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data in ["menu_balance", "show_balance"]:
         from bot.handlers.balance import show_balance_menu
         await show_balance_menu(update, context)
+
+    elif data in ["buy_saved_wallets", "menu_saved_wallets"]:
+        back_target = "buy_back_to_menu" if data == "buy_saved_wallets" else "menu_balance"
+        from bot.handlers.saved_accounts import show_saved_wallets_menu
+        await show_saved_wallets_menu(update, context, back_callback=back_target)
+
+    elif data in ["sell_saved_banks", "menu_saved_banks"]:
+        back_target = "sell_back_to_menu" if data == "sell_saved_banks" else "menu_balance"
+        from bot.handlers.saved_accounts import show_saved_banks_menu
+        await show_saved_banks_menu(update, context, back_callback=back_target)
+
+    elif data == "buy_back_to_menu":
+        from bot.handlers.buy import start_buy_callback
+        await start_buy_callback(update, context)
+
+    elif data == "sell_back_to_menu":
+        from bot.handlers.sell import start_sell_callback
+        await start_sell_callback(update, context)
+
+    elif data == "act_add_saved_wallet":
+        from bot.handlers.saved_accounts import prompt_add_saved_wallet
+        await prompt_add_saved_wallet(update, context)
+
+    elif data.startswith("act_add_wallet_"):
+        from bot.handlers.saved_accounts import prompt_add_wallet_specific
+        await prompt_add_wallet_specific(update, context)
+
+    elif data == "act_set_default_wallet_menu":
+        from bot.handlers.saved_accounts import show_set_default_wallet_menu
+        await show_set_default_wallet_menu(update, context)
+
+    elif data.startswith("act_set_default_"):
+        from bot.handlers.saved_accounts import handle_set_default_wallet_action
+        await handle_set_default_wallet_action(update, context)
+
+    elif data.startswith("act_evm_chain_"):
+        from bot.handlers.saved_accounts import handle_confirm_evm_chain
+        await handle_confirm_evm_chain(update, context)
+
+    elif data == "act_add_saved_bank":
+        from bot.handlers.saved_accounts import prompt_add_saved_bank
+        await prompt_add_saved_bank(update, context)
+
+    elif data == "act_del_saved_wallet_menu":
+        from bot.handlers.saved_accounts import show_delete_wallet_menu
+        await show_delete_wallet_menu(update, context)
+
+    elif data.startswith("act_del_wallet_"):
+        from bot.handlers.saved_accounts import handle_delete_wallet_action
+        await handle_delete_wallet_action(update, context)
+
+    elif data == "act_del_saved_bank_menu":
+        from bot.handlers.saved_accounts import show_delete_bank_menu
+        await show_delete_bank_menu(update, context)
+
+    elif data.startswith("act_del_bank_"):
+        from bot.handlers.saved_accounts import handle_delete_bank_action
+        await handle_delete_bank_action(update, context)
+
         
     elif data == "menu_buy":
         from bot.handlers.buy import start_buy_callback
@@ -297,9 +404,27 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import sellorders_handler
         await sellorders_handler(update, context)
 
-    elif data.startswith("admin_panel_"):
-        from bot.handlers.admin import admin_panel_callback
-        await admin_panel_callback(update, context)
+    elif (
+        data.startswith("admin_panel_")
+        or data.startswith("admin_send_bal_")
+        or data.startswith("admin_treasury_")
+        or data.startswith("admin_ref_")
+        or data.startswith("admin_top_spender_")
+        or data.startswith("admin_draw_")
+        or data.startswith("admin_loyalty_")
+        or data.startswith("admin_weekly_")
+        or data.startswith("admin_export_")
+    ):
+        if data == "admin_panel_campaign":
+            from bot.handlers.admin_campaign import campaign_callback_handler
+            await campaign_callback_handler(update, context)
+        else:
+            from bot.handlers.admin import admin_panel_callback
+            await admin_panel_callback(update, context)
+
+    elif data.startswith("camp_"):
+        from bot.handlers.admin_campaign import campaign_callback_handler
+        await campaign_callback_handler(update, context)
 
     elif data == "menu_price":
         from bot.handlers.price import show_prices
@@ -316,6 +441,14 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "menu_stocks" or data.startswith("menu_stocks_page_"):
         from bot.handlers.stocks import show_stocks
         await show_stocks(update, context)
+
+    elif data == "menu_referral":
+        from bot.handlers.referral import referral_menu_handler
+        await referral_menu_handler(update, context)
+
+    elif data == "referral_leaderboard":
+        from bot.handlers.referral import referral_leaderboard_handler
+        await referral_leaderboard_handler(update, context)
         
     elif data == "menu_history":
         from bot.handlers.history import show_history

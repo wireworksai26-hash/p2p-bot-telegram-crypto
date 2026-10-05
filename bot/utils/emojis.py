@@ -68,6 +68,9 @@ DEFAULT_EMOJI_IDS = {
     "SPARKLES":   "5472164874886846699",  # ✨ (RestrictedEmoji — animated sparkles)
     "STAR":       "5235579393115438657",  # ⭐️ (Forum — animated star)
     "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
+    "GIFT":       "5438647000851543789",  # 🎁 (Forum — animated gift)
+    "TROPHY":     "5465465407748972580",  # 🏆 (Forum — animated trophy)
+    "BANK":       "5348227245599105972",  # 🏦 (Forum — animated bank/treasury)
 
     # Dollar emoji verified through Telegram metadata. Other assets use a
     # universal coin until an admin selects a visually verified custom logo.
@@ -142,6 +145,9 @@ DEFAULT_EMOJI_ALTS = {
     "SPARKLES": "✨",
     "STAR": "⭐️",
     "PARTY": "🎉",
+    "GIFT": "🎁",
+    "TROPHY": "🏆",
+    "BANK": "🏦",
 
     # Coins
     "COIN_USDT": "🟢",
@@ -377,6 +383,7 @@ E_VERIFIED = lambda: tg_emoji("VERIFIED", "✅")
 E_CHART = lambda: tg_emoji("CHART", "📈")
 E_CHART_UP = lambda: tg_emoji("CHART_UP", "📈")
 E_MONEY = lambda: tg_emoji("MONEY_BAG", "💰")
+E_MONEY_BAG = lambda: tg_emoji("MONEY_BAG", "💰")
 E_DOLLAR = lambda: tg_emoji("DOLLAR", "💸")
 E_CARD = lambda: tg_emoji("CARD", "💼")
 E_COIN = lambda: tg_emoji("COIN", "🪙")
@@ -395,6 +402,9 @@ E_SPARKLES = lambda: tg_emoji("SPARKLES", "✨")
 E_FIRE = lambda: tg_emoji("FIRE", "🔥")
 E_STAR = lambda: tg_emoji("STAR", "⭐️")
 E_PARTY = lambda: tg_emoji("PARTY", "🎉")
+E_GIFT = lambda: tg_emoji("GIFT", "🎁")
+E_TROPHY = lambda: tg_emoji("TROPHY", "🏆")
+E_BANK = lambda: tg_emoji("BANK", "🏦")
 E_TAG = lambda: tg_emoji("TAG", "🏷️")
 E_ID = lambda: tg_emoji("ID_BADGE", "🆔")
 E_BACK = lambda: tg_emoji("BACK", "🔙")

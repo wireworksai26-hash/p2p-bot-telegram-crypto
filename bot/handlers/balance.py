@@ -81,6 +81,10 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("Topup Saldo (QRIS)", callback_data="start_topup_qris", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PLUS", "5204256218100547827"))],
+        [
+            InlineKeyboardButton("👛 Alamat Wallet", callback_data="menu_saved_wallets"),
+            InlineKeyboardButton("🏦 Rekening Pencairan", callback_data="menu_saved_banks"),
+        ],
         [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
         [get_owner_button()]
     ]
@@ -301,18 +305,37 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 pass
             # Pajak QRIS tidak masuk saldo (merchant yang menanggung ke GoPay).
             topup_mdr = int(topup.mdr_idr or 0)
-            new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr - topup_mdr)
-            mdr_credit_line = f"\n🧾 Pajak QRIS 0,3%: -{format_idr(topup_mdr)}" if topup_mdr else ""
+            net_amt = topup.amount_idr - topup_mdr
 
-            success_text = (
-                f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI!</b>\n\n"
-                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr - topup_mdr)}</b> telah berhasil masuk!"
-                f"{mdr_credit_line}\n"
-                f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
-                f"<i>Terima kasih! Anda dapat langsung menggunakan saldo ini untuk membeli crypto secara instan.</i>"
-            )
-            keyboard = [[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]
-            await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            if str(topup.topup_id).startswith("TREASURY-") or str(topup.topup_id).startswith("TOPUP-TREASURY-"):
+                from database.crud import topup_bot_treasury
+                from bot.utils.emojis import tg_emoji
+                new_treasury_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+                success_text = (
+                    f"{tg_emoji('BANK', '🏦')} ✅ <b>PEMBAYARAN QRIS KAS BOT TERVERIFIKASI!</b>\n\n"
+                    f"🎉 Top up kas bot sebesar <b>{format_idr(net_amt)}</b> telah berhasil masuk!\n"
+                    f"💰 <b>Total Saldo Kas Bot Sekarang:</b> <b>{format_idr(new_treasury_bal)}</b>\n\n"
+                    f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>"
+                )
+                keyboard = [
+                    [InlineKeyboardButton("🎁 Buka Wizard Campaign", callback_data="admin_panel_campaign")],
+                    [InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="camp_treasury_view")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ]
+                await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            else:
+                new_bal = credit_user_balance(db, topup.telegram_id, net_amt)
+                mdr_credit_line = f"\n🧾 Pajak QRIS 0,3%: -{format_idr(topup_mdr)}" if topup_mdr else ""
+
+                success_text = (
+                    f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI!</b>\n\n"
+                    f"🎉 Topup saldo sebesar <b>{format_idr(net_amt)}</b> telah berhasil masuk!"
+                    f"{mdr_credit_line}\n"
+                    f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
+                    f"<i>Terima kasih! Anda dapat langsung menggunakan saldo ini untuk membeli crypto secara instan.</i>"
+                )
+                keyboard = [[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]
+                await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
             # Pembayaran belum terdeteksi saat tombol diklik (karena delay sync 10-30s)
             not_found_text = (

@@ -51,6 +51,8 @@ STOCK_ASSETS = [
     ("BERA", "BERA"),
     ("HYPE", "HYPEREVM"),
     ("USDG", "ROBINHOOD"),
+    ("USDC", "MORPH"),
+    ("ETH", "MORPH"),
     # --- Non-EVM: native + token ---
     ("SOL", "SOLANA"),
     ("USDT", "SOLANA"),

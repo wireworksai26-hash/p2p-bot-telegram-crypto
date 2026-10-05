@@ -115,6 +115,13 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return SELECT_SYMBOL
 
 
+async def sell_open_saved_banks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Membuka menu Rekening Pencairan langsung dari alur Jual."""
+    from bot.handlers.saved_accounts import show_saved_banks_menu
+    await show_saved_banks_menu(update, context, back_callback="sell_back_to_menu")
+    return SELECT_SYMBOL
+
+
 async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Tahap 1 Jual: Menyimpan simbol koin, lalu menampilkan pilihan jaringan."""
     query = update.callback_query
@@ -241,6 +248,25 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         [get_owner_button()]
     ]
 
+    # Ambil daftar rekening bank & e-wallet tersimpan milik user
+    user_id = update.effective_user.id
+    db_saved = SessionLocal()
+    try:
+        from database.crud import get_user_saved_banks
+        saved_banks = get_user_saved_banks(db_saved, user_id)
+    finally:
+        db_saved.close()
+
+    saved_bank_buttons = []
+    for sb in saved_banks:
+        icon = "📱" if sb.account_type == "EWALLET" else "🏦"
+        lbl = f"{icon} Gunakan: {sb.bank_name} - {sb.account_number} ({sb.account_name})"
+        if len(lbl) > 42:
+            lbl = f"{icon} {sb.bank_name} - {sb.account_number} ({sb.account_name[:10]}...)"
+        saved_bank_buttons.append([InlineKeyboardButton(lbl, callback_data=f"sell_saved_bank_{sb.id}")])
+
+    input_bank_keyboard = saved_bank_buttons + keyboard
+
     await update.message.reply_text(
         text=(
             f"🪙 <b>Simulasi Perhitungan Penjualan:</b>\n"
@@ -251,16 +277,74 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"• <b>Nominal Bersih Anda Terima:</b> <b>{format_idr(net_nominal_idr)}</b>\n\n"
             f"Silakan ketik detail <b>Rekening Bank / E-Wallet Penerima</b> Anda.\n"
             f"<i>Format bebas, disarankan: Nama Bank, No Rekening, Atas Nama.</i>\n"
-            f"<i>(Contoh: BCA, 882049281, Budi Santoso)</i>"
+            f"<i>(Contoh: BCA, 882049281, Budi Santoso)</i>\n"
+            f"<i>(Contoh: GOPAY, 081234567890, Budi Santoso)</i>"
         ),
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(input_bank_keyboard),
         parse_mode="HTML"
     )
     return INPUT_BANK
 
 
+async def _proceed_to_sell_confirmation(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    bank_name: str,
+    bank_acc: str,
+    bank_holder: str
+) -> int:
+    """Helper untuk menyusun ringkasan penjualan dan menampilkan tombol Konfirmasi Jual."""
+    context.user_data["sell_bank_name"] = bank_name
+    context.user_data["sell_bank_acc"] = bank_acc
+    context.user_data["sell_bank_holder"] = bank_holder
+
+    order_id = generate_order_id()
+    context.user_data["sell_order_id"] = order_id
+
+    crypto_amount = context.user_data["sell_crypto_amount"]
+    symbol = context.user_data["sell_symbol"]
+    network = context.user_data["sell_network"]
+    price_per_unit = context.user_data["sell_price_per_unit"]
+    fee_idr = context.user_data["sell_fee_idr"]
+    net_idr = context.user_data["sell_net_idr"]
+
+    summary = ORDER_SUMMARY_SELL.format(
+        order_id=order_id,
+        crypto_amount_str=format_crypto(crypto_amount, symbol),
+        network=network,
+        price_per_unit_str=format_idr(price_per_unit),
+        nominal_idr_str=format_idr(net_idr),
+        fee_idr_str=format_idr(fee_idr),
+        bank_name=bank_name,
+        bank_acc=bank_acc,
+        bank_holder=bank_holder
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("Konfirmasi Jual", callback_data="sell_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
+            InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+        ],
+        [get_owner_button()]
+    ]
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text=summary,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            text=summary,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    return CONFIRM_ORDER
+
+
 async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Menyimpan detail rekening bank dan menyajikan summary order."""
+    """Menyimpan detail rekening bank yang diketik manual dan menyajikan summary order."""
     bank_info = update.message.text.strip()
 
     # Batas panjang: data bank digabung ke Order.buyer_wallet (String(250))
@@ -300,51 +384,64 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Coba mem-parse bank info dengan koma
     parts = [p.strip() for p in bank_info.split(",") if p.strip()]
     if len(parts) >= 3:
-        context.user_data["sell_bank_name"] = parts[0]
-        context.user_data["sell_bank_acc"] = parts[1]
-        context.user_data["sell_bank_holder"] = " ".join(parts[2:])
+        bank_name = parts[0]
+        bank_acc = parts[1]
+        bank_holder = " ".join(parts[2:])
+
+        # Auto-save ke database agar user bisa 1-Tap pada transaksi berikutnya
+        user_id = update.effective_user.id
+        db = SessionLocal()
+        try:
+            from database.crud import save_user_bank
+            save_user_bank(db, user_id, bank_name, bank_acc, bank_holder)
+        except Exception as exc:
+            logger.debug(f"Auto save bank error: {exc}")
+        finally:
+            db.close()
     else:
         # Jika format tidak pakai koma, simpan sebagai string utuh
-        context.user_data["sell_bank_name"] = "Bank Lokal"
-        context.user_data["sell_bank_acc"] = bank_info
-        context.user_data["sell_bank_holder"] = update.effective_user.first_name
+        bank_name = "Bank Lokal"
+        bank_acc = bank_info
+        bank_holder = update.effective_user.first_name
 
-    order_id = generate_order_id()
-    context.user_data["sell_order_id"] = order_id
-    
-    crypto_amount = context.user_data["sell_crypto_amount"]
-    symbol = context.user_data["sell_symbol"]
-    network = context.user_data["sell_network"]
-    price_per_unit = context.user_data["sell_price_per_unit"]
-    fee_idr = context.user_data["sell_fee_idr"]
-    net_idr = context.user_data["sell_net_idr"]
-    
-    summary = ORDER_SUMMARY_SELL.format(
-        order_id=order_id,
-        crypto_amount_str=format_crypto(crypto_amount, symbol),
-        network=network,
-        price_per_unit_str=format_idr(price_per_unit),
-        nominal_idr_str=format_idr(net_idr),
-        fee_idr_str=format_idr(fee_idr),
-        bank_name=context.user_data["sell_bank_name"],
-        bank_acc=context.user_data["sell_bank_acc"],
-        bank_holder=context.user_data["sell_bank_holder"]
+    return await _proceed_to_sell_confirmation(
+        update=update,
+        context=context,
+        bank_name=bank_name,
+        bank_acc=bank_acc,
+        bank_holder=bank_holder
     )
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Konfirmasi Jual", callback_data="sell_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
-            InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
-        ],
-        [get_owner_button()]
-    ]
-    
-    await update.message.reply_text(
-        text=summary,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
+
+
+async def handle_saved_bank_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Menggunakan rekening tersimpan yang dipilih melalui tombol inline."""
+    query = update.callback_query
+    await query.answer()
+
+    bank_id = int(query.data.replace("sell_saved_bank_", ""))
+    user_id = update.effective_user.id
+
+    db = SessionLocal()
+    try:
+        from database.crud import get_saved_bank_by_id
+        sb = get_saved_bank_by_id(db, bank_id, user_id)
+        if not sb:
+            await query.answer("Rekening tidak ditemukan atau sudah dihapus.", show_alert=True)
+            return INPUT_BANK
+        bank_name = sb.bank_name
+        bank_acc = sb.account_number
+        bank_holder = sb.account_name
+    finally:
+        db.close()
+
+    return await _proceed_to_sell_confirmation(
+        update=update,
+        context=context,
+        bank_name=bank_name,
+        bank_acc=bank_acc,
+        bank_holder=bank_holder
     )
-    return CONFIRM_ORDER
+
 
 
 async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -758,6 +855,8 @@ sell_conversation_handler = ConversationHandler(
     states={
         SELECT_SYMBOL: [
             CallbackQueryHandler(handle_symbol_selection, pattern="^sell_sym_[A-Z0-9]+$"),
+            CallbackQueryHandler(sell_open_saved_banks, pattern="^sell_saved_banks$"),
+            CallbackQueryHandler(start_sell_callback, pattern="^sell_back_to_menu$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
         ],
@@ -774,6 +873,7 @@ sell_conversation_handler = ConversationHandler(
         ],
         INPUT_BANK: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bank_input),
+            CallbackQueryHandler(handle_saved_bank_selection, pattern="^sell_saved_bank_[0-9]+$"),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],

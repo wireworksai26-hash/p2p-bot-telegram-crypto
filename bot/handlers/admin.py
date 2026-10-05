@@ -7,15 +7,17 @@ Termasuk broadcast, statistik, set spread, un/ban, list pending order, dan konfi
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, BadRequest
 from telegram.ext import ContextTypes
 
 from config.settings import settings
 from database.connection import SessionLocal
 from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, TopupOrder
 from database import crud
+from html import escape as _esc
 from services.crypto_sender import CryptoSenderFactory
 from bot.utils.formatter import format_idr, format_crypto
 from bot.utils.emojis import (
@@ -43,23 +45,34 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         [InlineKeyboardButton("📥 Dashboard Jual Crypto", callback_data="admin_sellorders_0")],
         [
             InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
+            InlineKeyboardButton("📑 Rekap Mingguan (Sheets)", callback_data="admin_panel_weekly_report"),
+        ],
+        [
+            InlineKeyboardButton("💳 Kirim Saldo User", callback_data="admin_panel_send_balance"),
+            InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="admin_panel_treasury"),
+        ],
+        [
             InlineKeyboardButton(order_label, callback_data="admin_panel_orders"),
+            InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Pusat Campaign, Giveaway & Loyalty", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🔗 Referral Program", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
         ],
         [
             InlineKeyboardButton("💼 Hot Wallets & Saldo", callback_data="admin_panel_wallets"),
             InlineKeyboardButton("🔄 Sync On-Chain", callback_data="admin_panel_sync_wallets"),
         ],
         [
-            InlineKeyboardButton("📜 Audit Trail Log", callback_data="admin_panel_audit"),
-            InlineKeyboardButton("⚙️ Pengaturan Spread", callback_data="admin_panel_spread"),
-        ],
-        [
-            InlineKeyboardButton("👥 Kelola User", callback_data="admin_panel_users"),
             InlineKeyboardButton("📢 Broadcast Pesan", callback_data="admin_panel_broadcast"),
+            InlineKeyboardButton("📜 Audit Trail Log", callback_data="admin_panel_audit"),
         ],
         [
-            InlineKeyboardButton("📡 Status API & URL Koin", callback_data="admin_panel_check_apis"),
             InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
+            InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
         ],
         [
             InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
@@ -74,6 +87,7 @@ def build_admin_dashboard_text(db) -> str:
     total_users = crud.get_user_count(db)
     pending_count = crud.get_pending_orders_count(db)
     completed_all = crud.get_completed_order_count(db)
+    bot_treasury = crud.get_bot_treasury_balance(db)
     
     now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
     
@@ -84,6 +98,7 @@ def build_admin_dashboard_text(db) -> str:
         f"🕒 <i>Status Update: {now_str}</i>\n\n"
         f"🚦 <b>Kondisi Operasional:</b> {status_indicator}\n"
         f"├── 👥 <b>Total Pengguna:</b> <code>{total_users:,} Member</code>\n"
+        f"├── 🏦 <b>Kas Dompet Bot:</b> <code>{format_idr(bot_treasury)}</code>\n"
         f"├── 🛒 <b>Order Hari Ini:</b> <code>{stats['total_orders_today']} Order</code>\n"
         f"├── ✅ <b>Total Sukses (All-Time):</b> <code>{completed_all:,} Transaksi</code>\n"
         f"├── 💳 <b>Volume Hari Ini:</b> <code>{format_idr(stats['total_volume_idr_today'])}</code>\n"
@@ -356,17 +371,217 @@ def build_admin_broadcast_view() -> str:
         "Fitur ini memungkinkan Anda mengirimkan siaran pesan resmi ke seluruh pengguna bot secara serentak.\n\n"
         "📝 <b>Format Perintah:</b>\n"
         "<code>/broadcast [PESAN PENGUMUMAN]</code>\n\n"
-        "🖼️ <b>Siaran bergambar (ready coin / campaign):</b>\n"
+        "🎯 <b>Broadcast ke Segmen Tertentu:</b>\n"
+        "<code>/broadcast --all [PESAN]</code>  — Semua user\n"
+        "<code>/broadcast --active [PESAN]</code> — User aktif 30 hari\n"
+        "<code>/broadcast --buyers [PESAN]</code> — User yang pernah transaksi\n"
+        "<code>/broadcast --balance [PESAN]</code> — User yang punya saldo\n\n"
+        "🪙 <b>Siaran Otomatis Koin Ready:</b>\n"
+        "<code>/broadcast --ready [JARINGAN]</code>\n"
+        "Contoh: <code>/broadcast --ready Morph</code> atau <code>/broadcast --ready Base</code>\n"
+        "<i>Bot otomatis menyusun daftar koin aktif untuk jaringan tersebut.</i>\n\n"
+        "🖼️ <b>Siaran Bergambar (Poster / Logo):</b>\n"
         "• Kirim poster sebagai FOTO dengan caption diawali <code>/broadcast ...</code>, ATAU\n"
         "• Reply foto poster dengan <code>/broadcast ...</code>.\n"
-        "Contoh caption: <code>/broadcast USDC jaringan ARC READY! Ketik /start untuk membeli.</code>\n\n"
-        "💡 <b>Contoh Penggunaan:</b>\n"
-        "<code>/broadcast 🚀 Promo Spesial Hari Ini! Rate USDT termurah se-Indonesia & bebas biaya admin. Transaksi sekarang di @hsn_store_bot!</code>\n\n"
+        "Contoh caption: <code>/broadcast --ready Morph</code>\n\n"
         "⚠️ <b>Catatan Penting:</b>\n"
+        "• Pesan dikirim bersih tanpa teks header otomatis.\n"
         "• Anda dapat menggunakan tag HTML seperti <code>&lt;b&gt;tebal&lt;/b&gt;</code>, <code>&lt;i&gt;miring&lt;/i&gt;</code>, dan <code>&lt;code&gt;kode&lt;/code&gt;</code>.\n"
         "• User yang memblokir bot akan otomatis dilewati tanpa menghentikan broadcast."
     )
     return text
+
+
+def build_admin_credit_view() -> str:
+    """Membangun panduan isi saldo user."""
+    return (
+        "💳 <b>ISI SALDO USER (ADMIN CREDIT)</b>\n\n"
+        "Fitur ini memungkinkan admin mengisi saldo IDR ke user tertentu.\n"
+        "Digunakan untuk campaign giveaway, reward, atau kompensasi.\n\n"
+        "📝 <b>Satu User:</b>\n"
+        "<code>/credit [telegram_id] [jumlah_idr]</code>\n"
+        "Contoh: <code>/credit 123456789 10000</code>\n\n"
+        "📝 <b>Banyak User Sekaligus:</b>\n"
+        "<code>/bulkcredit [jumlah_idr] [id1] [id2] ...</code>\n"
+        "Contoh: <code>/bulkcredit 10000 123456789 987654321</code>\n\n"
+        "⚠️ <b>Catatan:</b>\n"
+        "• Minimum: Rp 1.000 | Maksimum: Rp 10.000.000 per operasi\n"
+        "• Setiap kredit tercatat di Audit Log\n"
+        "• User otomatis mendapat notifikasi saldo bertambah"
+    )
+
+
+def build_admin_referral_view(db) -> str:
+    """Membangun tampilan manajemen konfigurasi & statistik referral untuk admin."""
+    try:
+        from database.models import Referral, ReferralConfig
+        from database.crud import get_referral_config
+        from sqlalchemy import func as sa_func, Integer
+
+        total = db.query(Referral).count()
+        completed = db.query(Referral).filter(Referral.status == "COMPLETED").count()
+        pending = db.query(Referral).filter(Referral.status == "PENDING").count()
+
+        # Configs
+        reward_cfg = get_referral_config(db, "reward_per_referral")
+        reward_idr = int(reward_cfg) if reward_cfg else 5000
+
+        bonus_cfg = get_referral_config(db, "referee_discount_idr")
+        bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+
+        min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
+        min_trade_idr = int(min_trade_cfg) if min_trade_cfg else 0
+        min_trade_display = f"Rp {min_trade_idr:,}" if min_trade_idr > 0 else "Tanpa Minimal (Semua Order)"
+
+        enabled_cfg = get_referral_config(db, "referral_enabled")
+        is_enabled = enabled_cfg is None or enabled_cfg.lower() == "true"
+
+        max_cfg = get_referral_config(db, "max_referrals_per_user")
+        max_refs = int(max_cfg) if max_cfg else 100
+
+        # Total reward paid out
+        total_payout = (
+            db.query(sa_func.sum(sa_func.cast(Referral.reward_idr, Integer)))
+            .filter(Referral.status == "COMPLETED")
+            .scalar() or 0
+        )
+
+        status_badge = "🟢 <b>AKTIF</b>" if is_enabled else "🔴 <b>NONAKTIF</b>"
+
+        # Top 10 referrers
+        top = (
+            db.query(
+                Referral.referrer_id,
+                sa_func.count(Referral.id).label("cnt"),
+                sa_func.sum(
+                    sa_func.cast(Referral.status == "COMPLETED", Integer)
+                ).label("done"),
+            )
+            .group_by(Referral.referrer_id)
+            .order_by(sa_func.count(Referral.id).desc())
+            .limit(10)
+            .all()
+        )
+
+        lines = [
+            "🔗 <b>MANAJEMEN PROGRAM REFERRAL</b>\n",
+            f"⚙️ <b>Status Program:</b> {status_badge}",
+            f"💰 <b>Reward Pengundang:</b> Rp {reward_idr:,}",
+            f"🎁 <b>Potongan/Bonus Teman:</b> Rp {bonus_idr:,}",
+            f"🛒 <b>Min. Pembelian Teman:</b> {min_trade_display}",
+            f"🎯 <b>Maksimal per User:</b> {max_refs} teman\n",
+            "📊 <b>Statistik Akumulatif:</b>",
+            f"├── 👥 Total Ajakan    : <b>{total}</b>",
+            f"├── ✅ Selesai Transaksi: <b>{completed}</b>",
+            f"├── ⏳ Belum Transaksi  : <b>{pending}</b>",
+            f"└── 💸 Total Reward Cair: <b>Rp {total_payout:,}</b>\n",
+            "🏆 <b>Top 10 Pengundang Terbanyak:</b>",
+        ]
+        if top:
+            for i, row in enumerate(top, 1):
+                user = db.query(User).filter(User.telegram_id == row.referrer_id).first()
+                name = f"@{user.username}" if user and user.username else str(row.referrer_id)
+                done = row.done or 0
+                lines.append(f"{i}. {name} — {row.cnt} ajakan ({done} selesai)")
+        else:
+            lines.append("<i>Belum ada data referral.</i>")
+
+        lines.append(
+            "\n💡 <b>Pengaturan Cepat:</b>\n"
+            "Gunakan tombol di bawah untuk toggle status, atur reward, potongan, atau minimal pembelian secara instan."
+        )
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error build_admin_referral_view: {e}", exc_info=True)
+        return (
+            "🔗 <b>REFERRAL PROGRAM</b>\n\n"
+            "<i>Tabel referral belum siap atau terjadi kendala database.</i>"
+        )
+
+
+def build_admin_referral_keyboard(db) -> InlineKeyboardMarkup:
+    """Membuat inline keyboard manajemen referral interaktif untuk admin."""
+    from database.crud import get_referral_config
+    enabled_cfg = get_referral_config(db, "referral_enabled")
+    is_enabled = enabled_cfg is None or enabled_cfg.lower() == "true"
+    toggle_text = "🔴 Nonaktifkan Program" if is_enabled else "🟢 Aktifkan Program"
+
+    buttons = [
+        [InlineKeyboardButton(toggle_text, callback_data="admin_ref_toggle_enabled")],
+        [
+            InlineKeyboardButton("💵 Atur Reward Pengundang", callback_data="admin_ref_pick_reward"),
+            InlineKeyboardButton("🎁 Atur Potongan Teman", callback_data="admin_ref_pick_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🛒 Atur Min. Pembelian", callback_data="admin_ref_pick_min_trade"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data="admin_panel_referral"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_reward_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat nominal reward pengundang."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 2.000", callback_data="admin_ref_set_reward_2000"),
+            InlineKeyboardButton("Rp 5.000", callback_data="admin_ref_set_reward_5000"),
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_reward_10000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_ref_set_reward_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_ref_set_reward_50000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_reward"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_bonus_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat nominal potongan/bonus transaksi pertama teman."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Nonaktif)", callback_data="admin_ref_set_bonus_0"),
+            InlineKeyboardButton("Rp 2.500", callback_data="admin_ref_set_bonus_2500"),
+            InlineKeyboardButton("Rp 5.000", callback_data="admin_ref_set_bonus_5000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_bonus_10000"),
+            InlineKeyboardButton("Rp 20.000", callback_data="admin_ref_set_bonus_20000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_bonus"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_min_trade_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard pilihan cepat syarat minimal pembelian teman untuk referral."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Bebas)", callback_data="admin_ref_set_min_trade_0"),
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_ref_set_min_trade_10000"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_ref_set_min_trade_25000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_ref_set_min_trade_50000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_ref_set_min_trade_100000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_ref_custom_min_trade"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Kelola Referral", callback_data="admin_panel_referral"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
 def build_admin_emojis_view() -> str:
@@ -383,6 +598,549 @@ def build_admin_emojis_view() -> str:
         "💡 <i>Semua perubahan langsung aktif realtime di bot tanpa perlu restart server!</i>"
     )
     return text
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 7: Top Spender, Random Winner & Loyalty Config Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_top_spenders_view(db, period_days: int = 30) -> str:
+    """Membangun teks leaderboard Top Spender yang transparan memuat daftar Top 10."""
+    from services.campaign_service import TOP_SPENDER_REWARDS
+    from bot.utils.formatter import format_idr
+    from html import escape as _esc
+
+    top_spenders = crud.get_top_spenders(db, limit=10, period_days=period_days)
+    total_pool = sum(TOP_SPENDER_REWARDS.get(i, 0) for i in range(1, 11))
+    period_label = f"{period_days} Hari Terakhir" if period_days > 0 else "Semua Waktu (All-Time)"
+
+    lines = [
+        f"{tg_emoji('TROPHY', '🏆')} <b>TOP SPENDER — LEADERBOARD TRANSAKSI TERBANYAK</b>",
+        f"📅 <b>Periode:</b> <code>{period_label}</code> | 💰 <b>Total Hadiah:</b> <code>{format_idr(total_pool)}</code>\n",
+    ]
+
+    if not top_spenders:
+        lines.append("<i>Belum ada data transaksi pembelian selesai pada periode ini.</i>\n")
+    else:
+        lines.append(f"📊 <b>Daftar Peringkat Top {len(top_spenders)} Spender Terbesar:</b>\n")
+        for u in top_spenders:
+            rank = u["rank"]
+            reward = TOP_SPENDER_REWARDS.get(rank, 0)
+            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"<b>#{rank}</b>"
+            name_str = f" ({_esc(u['full_name'])})" if u.get("full_name") else ""
+            tx_str = f" • {u['tx_count']}x Transaksi" if u.get("tx_count") else ""
+            uname = f"@{_esc(u['username'])}" if u.get("username") and not u['username'].startswith("User_") else f"ID: {u['telegram_id']}"
+            lines.append(
+                f"{medal} <b>{uname}</b>{name_str} (<code>{u['telegram_id']}</code>)\n"
+                f"   ├── 💸 <b>Total Volume :</b> <code>{format_idr(u['total_spent_idr'])}</code>{tx_str}\n"
+                f"   └── 🎁 <b>Alokasi Hadiah:</b> <code>+{format_idr(reward)}</code>\n"
+            )
+
+    lines.append("💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
+    return "\n".join(lines)
+
+
+def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMarkup:
+    """Keyboard navigasi Top Spender."""
+    buttons = [
+        [
+            InlineKeyboardButton("💰 Eksekusi & Bagikan Hadiah ke Top 10", callback_data=f"admin_top_spender_exec_{period_days}"),
+        ],
+        [
+            InlineKeyboardButton("📅 7 Hari", callback_data="admin_top_spender_p_7"),
+            InlineKeyboardButton("📅 30 Hari", callback_data="admin_top_spender_p_30"),
+            InlineKeyboardButton("📅 90 Hari", callback_data="admin_top_spender_p_90"),
+            InlineKeyboardButton("♾️ Semua", callback_data="admin_top_spender_p_0"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_top_spender_p_{period_days}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_random_draw_view(db, pool_segment: str = "ACTIVE_30D") -> str:
+    """Membangun teks menu Undian Acak (Flash Giveaway)."""
+    seg_names = {
+        "ALL": "Semua User Bot",
+        "BUYERS": "User Pernah Beli (Completed)",
+        "ACTIVE_30D": "User Aktif 30 Hari Terakhir",
+    }
+    seg_label = seg_names.get(pool_segment, pool_segment)
+    
+    # Hitung jumlah kandidat pool
+    pool_candidates = crud.get_random_winners(db, pool_segment=pool_segment, count=1000)
+    pool_count = len(pool_candidates)
+
+    text = (
+        "🎲 <b>UNDI PEMENANG ACAK (FLASH GIVEAWAY)</b>\n\n"
+        f"🎯 <b>Pool Peserta:</b> <b>{seg_label}</b>\n"
+        f"👥 <b>Total Kandidat Tersedia:</b> <code>{pool_count} user</code>\n\n"
+        "Sistem akan memilih pemenang secara acak dan langsung mengkreditkan saldo bot ke pemenang serta mengirim notifikasi kemenangan otomatis.\n\n"
+        "👇 <b>Pilih Target Pool atau Eksekusi Preset di bawah:</b>"
+    )
+    return text
+
+
+def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> InlineKeyboardMarkup:
+    """Keyboard navigasi Undi Pemenang Acak."""
+    buttons = [
+        [
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'ACTIVE_30D' else '⚪'} Aktif 30 Hari",
+                callback_data="admin_draw_pool_ACTIVE_30D"
+            ),
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'BUYERS' else '⚪'} Pernah Beli",
+                callback_data="admin_draw_pool_BUYERS"
+            ),
+            InlineKeyboardButton(
+                f"{'🔘' if pool_segment == 'ALL' else '⚪'} Semua User",
+                callback_data="admin_draw_pool_ALL"
+            ),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 25.000", callback_data=f"admin_draw_exec_{pool_segment}_5_25000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 50.000", callback_data=f"admin_draw_exec_{pool_segment}_5_50000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 10 Orang @ Rp 20.000", callback_data=f"admin_draw_exec_{pool_segment}_10_20000"),
+        ],
+        [
+            InlineKeyboardButton("🎲 Undi 20 Orang @ Rp 10.000", callback_data=f"admin_draw_exec_{pool_segment}_20_10000"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Pool", callback_data=f"admin_draw_pool_{pool_segment}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_loyalty_view(db) -> str:
+    """Membangun teks status dan konfigurasi Loyalty Reward."""
+    from bot.utils.formatter import format_idr
+
+    enabled_str = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+    is_enabled = enabled_str.lower() == "true"
+    window_days = int(crud.get_loyalty_config(db, "window_days") or 5)
+    min_tx = int(crud.get_loyalty_config(db, "min_tx_count") or 5)
+    reward_idr = int(crud.get_loyalty_config(db, "reward_amount_idr") or 25_000)
+    min_tx_amt = int(crud.get_loyalty_config(db, "min_tx_amount_idr") or 50_000)
+
+    status_icon = "🟢" if is_enabled else "🔴"
+    status_text = "AKTIF" if is_enabled else "NONAKTIF"
+
+    eligible = crud.get_loyalty_eligible_users(db)
+    eligible_count = len(eligible)
+
+    text = (
+        "⏳ <b>PENGATURAN LOYALTY REWARD (TIME-WINDOW)</b>\n\n"
+        f"Status Program: {status_icon} <b>{status_text}</b>\n\n"
+        "⚙️ <b>Aturan Loyalty Saat Ini:</b>\n"
+        f"├── ⏱️ <b>Window Waktu:</b> <code>{window_days} Hari</code>\n"
+        f"├── 🔢 <b>Syarat Transaksi:</b> <code>{min_tx}x Transaksi Selesai</code>\n"
+        f"├── 💰 <b>Reward Saldo:</b> <code>{format_idr(reward_idr)} per user</code>\n"
+        f"└── 🛒 <b>Min. Nominal Transaksi:</b> <code>{format_idr(min_tx_amt)} / order</code>\n\n"
+        f"📊 <b>User Eligible Menunggu Reward:</b> <code>{eligible_count} user</code>\n\n"
+        f"💡 <i>User yang menyelesaikan minimal {min_tx}x transaksi dalam rentang {window_days} hari "
+        f"akan otomatis mendapat reward saldo {format_idr(reward_idr)}.</i>"
+    )
+    return text
+
+
+def build_admin_loyalty_keyboard(db) -> InlineKeyboardMarkup:
+    """Keyboard navigasi Loyalty Config."""
+    enabled_str = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+    is_enabled = enabled_str.lower() == "true"
+    toggle_text = "🔴 Nonaktifkan Program" if is_enabled else "🟢 Aktifkan Program"
+
+    buttons = [
+        [InlineKeyboardButton(toggle_text, callback_data="admin_loyalty_toggle")],
+        [
+            InlineKeyboardButton("⏱️ Ganti Window Hari", callback_data="admin_loyalty_pick_window"),
+            InlineKeyboardButton("🔢 Ganti Min. Tx", callback_data="admin_loyalty_pick_mintx"),
+        ],
+        [
+            InlineKeyboardButton("💰 Ganti Reward IDR", callback_data="admin_loyalty_pick_reward"),
+            InlineKeyboardButton("🛒 Min. Nominal Order", callback_data="admin_loyalty_pick_minamt"),
+        ],
+        [
+            InlineKeyboardButton("📊 Cek User Eligible", callback_data="admin_loyalty_check_eligible"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_loyalty"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
+        ],
+        [
+            InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_window_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat rentang hari window loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("3 Hari", callback_data="admin_loyalty_set_window_3"),
+            InlineKeyboardButton("5 Hari", callback_data="admin_loyalty_set_window_5"),
+            InlineKeyboardButton("7 Hari", callback_data="admin_loyalty_set_window_7"),
+        ],
+        [
+            InlineKeyboardButton("14 Hari", callback_data="admin_loyalty_set_window_14"),
+            InlineKeyboardButton("30 Hari", callback_data="admin_loyalty_set_window_30"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_mintx_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat jumlah transaksi minimal loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("3x Order", callback_data="admin_loyalty_set_mintx_3"),
+            InlineKeyboardButton("5x Order", callback_data="admin_loyalty_set_mintx_5"),
+            InlineKeyboardButton("7x Order", callback_data="admin_loyalty_set_mintx_7"),
+            InlineKeyboardButton("10x Order", callback_data="admin_loyalty_set_mintx_10"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_reward_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat nominal reward loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 10.000", callback_data="admin_loyalty_set_reward_10000"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_loyalty_set_reward_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_loyalty_set_reward_50000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 75.000", callback_data="admin_loyalty_set_reward_75000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_loyalty_set_reward_100000"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def build_admin_pick_loyalty_minamt_keyboard() -> InlineKeyboardMarkup:
+    """Pilihan cepat minimal nominal order per transaksi loyalty."""
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 0 (Bebas)", callback_data="admin_loyalty_set_minamt_0"),
+            InlineKeyboardButton("Rp 25.000", callback_data="admin_loyalty_set_minamt_25000"),
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_loyalty_set_minamt_50000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_loyalty_set_minamt_100000"),
+            InlineKeyboardButton("Rp 250.000", callback_data="admin_loyalty_set_minamt_250000"),
+        ],
+        [InlineKeyboardButton("🔙 Kembali ke Loyalty Menu", callback_data="admin_panel_loyalty")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 8: Weekly Report & Spreadsheet Export Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_weekly_report_view(db, days: int = 7) -> tuple[str, InlineKeyboardMarkup]:
+    """Membangun tampilan ringkasan laporan transaksi mingguan dan keyboard aksi export."""
+    from services.report_service import (
+        get_weekly_transactions_data,
+        calculate_weekly_summary,
+        format_weekly_report_telegram_message,
+    )
+    transactions = get_weekly_transactions_data(db, days=days)
+    summary = calculate_weekly_summary(transactions, days=days)
+    text = format_weekly_report_telegram_message(summary)
+
+    buttons = [
+        [
+            InlineKeyboardButton("📥 Download File Spreadsheet (.CSV)", callback_data=f"admin_export_csv_{days}"),
+        ],
+        [
+            InlineKeyboardButton(f"{'🔘' if days == 7 else '⚪'} 7 Hari", callback_data="admin_weekly_p_7"),
+            InlineKeyboardButton(f"{'🔘' if days == 14 else '⚪'} 14 Hari", callback_data="admin_weekly_p_14"),
+            InlineKeyboardButton(f"{'🔘' if days == 30 else '⚪'} 30 Hari", callback_data="admin_weekly_p_30"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_weekly_p_{days}"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────────────────────────────────────────
+#  Phase 8: Admin Send Balance & Bot Treasury Views
+# ─────────────────────────────────────────────────────────
+
+def build_admin_send_balance_user_prompt() -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan instruksi pencarian pengguna untuk transfer saldo admin."""
+    text = (
+        f"{tg_emoji('CARD', '💳')} <b>KIRIM SALDO KE PENGGUNA</b>\n\n"
+        "Silakan kirimkan <b>@username</b> atau <b>Telegram User ID</b> pengguna yang ingin Anda kirimkan saldo:\n\n"
+        "📌 <b>Contoh Input:</b>\n"
+        "• <code>@johndoe</code>\n"
+        "• <code>123456789</code>\n\n"
+        "<i>Sistem akan mencari data profil pengguna secara instan di database.</i>"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🔙 Batal & Dashboard Utama", callback_data="admin_panel_main")],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_admin_send_balance_amount_view(user: User) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan pemilihan nominal saldo untuk pengguna tertentu."""
+    uname = f"@{user.username}" if user.username else f"User_{user.telegram_id}"
+    full_name = f" ({_esc(user.full_name)})" if user.full_name else ""
+    current_bal = format_idr(int(user.balance_idr or 0))
+    total_orders = user.total_orders or 0
+    total_spent = format_idr(int(user.total_spent_idr or 0))
+
+    text = (
+        f"👤 <b>PROFIL PENERIMA DITEMUKAN</b>\n\n"
+        f"• <b>Pengguna:</b> <b>{uname}</b>{full_name}\n"
+        f"• <b>Telegram ID:</b> <code>{user.telegram_id}</code>\n"
+        f"• <b>Saldo Saat Ini:</b> <b>{current_bal}</b>\n"
+        f"• <b>Riwayat Transaksi:</b> <code>{total_orders}x Order ({total_spent})</code>\n\n"
+        f"👇 <i>Pilih nominal saldo yang ingin dikirimkan ke akun di atas:</i>"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("+Rp 10.000", callback_data=f"admin_send_bal_amt_10000"),
+            InlineKeyboardButton("+Rp 25.000", callback_data=f"admin_send_bal_amt_25000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 50.000", callback_data=f"admin_send_bal_amt_50000"),
+            InlineKeyboardButton("+Rp 100.000", callback_data=f"admin_send_bal_amt_100000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 250.000", callback_data=f"admin_send_bal_amt_250000"),
+            InlineKeyboardButton("+Rp 500.000", callback_data=f"admin_send_bal_amt_500000"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Ketik Nominal Kustom", callback_data="admin_send_bal_custom_amt"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Ganti Penerima", callback_data="admin_panel_send_balance"),
+            InlineKeyboardButton("🔙 Dashboard", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_send_balance_confirm_view(user: User, amount: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan konfirmasi eksekusi transfer saldo admin."""
+    uname = f"@{user.username}" if user.username else f"User_{user.telegram_id}"
+    old_bal = int(user.balance_idr or 0)
+    new_bal = old_bal + amount
+
+    text = (
+        f"⚠️ <b>KONFIRMASI PENGIRIMAN SALDO USER</b>\n\n"
+        f"• <b>Penerima:</b> <b>{uname}</b> (<code>{user.telegram_id}</code>)\n"
+        f"• <b>Nominal Kirim:</b> <code>+{format_idr(amount)}</code>\n"
+        f"• <b>Saldo Sebelumnya:</b> <code>{format_idr(old_bal)}</code>\n"
+        f"• <b>Saldo Setelah Kirim:</b> <b>{format_idr(new_bal)}</b>\n\n"
+        f"<i>User akan otomatis menerima notifikasi saldo masuk 3D dan tercatat di Audit Log.</i>\n\n"
+        f"Apakah Anda yakin ingin memproses transfer saldo ini sekarang?"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("🚀 Ya, Kirim Saldo Sekarang!", callback_data=f"admin_send_bal_confirm_{user.telegram_id}_{amount}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Batal / Ganti Nominal", callback_data=f"admin_send_bal_user_{user.telegram_id}"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
+    """Tampilan manajemen Kas & Dompet Bot (Campaign Pool)."""
+    treasury_bal = crud.get_bot_treasury_balance(db)
+
+    text = (
+        f"{tg_emoji('BANK', '🏦')} <b>KAS & DOMPET CAMPAIGN BOT</b>\n\n"
+        f"💰 <b>Saldo Kas Bot Saat Ini:</b> <b>{format_idr(treasury_bal)}</b>\n\n"
+        "📌 <b>Fungsi Dompet Kas Bot:</b>\n"
+        "• Menyimpan cadangan dana uang asli untuk event Giveaway & Campaign\n"
+        "• Sumber dana otomatisasi reward Loyalty & Milestone Top Spender\n"
+        "• Memastikan kelancaran distribusi hadiah bagi para pemenang\n\n"
+        "👇 <i>Pilih Top-Up via QRIS Uang Asli atau gunakan tombol instan di bawah:</i>"
+    )
+
+    buttons = [
+        [
+            InlineKeyboardButton("📲 Top-Up Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 100.000", callback_data="admin_treasury_topup_100000"),
+            InlineKeyboardButton("+Rp 250.000", callback_data="admin_treasury_topup_250000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 500.000", callback_data="admin_treasury_topup_500000"),
+            InlineKeyboardButton("+Rp 1.000.000", callback_data="admin_treasury_topup_1000000"),
+        ],
+        [
+            InlineKeyboardButton("+Rp 2.500.000", callback_data="admin_treasury_topup_2500000"),
+            InlineKeyboardButton("+Rp 5.000.000", callback_data="admin_treasury_topup_5000000"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Top Up Nominal Kustom", callback_data="admin_treasury_custom"),
+            InlineKeyboardButton("🔄 Atur Saldo Manual", callback_data="admin_treasury_set_manual"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Buka Wizard Campaign", callback_data="admin_panel_campaign"),
+            InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_admin_treasury_qris_menu() -> tuple[str, InlineKeyboardMarkup]:
+    """Menu pilihan nominal Top-Up Kas Bot via QRIS (Uang Asli)."""
+    text = (
+        f"{tg_emoji('BANK', '🏦')} <b>TOP-UP KAS BOT VIA QRIS (UANG ASLI)</b>\n\n"
+        "Silakan pilih nominal deposit saldo Kas Bot yang ingin Anda bayar via QRIS:\n\n"
+        "📌 <i>Metode Pembayaran Didukung:</i>\n"
+        "• <b>Mobile Banking:</b> BCA, Mandiri, BRI, BNI, CIMB, Permata, dll.\n"
+        "• <b>E-Wallet:</b> GoPay, OVO, DANA, ShopeePay, LinkAja.\n\n"
+        "<i>Uang asli langsung masuk ke akun merchant GoPay/Bank Anda dan saldo Kas Bot otomatis terisi seketika.</i>"
+    )
+    buttons = [
+        [
+            InlineKeyboardButton("Rp 50.000", callback_data="admin_treasury_qris_50000"),
+            InlineKeyboardButton("Rp 100.000", callback_data="admin_treasury_qris_100000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 250.000", callback_data="admin_treasury_qris_250000"),
+            InlineKeyboardButton("Rp 500.000", callback_data="admin_treasury_qris_500000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 1.000.000", callback_data="admin_treasury_qris_1000000"),
+            InlineKeyboardButton("Rp 2.500.000", callback_data="admin_treasury_qris_2500000"),
+        ],
+        [
+            InlineKeyboardButton("Rp 5.000.000", callback_data="admin_treasury_qris_5000000"),
+            InlineKeyboardButton("✏️ Nominal Kustom", callback_data="admin_treasury_qris_custom"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Batal / Kembali ke Kas Bot", callback_data="camp_treasury_view"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int) -> None:
+    """Menyajikan invoice QRIS Dinamis untuk Top-Up Kas Bot Admin."""
+    user = update.effective_user
+    status_msg = None
+    if update.callback_query:
+        status_msg = await update.callback_query.edit_message_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+    else:
+        status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+
+    topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}"
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+
+    db = SessionLocal()
+    try:
+        from database.crud import generate_unique_payment_code, create_topup_order
+        from services.fee_service import calculate_qris_mdr
+        unique_code = generate_unique_payment_code(db)
+        mdr_idr = calculate_qris_mdr(amount)
+        final_amount = amount + mdr_idr + unique_code
+        topup_order = create_topup_order(
+            db=db,
+            topup_id=topup_id,
+            telegram_id=user.id,
+            amount_idr=final_amount,
+            expires_at=expires_at,
+        )
+        topup_order.unique_code = unique_code
+        topup_order.mdr_idr = mdr_idr
+        db.commit()
+    finally:
+        db.close()
+
+    context.user_data["active_topup_id"] = topup_id
+
+    mdr_line = f"\n🧾 <b>Biaya QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
+    caption_text = (
+        f"{tg_emoji('BANK', '🏦')} <b>INVOICE TOP-UP KAS BOT (QRIS UANG ASLI)</b>\n\n"
+        f"🎫 <b>ID Transaksi:</b> <code>{topup_id}</code>\n"
+        f"💵 <b>Nominal Masuk Kas:</b> <b>{format_idr(amount)}</b>\n"
+        f"💰 <b>Total Transfer:</b> <b>{format_idr(final_amount)}</b>"
+        f"{mdr_line}\n"
+        f"⏰ <b>Batas Waktu:</b> 30 Menit\n\n"
+        f"📌 <b>Cara Bayar:</b>\n"
+        f"1. Scan QRIS di atas dengan <b>BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay</b>, dll.\n"
+        f"2. Nominal <b>{format_idr(final_amount)}</b> akan terisi otomatis.\n"
+        f"3. Selesaikan transfer di aplikasi Bank / E-Wallet Anda.\n"
+        f"4. Saldo Kas Bot akan <b>otomatis bertambah</b> seketika setelah pembayaran terverifikasi!\n\n"
+        f"ℹ️ <i>Pastikan nominal transfer tepat ({format_idr(final_amount)}) agar verifikasi instan.</i>"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Saya Sudah Transfer", callback_data=f"check_topup_{topup_id}")],
+        [InlineKeyboardButton("❌ Batalkan Invoice", callback_data=f"cancel_topup_{topup_id}")],
+        [InlineKeyboardButton("🔙 Kembali ke Kas Bot", callback_data="camp_treasury_view")],
+    ]
+
+    try:
+        if update.callback_query:
+            await update.callback_query.message.delete()
+        elif status_msg:
+            await status_msg.delete()
+    except Exception:
+        pass
+
+    from services.qris_generator import get_qris_image_stream
+    qris_stream = get_qris_image_stream(final_amount)
+    sent = False
+    if qris_stream:
+        try:
+            await context.bot.send_photo(
+                chat_id=user.id,
+                photo=qris_stream.getvalue(),
+                caption=caption_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+            sent = True
+        except Exception as err:
+            logger.warning("Gagal kirim QRIS photo treasury: %s", err)
+
+    if not sent:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=caption_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+
 
 
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -524,6 +1282,313 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Panduan broadcast dimuat.")
 
+        elif data == "admin_panel_campaign":
+            from bot.handlers.admin_campaign import campaign_callback_handler
+            await campaign_callback_handler(update, context)
+            return
+
+        elif data == "admin_panel_credit":
+            text = build_admin_credit_view()
+            buttons = [
+                [InlineKeyboardButton("💳 Kirim Saldo Interaktif", callback_data="admin_panel_send_balance")],
+                [InlineKeyboardButton("🎁 Buka Campaign & Giveaway Wizard", callback_data="admin_panel_campaign")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ]
+            await query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+            await query.answer("Panduan isi saldo dimuat.")
+
+        # ─── SEND SALDO ADMIN (Phase 8) ──────────────────────
+        elif data == "admin_panel_send_balance":
+            context.user_data["admin_awaiting_send_bal_user"] = True
+            context.user_data.pop("admin_send_bal_target_id", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_user_prompt()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Ketik username/ID user di chat.")
+
+        elif data.startswith("admin_send_bal_user_"):
+            target_id = int(data.replace("admin_send_bal_user_", ""))
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan.", show_alert=True)
+                return
+            context.user_data["admin_send_bal_target_id"] = target_id
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_amount_view(target_user)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_send_bal_amt_"):
+            amount = int(data.replace("admin_send_bal_amt_", ""))
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await query.answer("Target user belum dipilih.", show_alert=True)
+                return
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan di DB.", show_alert=True)
+                return
+            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data == "admin_send_bal_custom_amt":
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await query.answer("Target user belum dipilih.", show_alert=True)
+                return
+            context.user_data["admin_awaiting_send_bal_custom_amt"] = True
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Saldo yang Ingin Dikirim</b>\n\n"
+                "Kirim pesan angka nominal dalam Rupiah (contoh: <code>75000</code> atau <code>150000</code>):\n"
+                "<i>Minimal: Rp 1.000 | Maksimal: Rp 10.000.000</i>",
+                parse_mode="HTML",
+            )
+
+        elif data.startswith("admin_send_bal_confirm_"):
+            parts = data.replace("admin_send_bal_confirm_", "").split("_")
+            target_id = int(parts[0])
+            amount = int(parts[1])
+
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await query.answer("User tidak ditemukan.", show_alert=True)
+                return
+
+            old_bal = float(target_user.balance_idr or 0)
+            new_bal = crud.credit_user_balance(db, target_id, float(amount))
+
+            # Audit log
+            db.add(AuditLog(
+                telegram_id=target_id,
+                action="ADMIN_SEND_BALANCE",
+                details=f"Admin {user_id} kirim saldo Rp {amount:,} ke {target_id}. Saldo: Rp {old_bal:,.0f} -> Rp {new_bal:,.0f}",
+            ))
+            db.commit()
+
+            # Bersihkan state
+            context.user_data.pop("admin_send_bal_target_id", None)
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+
+            # Kirim notifikasi animated 3D ke penerima
+            uname_target = f"@{target_user.username}" if target_user.username else str(target_id)
+            user_notif_text = (
+                f"{tg_emoji('PARTY', '🎉')} <b>SALDO BERTAMBAH DARI ADMIN!</b>\n\n"
+                f"Halo <b>{uname_target}</b>, Anda menerima penambahan saldo bot langsung dari Tim Admin!\n\n"
+                f"{tg_emoji('MONEY_BAG', '💰')} <b>Nominal:</b> <code>+{format_idr(amount)}</code>\n"
+                f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{format_idr(int(new_bal))}</code>\n"
+                f"{tg_emoji('HISTORY', '📝')} <b>Keterangan:</b> Top up / Bonus Saldo Admin\n\n"
+                f"{tg_emoji('ROCKET', '🚀')} <i>Saldo ini sudah aktif dan siap langsung digunakan untuk transaksi Beli/Swap crypto di bot!</i>"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=user_notif_text,
+                    parse_mode="HTML",
+                )
+            except Exception as notif_err:
+                logger.warning(f"Gagal kirim notif send saldo ke {target_id}: {notif_err}")
+
+            success_text = (
+                f"✅ <b>SALDO BERHASIL DIKIRIM!</b>\n\n"
+                f"👤 <b>Penerima:</b> {uname_target} (<code>{target_id}</code>)\n"
+                f"💰 <b>Nominal Terkirim:</b> <code>+{format_idr(amount)}</code>\n"
+                f"💳 <b>Saldo Baru User:</b> <b>{format_idr(int(new_bal))}</b>\n"
+                f"📨 <b>Notifikasi Telegram:</b> Berhasil diteruskan ke user.\n"
+                f"📜 <b>Audit Trail:</b> Tercatat aman di sistem."
+            )
+            keyboard_done = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Kirim Saldo User Lain", callback_data="admin_panel_send_balance")],
+                [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+            ])
+            await query.edit_message_text(success_text, reply_markup=keyboard_done, parse_mode="HTML")
+            await query.answer("Saldo berhasil dikirim!", show_alert=True)
+
+        # ─── BOT TREASURY / DOMPET BOT (Phase 8) ─────────────
+        elif data == "admin_panel_treasury" or data == "camp_treasury_view":
+            context.user_data.pop("admin_awaiting_treasury_custom", None)
+            context.user_data.pop("admin_awaiting_treasury_set_manual", None)
+            text, markup = build_admin_treasury_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Kas bot dimuat.")
+
+        elif data.startswith("admin_treasury_topup_"):
+            amount = int(data.replace("admin_treasury_topup_", ""))
+            new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note="Admin Panel Preset Topup")
+            await query.answer(f"✅ Kas bot berhasil di-topup +{format_idr(amount)}!\nSaldo sekarang: {format_idr(new_bal)}", show_alert=True)
+            text, markup = build_admin_treasury_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_treasury_custom":
+            context.user_data["admin_awaiting_treasury_custom"] = True
+            context.user_data["admin_awaiting_treasury_set_manual"] = False
+            await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="camp_treasury_view")]
+            ])
+            await query.message.reply_text(
+                f"{tg_emoji('BANK', '🏦')} <b>Top Up Saldo Kas Bot Kustom</b>\n\n"
+                "Ketik nominal saldo yang ingin Anda tambahkan ke Kas Bot (contoh: <code>1500000</code>):\n\n"
+                "<i>Minimal: Rp 1.000</i>",
+                reply_markup=cancel_markup,
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_treasury_set_manual":
+            context.user_data["admin_awaiting_treasury_set_manual"] = True
+            context.user_data["admin_awaiting_treasury_custom"] = False
+            curr_bal = crud.get_bot_treasury_balance(db)
+            await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="camp_treasury_view")]
+            ])
+            await query.message.reply_text(
+                f"⚙️ <b>Atur Ulang Saldo Kas Bot Manual</b>\n\n"
+                f"Saldo saat ini: <b>{format_idr(curr_bal)}</b>\n\n"
+                "Ketik angka saldo baru yang diinginkan (contoh: <code>5000000</code> atau <code>0</code>):",
+                reply_markup=cancel_markup,
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_treasury_qris_menu":
+            text, markup = build_admin_treasury_qris_menu()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Menu QRIS Kas Bot dimuat.")
+
+        elif data == "admin_treasury_qris_custom":
+            context.user_data["admin_awaiting_treasury_qris_custom"] = True
+            await query.answer()
+            cancel_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Batal", callback_data="admin_treasury_qris_menu")]
+            ])
+            await query.message.reply_text(
+                f"{tg_emoji('BANK', '🏦')} <b>Top Up Kas Bot via QRIS (Nominal Kustom)</b>\n\n"
+                "Ketik nominal Rupiah (Uang Asli) yang ingin Anda bayar via QRIS (contoh: <code>750000</code>):\n\n"
+                "<i>Minimal: Rp 5.000 (Maksimal: Rp 10.000.000)</i>",
+                reply_markup=cancel_markup,
+                parse_mode="HTML"
+            )
+
+        elif data.startswith("admin_treasury_qris_"):
+            amount = int(data.replace("admin_treasury_qris_", ""))
+            await generate_and_send_treasury_qris(update, context, amount)
+
+        elif data == "admin_panel_referral":
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Manajemen referral dimuat.")
+
+        elif data == "admin_ref_toggle_enabled":
+            curr = crud.get_referral_config(db, "referral_enabled")
+            is_on = curr is None or curr.lower() == "true"
+            new_val = "false" if is_on else "true"
+            crud.set_referral_config(db, "referral_enabled", new_val)
+            status_str = "dinonaktifkan" if new_val == "false" else "diaktifkan"
+            await query.answer(f"Program referral berhasil {status_str}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_pick_reward":
+            curr_reward = crud.get_referral_config(db, "reward_per_referral") or "5000"
+            text = (
+                "💵 <b>PILIH REWARD PENGUNDANG (REFERRER)</b>\n\n"
+                f"Nominal reward saat ini: <b>Rp {int(curr_reward):,}</b> per teman yang selesai transaksi pertama.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_reward_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_reward_"):
+            val_str = data.replace("admin_ref_set_reward_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "reward_per_referral", str(val_int))
+            await query.answer(f"Reward pengundang diset ke Rp {val_int:,}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_reward":
+            context.user_data["admin_awaiting_ref_custom_reward"] = True
+            context.user_data["admin_awaiting_ref_custom_bonus"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Reward Pengundang</b>\n\n"
+                "Silakan ketik nominal reward baru dalam Rupiah (contoh: <code>7500</code> atau <code>15000</code>):",
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_ref_pick_bonus":
+            curr_bonus = crud.get_referral_config(db, "referee_discount_idr") or "0"
+            text = (
+                "🎁 <b>PILIH POTONGAN / CASHBACK TEMAN (REFEREE)</b>\n\n"
+                f"Nominal potongan saat ini: <b>Rp {int(curr_bonus):,}</b> untuk teman pada transaksi pertama.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_bonus_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_bonus_"):
+            val_str = data.replace("admin_ref_set_bonus_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "referee_discount_idr", str(val_int))
+            await query.answer(f"Potongan teman diset ke Rp {val_int:,}!", show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_bonus":
+            context.user_data["admin_awaiting_ref_custom_bonus"] = True
+            context.user_data["admin_awaiting_ref_custom_reward"] = False
+            context.user_data["admin_awaiting_ref_custom_min_trade"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Potongan Teman (Referee)</b>\n\n"
+                "Silakan ketik nominal potongan/cashback transaksi pertama baru dalam Rupiah (contoh: <code>3000</code> atau <code>5000</code>):",
+                parse_mode="HTML"
+            )
+
+        elif data == "admin_ref_pick_min_trade":
+            curr_min = crud.get_referral_config(db, "min_trade_amount_idr") or "0"
+            min_val = int(curr_min)
+            desc_min = f"Rp {min_val:,}" if min_val > 0 else "Tanpa Minimal (Semua Order)"
+            text = (
+                "🛒 <b>ATUR MINIMAL PEMBELIAN / TRANSAKSI TEMAN</b>\n\n"
+                f"Aturan saat ini: <b>{desc_min}</b>\n\n"
+                "Teman yang diundang harus menyelesaikan transaksi minimal sebesar nominal ini agar reward pengundang & potongan teman dapat dicairkan.\n\n"
+                "Pilih salah satu nominal cepat di bawah atau klik tombol kustom:"
+            )
+            markup = build_admin_pick_min_trade_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_ref_set_min_trade_"):
+            val_str = data.replace("admin_ref_set_min_trade_", "")
+            val_int = int(val_str)
+            crud.set_referral_config(db, "min_trade_amount_idr", str(val_int))
+            msg_alert = f"Min. pembelian diset ke Rp {val_int:,}!" if val_int > 0 else "Min. pembelian dinonaktifkan (bebas nominal)!"
+            await query.answer(msg_alert, show_alert=True)
+            text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_ref_custom_min_trade":
+            context.user_data["admin_awaiting_ref_custom_min_trade"] = True
+            context.user_data["admin_awaiting_ref_custom_reward"] = False
+            context.user_data["admin_awaiting_ref_custom_bonus"] = False
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik Nominal Minimal Pembelian Teman</b>\n\n"
+                "Silakan ketik nominal minimal transaksi baru dalam Rupiah (contoh: <code>50000</code> atau <code>100000</code>, ketik <code>0</code> untuk tanpa minimal):",
+                parse_mode="HTML"
+            )
+
         elif data == "admin_panel_emojis":
             text = build_admin_emojis_view()
             buttons = [
@@ -548,6 +1613,248 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Daftar emoji aktif dimuat.")
 
+        # ─── TOP SPENDER (Phase 7) ──────────────────────────
+        elif data == "admin_panel_top_spenders" or data.startswith("admin_top_spender_p_"):
+            period = 30
+            if data.startswith("admin_top_spender_p_"):
+                try:
+                    period = int(data.replace("admin_top_spender_p_", ""))
+                except Exception:
+                    period = 30
+            text = build_admin_top_spenders_view(db, period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Top Spender ({period} hari) dimuat.")
+
+        elif data.startswith("admin_top_spender_exec_"):
+            period = 30
+            try:
+                period = int(data.replace("admin_top_spender_exec_", ""))
+            except Exception:
+                period = 30
+
+            await query.answer("⏳ Sedang memproses pembagian reward Top Spender...", show_alert=False)
+            from services.campaign_service import execute_top_spender_campaign
+            bot_me = await context.bot.get_me() if context.bot else None
+            bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+
+            result = await execute_top_spender_campaign(
+                db=db,
+                bot=context.bot,
+                admin_id=user_id,
+                period_days=period,
+                bot_username=bot_username,
+            )
+
+            if result.get("error"):
+                await query.answer(f"⚠️ {result['error']}", show_alert=True)
+            else:
+                from bot.utils.formatter import format_idr
+                cnt = result.get("distributed_count", 0)
+                tot = result.get("total_amount", 0)
+                ns = result.get("notif_success", 0)
+                await query.answer(
+                    f"✅ Sukses! {cnt} pemenang menerima reward (Total: {format_idr(tot)}). Notif: {ns}/{cnt}",
+                    show_alert=True,
+                )
+
+            text = build_admin_top_spenders_view(db, period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        # ─── RANDOM DRAW / UNDI PEMENANG (Phase 7) ───────────
+        elif data == "admin_panel_random_draw" or data.startswith("admin_draw_pool_"):
+            pool_seg = "ACTIVE_30D"
+            if data.startswith("admin_draw_pool_"):
+                pool_seg = data.replace("admin_draw_pool_", "")
+            text = build_admin_random_draw_view(db, pool_segment=pool_seg)
+            markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Pool {pool_seg} dimuat.")
+
+        elif data.startswith("admin_draw_exec_"):
+            # format: admin_draw_exec_{pool_segment}_{winner_count}_{reward_per_winner}
+            parts = data.replace("admin_draw_exec_", "").split("_")
+            if len(parts) >= 3:
+                pool_seg = parts[0]
+                winner_cnt = int(parts[1])
+                reward_amt = int(parts[2])
+
+                await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
+                from services.campaign_service import execute_random_winner_campaign
+                bot_me = await context.bot.get_me() if context.bot else None
+                bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+
+                res = await execute_random_winner_campaign(
+                    db=db,
+                    bot=context.bot,
+                    admin_id=user_id,
+                    pool_segment=pool_seg,
+                    winner_count=winner_cnt,
+                    reward_per_winner=reward_amt,
+                    bot_username=bot_username,
+                )
+
+                if res.get("error"):
+                    await query.answer(f"⚠️ {res['error']}", show_alert=True)
+                else:
+                    from bot.utils.formatter import format_idr
+                    cnt = res.get("distributed_count", 0)
+                    tot = res.get("total_amount", 0)
+                    ns = res.get("notif_success", 0)
+                    await query.answer(
+                        f"🎉 {cnt} pemenang acak terpilih! Total: {format_idr(tot)}. Notif: {ns}/{cnt}",
+                        show_alert=True,
+                    )
+
+                text = build_admin_random_draw_view(db, pool_segment=pool_seg)
+                markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        # ─── LOYALTY CONFIG (Phase 7) ─────────────────────────
+        elif data == "admin_panel_loyalty":
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer("Pengaturan loyalty dimuat.")
+
+        elif data == "admin_loyalty_toggle":
+            curr = crud.get_loyalty_config(db, "loyalty_enabled") or "true"
+            is_on = curr.lower() == "true"
+            new_val = "false" if is_on else "true"
+            crud.set_loyalty_config(db, "loyalty_enabled", new_val)
+            status_str = "dinonaktifkan" if new_val == "false" else "diaktifkan"
+            await query.answer(f"Program loyalty berhasil {status_str}!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_window":
+            text = (
+                "⏱️ <b>ATUR RENTANG WAKTU (WINDOW) LOYALTY</b>\n\n"
+                "Pilih batas durasi hari untuk menghitung target transaksi user:\n"
+                "<i>(Contoh: 5 hari = user harus menyelesaikan transaksi dalam kurun waktu 5 hari)</i>"
+            )
+            markup = build_admin_pick_loyalty_window_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_window_"):
+            val = int(data.replace("admin_loyalty_set_window_", ""))
+            crud.set_loyalty_config(db, "window_days", str(val))
+            await query.answer(f"Window loyalty diset ke {val} hari!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_mintx":
+            text = (
+                "🔢 <b>ATUR TARGET JUMLAH TRANSAKSI LOYALTY</b>\n\n"
+                "Pilih berapa transaksi selesai yang harus dicapai user dalam window waktu:"
+            )
+            markup = build_admin_pick_loyalty_mintx_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_mintx_"):
+            val = int(data.replace("admin_loyalty_set_mintx_", ""))
+            crud.set_loyalty_config(db, "min_tx_count", str(val))
+            await query.answer(f"Target transaksi loyalty diset ke {val}x order!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_reward":
+            text = (
+                "💰 <b>ATUR BESARAN REWARD LOYALTY</b>\n\n"
+                "Pilih jumlah saldo bot yang akan dikreditkan otomatis saat user lolos target:"
+            )
+            markup = build_admin_pick_loyalty_reward_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_reward_"):
+            val = int(data.replace("admin_loyalty_set_reward_", ""))
+            crud.set_loyalty_config(db, "reward_amount_idr", str(val))
+            await query.answer(f"Reward loyalty diset ke Rp {val:,}!", show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_pick_minamt":
+            text = (
+                "🛒 <b>ATUR MINIMAL NOMINAL TRANSAKSI PER ORDER</b>\n\n"
+                "Hanya order dengan nominal >= nilai ini yang akan dihitung ke progress loyalty:"
+            )
+            markup = build_admin_pick_loyalty_minamt_keyboard()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data.startswith("admin_loyalty_set_minamt_"):
+            val = int(data.replace("admin_loyalty_set_minamt_", ""))
+            crud.set_loyalty_config(db, "min_tx_amount_idr", str(val))
+            msg = f"Min. nominal diset ke Rp {val:,}!" if val > 0 else "Min. nominal order dinonaktifkan (bebas nominal)!"
+            await query.answer(msg, show_alert=True)
+            text = build_admin_loyalty_view(db)
+            markup = build_admin_loyalty_keyboard(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_loyalty_check_eligible":
+            eligible = crud.get_loyalty_eligible_users(db)
+            if not eligible:
+                await query.answer("ℹ️ Saat ini belum ada user yang menunggu reward loyalty.", show_alert=True)
+            else:
+                lines = [f"📊 <b>DAFTAR USER QUALIFIED ({len(eligible)} User):</b>\n"]
+                for item in eligible[:15]:
+                    lines.append(f"• User ID <code>{item['telegram_id']}</code>: {item['tx_count']} transaksi selesai")
+                buttons = [
+                    [InlineKeyboardButton("🔙 Kembali ke Loyalty", callback_data="admin_panel_loyalty")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ]
+                await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+                await query.answer()
+
+        # ─── WEEKLY REPORT (Phase 8) ──────────────────────────
+        elif data == "admin_panel_weekly_report" or data.startswith("admin_weekly_p_"):
+            days = 7
+            if data.startswith("admin_weekly_p_"):
+                try:
+                    days = int(data.replace("admin_weekly_p_", ""))
+                except Exception:
+                    days = 7
+            text, markup = build_admin_weekly_report_view(db, days=days)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer(f"Rekap transaksi {days} hari dimuat.")
+
+        elif data.startswith("admin_export_csv_"):
+            days = 7
+            try:
+                days = int(data.replace("admin_export_csv_", ""))
+            except Exception:
+                days = 7
+
+            await query.answer("⏳ Menyiapkan file spreadsheet (.CSV)...", show_alert=False)
+            from services.report_service import (
+                get_weekly_transactions_data,
+                generate_weekly_report_csv_buffer,
+            )
+            transactions = get_weekly_transactions_data(db, days=days)
+            csv_buf = generate_weekly_report_csv_buffer(transactions)
+            filename = f"laporan_transaksi_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+            caption = (
+                f"📑 <b>File Laporan Transaksi ({days} Hari Terakhir)</b>\n"
+                f"Total: <b>{len(transactions)} baris data transaksi</b>.\n\n"
+                f"💡 <i>Dapat langsung di-import ke Google Sheets atau dibuka di Microsoft Excel.</i>"
+            )
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=csv_buf,
+                filename=filename,
+                caption=caption,
+                parse_mode="HTML",
+            )
+            await query.answer("✅ File laporan .CSV berhasil dikirim!", show_alert=True)
+
         elif data == "admin_panel_close":
             await query.answer("Panel ditutup.")
             await query.message.delete()
@@ -557,6 +1864,97 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer(f"❌ Error: {exc}", show_alert=True)
     finally:
         db.close()
+
+
+async def weekly_report_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /weeklyreport atau /report: kirim ringkasan & file export CSV mingguan ke Admin."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    days = 7
+    if context.args:
+        try:
+            days = int(context.args[0].lower().replace("d", "").replace("hari", ""))
+        except Exception:
+            days = 7
+
+    db = SessionLocal()
+    try:
+        from services.report_service import (
+            get_weekly_transactions_data,
+            calculate_weekly_summary,
+            generate_weekly_report_csv_buffer,
+            format_weekly_report_telegram_message,
+        )
+        transactions = get_weekly_transactions_data(db, days=days)
+        summary = calculate_weekly_summary(transactions, days=days)
+        text = format_weekly_report_telegram_message(summary)
+        csv_buf = generate_weekly_report_csv_buffer(transactions)
+        filename = f"laporan_transaksi_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+
+        await update.message.reply_text(text, parse_mode="HTML")
+        await update.message.reply_document(
+            document=csv_buf,
+            filename=filename,
+            caption=f"📑 <b>Export Laporan {days} Hari</b> ({len(transactions)} data transaksi)",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error in weekly_report_command_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal membuat laporan mingguan.")
+    finally:
+        db.close()
+
+
+async def test_testimony_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /testtesti untuk admin: uji kirim postingan contoh ke channel testimoni."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    from services.testimony_service import DEFAULT_TESTIMONY_CHANNEL, format_testimony_message
+    channel_target = os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+    
+    bot_username = (await context.bot.get_me()).username if context.bot else "TokoKoinID_Bot"
+
+    sample_msg = (
+        "🧪 <b>[TEST KONEKSI BOT]</b>\n"
+        + format_testimony_message(
+            order_type="buy",
+            crypto_symbol="USDT",
+            network="BSC",
+            nominal_idr=520000,
+            username="test_buyer",
+            telegram_id=12345678,
+            tx_hash="0x1234567890abcdef1234567890abcdef12345678",
+            bot_username=bot_username,
+        )
+    )
+
+    try:
+        sent = await context.bot.send_message(
+            chat_id=channel_target,
+            text=sample_msg,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        await update.message.reply_text(
+            f"✅ <b>Koneksi Channel Berhasil!</b>\n\n"
+            f"Pesan uji coba berhasil diposting ke <code>{channel_target}</code> (Message ID: {sent.message_id}).",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error test_testimony: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ <b>Gagal Kirim ke Channel ({channel_target}):</b>\n\n"
+            f"<code>{html.escape(str(e))}</code>\n\n"
+            f"💡 <b>Langkah Perbaikan:</b>\n"
+            f"1. Buka channel <code>{channel_target}</code> di Telegram.\n"
+            f"2. Buka menu <b>Administrators (Pengurus)</b> ➔ <b>Add Administrator</b>.\n"
+            f"3. Cari username bot Anda (<code>@{bot_username}</code>) dan tambahkan sebagai Admin dengan izin <b>Post Messages (Posting Pesan)</b>.",
+            parse_mode="HTML",
+        )
 
 
 
@@ -1226,7 +2624,10 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             f"{bank_info_str}\n\n"
             f"📸 <i>Bukti transfer pembayaran terlampir di atas.</i>\n\n"
             f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
-            f"Silakan periksa saldo / mutasi rekening Anda. Terima kasih banyak telah bertransaksi bersama kami! 🙏✨"
+            f"Silakan periksa saldo / mutasi rekening Anda.\n\n"
+            f"Terimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
+            f"Testimoni : t.me/TokoKoinID\n"
+            f"Channel : t.me/ROBHSN_STORE_SELLER"
         )
 
         menu_keyboard = InlineKeyboardMarkup([[
@@ -1245,6 +2646,13 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             sent_to_user = True
         except Exception as send_err:
             logger.error(f"Gagal mengirim foto bukti ke user {order.telegram_id}: {send_err}")
+
+        # Post testimony ke channel (Phase 8)
+        try:
+            from services.testimony_service import post_transaction_testimony
+            asyncio.create_task(post_transaction_testimony(context.bot, order, db=db))
+        except Exception as texc:
+            logger.warning(f"Gagal trigger testimony sell order {order.order_id}: {texc}")
 
         notif_admin = (
             f"✅ <b>BUKTI TRANSFER BERHASIL DITERUSKAN!</b>\n\n"
@@ -1279,34 +2687,193 @@ def _retry_after_seconds(exc: Exception) -> float:
 
 
 async def _send_broadcast_to_user(bot, telegram_id: int, text: str,
-                                 photo_file_id: str | None = None) -> bool:
-    """Kirim 1 pesan broadcast; retry sekali saat flood-limit. True bila sukses."""
+                                 photo_file_id: str | None = None,
+                                 is_document: bool = False) -> bool:
+    """Kirim 1 pesan broadcast (teks / foto / dokumen gambar); retry saat flood-limit atau format fallback."""
+    caption_val = text.strip() if text else None
     for attempt in (1, 2):
         try:
             if photo_file_id:
-                await bot.send_photo(
-                    chat_id=telegram_id, photo=photo_file_id,
-                    caption=text, parse_mode="HTML",
-                )
+                if is_document:
+                    if caption_val and len(caption_val) > 1024:
+                        await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                        await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode="HTML")
+                    elif caption_val:
+                        await bot.send_document(
+                            chat_id=telegram_id, document=photo_file_id,
+                            caption=caption_val, parse_mode="HTML",
+                        )
+                    else:
+                        await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                else:
+                    if caption_val and len(caption_val) > 1024:
+                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
+                        await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode="HTML")
+                    elif caption_val:
+                        await bot.send_photo(
+                            chat_id=telegram_id, photo=photo_file_id,
+                            caption=caption_val, parse_mode="HTML",
+                        )
+                    else:
+                        await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
             else:
-                await bot.send_message(
-                    chat_id=telegram_id, text=text, parse_mode="HTML",
-                )
+                await bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
             return True
         except RetryAfter as flood:
             await asyncio.sleep(_retry_after_seconds(flood))
             if attempt == 2:
                 return False
-        except Exception:
+        except BadRequest as bad_req:
+            err_str = str(bad_req).lower()
+            if "can't parse entities" in err_str or "entity" in err_str:
+                # Fallback format plain text jika ada tag HTML / simbol tidak valid
+                try:
+                    if photo_file_id:
+                        if is_document:
+                            if caption_val and len(caption_val) > 1024:
+                                await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                                await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode=None)
+                            elif caption_val:
+                                await bot.send_document(
+                                    chat_id=telegram_id, document=photo_file_id,
+                                    caption=caption_val, parse_mode=None,
+                                )
+                            else:
+                                await bot.send_document(chat_id=telegram_id, document=photo_file_id)
+                        else:
+                            if caption_val and len(caption_val) > 1024:
+                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
+                                await bot.send_message(chat_id=telegram_id, text=caption_val, parse_mode=None)
+                            elif caption_val:
+                                await bot.send_photo(
+                                    chat_id=telegram_id, photo=photo_file_id,
+                                    caption=caption_val, parse_mode=None,
+                                )
+                            else:
+                                await bot.send_photo(chat_id=telegram_id, photo=photo_file_id)
+                    else:
+                        await bot.send_message(chat_id=telegram_id, text=text, parse_mode=None)
+                    return True
+                except Exception as fallback_err:
+                    logger.warning("Broadcast fallback gagal ke %s: %s", telegram_id, fallback_err)
+                    return False
+            logger.warning("BadRequest broadcast ke %s: %s", telegram_id, bad_req)
+            return False
+        except Exception as exc:
+            logger.warning("Gagal kirim broadcast ke %s: %s", telegram_id, exc)
             return False
     return False
 
 
+def _parse_broadcast_segment(text: str) -> tuple[str, str]:
+    """Parse segment flag dari teks broadcast. Return (segment, clean_message)."""
+    segments = {"--all": "all", "--active": "active", "--buyers": "buyers", "--balance": "balance"}
+    for flag, seg in segments.items():
+        if text.startswith(flag + " ") or text == flag:
+            return seg, text[len(flag):].strip()
+    return "all", text
+
+
+def _segment_label(segment: str) -> str:
+    """Human-readable label untuk segment."""
+    labels = {
+        "all": "👥 Semua User",
+        "active": "🔄 User Aktif 30 Hari",
+        "buyers": "🛒 User Pernah Transaksi",
+        "balance": "💰 User Bersaldo",
+    }
+    return labels.get(segment, "👥 Semua User")
+
+
+NETWORK_ALIASES: dict[str, tuple[str, list[str]]] = {
+    "MORPH": ("Morph", ["USDC", "ETH"]),
+    "BASE": ("Base", ["USDC", "ETH"]),
+    "BSC": ("BSC", ["USDT", "USDC", "BNB"]),
+    "BEP20": ("BSC", ["USDT", "USDC", "BNB"]),
+    "ARB": ("Arbitrum", ["USDT", "USDC", "ETH", "ARB"]),
+    "ARBITRUM": ("Arbitrum", ["USDT", "USDC", "ETH", "ARB"]),
+    "POLYGON": ("Polygon", ["USDT", "USDC", "POL"]),
+    "POL": ("Polygon", ["USDT", "USDC", "POL"]),
+    "MATIC": ("Polygon", ["USDT", "USDC", "POL"]),
+    "SOLANA": ("Solana", ["SOL", "USDT", "USDC"]),
+    "SOL": ("Solana", ["SOL", "USDT", "USDC"]),
+    "TRON": ("TRON", ["TRX", "USDT"]),
+    "TRX": ("TRON", ["TRX", "USDT"]),
+    "TRC20": ("TRON", ["TRX", "USDT"]),
+    "TON": ("TON", ["TON", "USDT"]),
+    "SUI": ("Sui", ["SUI"]),
+    "APTOS": ("Aptos", ["APT"]),
+    "APT": ("Aptos", ["APT"]),
+    "ETH": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "ETHEREUM": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "ERC20": ("Ethereum", ["USDT", "USDC", "ETH"]),
+    "OPTIMISM": ("Optimism", ["ETH"]),
+    "OP": ("Optimism", ["ETH"]),
+    "ROBINHOOD": ("Robinhood", ["ETH", "USDG"]),
+    "HYPEREVM": ("HyperEVM", ["HYPE"]),
+    "HYPE": ("HyperEVM", ["HYPE"]),
+    "AVAX": ("Avalanche", ["AVAX"]),
+    "AVALANCHE": ("Avalanche", ["AVAX"]),
+    "KAIA": ("Kaia", ["KAIA"]),
+    "BERA": ("Berachain", ["BERA"]),
+    "BERACHAIN": ("Berachain", ["BERA"]),
+}
+
+
+def get_available_networks_list() -> list[str]:
+    """Mengembalikan daftar nama canonical jaringan yang didukung."""
+    return [
+        "Morph", "Base", "BSC", "Arbitrum", "Polygon", "Solana",
+        "TRON", "TON", "Sui", "Aptos", "Ethereum", "Optimism",
+        "Robinhood", "HyperEVM", "Avalanche", "Kaia", "Berachain",
+    ]
+
+
+def get_network_coins(network_query: str) -> tuple[str, list[str]]:
+    """
+    Mengambil nama canonical jaringan dan daftar simbol koin yang tersedia.
+    Secara dinamis mencari dari BUY_NETWORKS_BY_SYMBOL dan STOCK_ASSETS.
+    """
+    from bot.keyboards.crypto_select import BUY_NETWORKS_BY_SYMBOL
+    from config.assets import STOCK_ASSETS
+
+    q_upper = network_query.strip().upper()
+    if q_upper in NETWORK_ALIASES:
+        canonical_name, base_coins = NETWORK_ALIASES[q_upper]
+    else:
+        canonical_name = network_query.strip().capitalize()
+        base_coins = []
+
+    coins: list[str] = list(base_coins)
+    for sym, nets in BUY_NETWORKS_BY_SYMBOL.items():
+        if any(n.upper() in (q_upper, canonical_name.upper()) for n in nets):
+            if sym not in coins:
+                coins.append(sym)
+
+    for sym, net in STOCK_ASSETS:
+        if net.upper() in (q_upper, canonical_name.upper()):
+            if sym not in coins:
+                coins.append(sym)
+
+    return canonical_name, coins
+
+
+def build_ready_broadcast_message(network_name: str, coins: list[str]) -> str:
+    """Membangun teks siaran koin ready otomatis."""
+    coin_lines = "\n".join(f"✅ {c:<6} ({network_name}🪙)" if len(c) <= 4 else f"✅ {c} ({network_name}🪙)" for c in coins)
+    return (
+        f"{network_name} Ready For Now🪙\n\n"
+        f"{coin_lines}\n\n"
+        f"Silakan /start bot untuk Beli/Jual/Swap token."
+    )
+
+
 async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Siaran ke seluruh user terdaftar: teks saja atau foto + caption.
+    """Siaran ke user terdaftar dengan segment targeting.
 
     Cara pakai (admin only):
-    - Teks: /broadcast Halo member...
+    - Teks: /broadcast [--all|--active|--buyers|--balance] Halo member...
+    - Koin Ready: /broadcast --ready Morph (otomatis format koin ready)
     - Foto: kirim poster dengan caption diawali /broadcast ... (atau reply
       foto poster dengan /broadcast ...).
     """
@@ -1319,45 +2886,116 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     photo_file_id = None
+    is_document = False
     if message.photo:
         photo_file_id = message.photo[-1].file_id
         raw = message.caption or ""
-    elif message.reply_to_message and message.reply_to_message.photo:
+    elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
+        photo_file_id = message.document.file_id
+        is_document = True
+        raw = message.caption or ""
+    elif message.reply_to_message and getattr(message.reply_to_message, "photo", None):
         photo_file_id = message.reply_to_message.photo[-1].file_id
+        raw = message.text or ""
+    elif message.reply_to_message and getattr(message.reply_to_message, "document", None) and isinstance(getattr(message.reply_to_message.document, "mime_type", None), str) and message.reply_to_message.document.mime_type.startswith("image/"):
+        photo_file_id = message.reply_to_message.document.file_id
+        is_document = True
         raw = message.text or ""
     else:
         raw = message.text or ""
 
-    broadcast_msg = raw.replace("/broadcast", "", 1).strip()
-    if not broadcast_msg and not photo_file_id:
+    clean_raw = re.sub(r"^/broadcast(?:@\w+)?\s*", "", raw, flags=re.IGNORECASE).strip()
+    if not clean_raw and not photo_file_id:
         await message.reply_text(
             "⚠️ Format salah.\n"
             "Teks: <code>/broadcast Halo member...</code>\n"
+            "Koin Ready: <code>/broadcast --ready Morph</code>\n"
+            "Segment: <code>/broadcast --buyers Promo...</code>\n"
             "Foto: kirim poster dengan caption <code>/broadcast ...</code> "
             "atau reply foto poster dengan <code>/broadcast ...</code>.",
             parse_mode="HTML",
         )
         return
 
-    header = "📢 <b>PENGUMUMAN DARI OWNER</b>"
-    full_text = f"{header}\n\n{broadcast_msg}" if broadcast_msg else header
+    segment, broadcast_msg = _parse_broadcast_segment(clean_raw)
+
+    # Jika mereply foto tanpa teks tambahan di reply-nya, pakai caption asli foto tersebut bila ada
+    if not broadcast_msg and message.reply_to_message and message.reply_to_message.caption:
+        broadcast_msg = message.reply_to_message.caption.strip()
+
+    if not broadcast_msg and not photo_file_id:
+        await message.reply_text(
+            "⚠️ Pesan broadcast kosong setelah flag segment.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Deteksi format otomatis koin ready: --ready [JARINGAN] atau ready [JARINGAN]
+    ready_pattern = re.compile(
+        r"(?:^|\s)--ready(?:\s+([a-zA-Z0-9_\-]+))?|^ready\s+([a-zA-Z0-9_\-]+)$",
+        re.IGNORECASE,
+    )
+    ready_match = ready_pattern.search(broadcast_msg) if broadcast_msg else None
+    if ready_match:
+        target_net = ready_match.group(1) or ready_match.group(2)
+        if not target_net:
+            nets_str = ", ".join(get_available_networks_list())
+            await message.reply_text(
+                "ℹ️ <b>Format Siaran Koin Ready Otomatis:</b>\n"
+                "<code>/broadcast --ready [NAMA_JARINGAN]</code>\n\n"
+                "Contoh:\n"
+                "• <code>/broadcast --ready Morph</code>\n"
+                "• <code>/broadcast --ready Base</code>\n"
+                "• <code>/broadcast --ready BSC</code>\n"
+                "• <code>/broadcast --buyers --ready Morph</code> <i>(khusus member pembeli)</i>\n\n"
+                f"📌 <b>Jaringan Tersedia:</b>\n<code>{nets_str}</code>\n\n"
+                "💡 <i>Anda juga bisa mengirim foto poster dengan caption <code>/broadcast --ready Morph</code>.</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        canon_name, coins = get_network_coins(target_net)
+        if not coins:
+            nets_str = ", ".join(get_available_networks_list())
+            await message.reply_text(
+                f"⚠️ Koin untuk jaringan <b>{target_net}</b> belum terdaftar.\n\n"
+                f"📌 Jaringan yang tersedia:\n<code>{nets_str}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        broadcast_msg = build_ready_broadcast_message(canon_name, coins)
+
+    full_text = broadcast_msg or ""
 
     db = SessionLocal()
     try:
-        users = db.query(User).filter(User.is_banned == False).all() # noqa: E712
+        users = crud.get_users_by_segment(db, segment)
         if not users:
-            await message.reply_text("ℹ️ Tidak ada pengguna terdaftar untuk dikirim broadcast.")
+            await message.reply_text(f"ℹ️ Tidak ada user pada segment {_segment_label(segment)}.")
             return
 
-        mode = "Foto + Teks" if photo_file_id else "Teks"
-        await message.reply_text(f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...")
+        if photo_file_id and broadcast_msg:
+            mode = "Dokumen Gambar + Teks" if is_document else "Foto + Teks"
+        elif photo_file_id:
+            mode = "Dokumen Gambar" if is_document else "Foto"
+        else:
+            mode = "Teks"
+
+        import time as _time
+        start_ts = _time.monotonic()
+
+        await message.reply_text(
+            f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...\n"
+            f"📌 Segment: {_segment_label(segment)}"
+        )
 
         success_count = 0
         fail_count = 0
 
         for index, u in enumerate(users, start=1):
             if await _send_broadcast_to_user(
-                context.bot, u.telegram_id, full_text, photo_file_id
+                context.bot, u.telegram_id, full_text, photo_file_id, is_document=is_document
             ):
                 success_count += 1
             else:
@@ -1365,11 +3003,16 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if index % BROADCAST_PACE_EVERY == 0:
                 await asyncio.sleep(BROADCAST_PACE_SECONDS)
 
+        elapsed = _time.monotonic() - start_ts
+
         await message.reply_text(
-            f"📢 <b>Broadcast Selesai</b>\n"
-            f"• Mode: <code>{mode}</code>\n"
-            f"• Sukses terkirim: <code>{success_count} user</code>\n"
-            f"• Gagal/Blokir bot: <code>{fail_count} user</code>",
+            f"📊 <b>LAPORAN BROADCAST SELESAI</b>\n\n"
+            f"📌 Segment: {_segment_label(segment)}\n"
+            f"📤 Total target   : <code>{len(users)} user</code>\n"
+            f"✅ Terkirim        : <code>{success_count} user</code>\n"
+            f"❌ Gagal (blocked) : <code>{fail_count} user</code>\n"
+            f"⏱  Durasi         : <code>{elapsed:.1f} detik</code>\n"
+            f"🔤 Mode           : <code>{mode}</code>",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -1809,3 +3452,548 @@ async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"Judul: {chat.title or 'chat pribadi'}\n\n"
         f"Jalankan /settarget beli (dll) di topik yang dituju.",
         parse_mode="HTML")
+
+
+# ============================================================
+# ADMIN CREDIT BALANCE — Isi saldo IDR ke user
+# ============================================================
+
+async def credit_balance_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Isi saldo IDR ke user tertentu.
+
+    Format: /credit <telegram_id> <jumlah_idr> [keterangan]
+    Contoh: /credit 123456789 10000 Giveaway Winner Oktober
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Format: <code>/credit [telegram_id] [jumlah_idr] [keterangan]</code>\n"
+            "Contoh: <code>/credit 123456789 10000 Giveaway Winner</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Telegram ID harus berupa angka.")
+        return
+
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Jumlah IDR harus berupa angka.")
+        return
+
+    if amount < 1000:
+        await update.message.reply_text("❌ Minimum kredit adalah Rp 1.000.")
+        return
+    if amount > 10_000_000:
+        await update.message.reply_text("❌ Maksimum kredit adalah Rp 10.000.000 per operasi.")
+        return
+
+    keterangan = " ".join(context.args[2:]) if len(context.args) > 2 else "Admin credit"
+
+    db = SessionLocal()
+    try:
+        target_user = db.query(User).filter(User.telegram_id == target_id).first()
+        if not target_user:
+            await update.message.reply_text(
+                f"❌ User dengan ID <code>{target_id}</code> tidak ditemukan di database.",
+                parse_mode="HTML",
+            )
+            return
+
+        old_bal = float(target_user.balance_idr or 0)
+        new_bal = crud.credit_user_balance(db, target_id, float(amount))
+
+        # Audit log
+        db.add(AuditLog(
+            telegram_id=target_id,
+            action="ADMIN_CREDIT_BALANCE",
+            details=f"Admin {user_id} credit Rp {amount:,} ke {target_id}. "
+                    f"Saldo: Rp {old_bal:,.0f} → Rp {new_bal:,.0f}. Keterangan: {keterangan}",
+        ))
+        db.commit()
+
+        target_name = f"@{target_user.username}" if target_user.username else str(target_id)
+
+        # Notifikasi ke user penerima
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    f"🎉 <b>Saldo Anda Bertambah!</b>\n\n"
+                    f"💰 Jumlah : <b>{format_idr(amount)}</b>\n"
+                    f"📝 Keterangan: {_esc(keterangan)}\n"
+                    f"💳 Saldo Sekarang: <b>{format_idr(int(new_bal))}</b>\n\n"
+                    f"Gunakan saldo ini untuk membeli crypto di bot! 🚀"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as notif_err:
+            logger.warning(f"Gagal kirim notifikasi credit ke {target_id}: {notif_err}")
+
+        await update.message.reply_text(
+            f"✅ <b>Berhasil Isi Saldo</b>\n\n"
+            f"👤 User: {target_name} (<code>{target_id}</code>)\n"
+            f"💰 Jumlah: <b>{format_idr(amount)}</b>\n"
+            f"💳 Saldo Baru: <b>{format_idr(int(new_bal))}</b>\n"
+            f"📝 Keterangan: {_esc(keterangan)}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error credit_balance_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal mengisi saldo user.")
+    finally:
+        db.close()
+
+
+async def bulkcredit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Isi saldo IDR ke banyak user sekaligus.
+
+    Format: /bulkcredit <jumlah_idr> <id1> <id2> <id3> ...
+    Contoh: /bulkcredit 10000 123456789 987654321 555666777
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Format: <code>/bulkcredit [jumlah_idr] [id1] [id2] ...</code>\n"
+            "Contoh: <code>/bulkcredit 10000 123456789 987654321</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        amount = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Jumlah IDR harus berupa angka (argumen pertama).")
+        return
+
+    if amount < 1000:
+        await update.message.reply_text("❌ Minimum kredit adalah Rp 1.000.")
+        return
+    if amount > 10_000_000:
+        await update.message.reply_text("❌ Maksimum kredit adalah Rp 10.000.000 per operasi.")
+        return
+
+    target_ids = []
+    for arg in context.args[1:]:
+        try:
+            target_ids.append(int(arg))
+        except ValueError:
+            await update.message.reply_text(f"❌ ID <code>{arg}</code> bukan angka valid.", parse_mode="HTML")
+            return
+
+    if not target_ids:
+        await update.message.reply_text("❌ Tidak ada user ID yang diberikan.")
+        return
+
+    await update.message.reply_text(
+        f"⏳ Memproses bulk credit {format_idr(amount)} ke {len(target_ids)} user..."
+    )
+
+    db = SessionLocal()
+    try:
+        success_count = 0
+        fail_count = 0
+        results = []
+
+        for tid in target_ids:
+            target_user = db.query(User).filter(User.telegram_id == tid).first()
+            if not target_user:
+                fail_count += 1
+                results.append(f"❌ {tid} — tidak ditemukan")
+                continue
+
+            try:
+                new_bal = crud.credit_user_balance(db, tid, float(amount))
+                db.add(AuditLog(
+                    telegram_id=tid,
+                    action="ADMIN_CREDIT_BALANCE",
+                    details=f"Bulk credit oleh admin {user_id}. Rp {amount:,}. Saldo baru: Rp {new_bal:,.0f}",
+                ))
+                db.commit()
+
+                name = f"@{target_user.username}" if target_user.username else str(tid)
+                success_count += 1
+                results.append(f"✅ {name} — saldo baru: {format_idr(int(new_bal))}")
+
+                # Notifikasi ke user
+                try:
+                    await context.bot.send_message(
+                        chat_id=tid,
+                        text=(
+                            f"🎉 <b>Saldo Anda Bertambah!</b>\n\n"
+                            f"💰 Jumlah: <b>{format_idr(amount)}</b>\n"
+                            f"💳 Saldo Sekarang: <b>{format_idr(int(new_bal))}</b>\n\n"
+                            f"Gunakan saldo ini untuk membeli crypto di bot! 🚀"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                fail_count += 1
+                results.append(f"❌ {tid} — error: {e}")
+
+        total_credited = amount * success_count
+        report = "\n".join(results[:20])  # Max 20 lines
+        if len(results) > 20:
+            report += f"\n... dan {len(results) - 20} lainnya"
+
+        await update.message.reply_text(
+            f"📊 <b>LAPORAN BULK CREDIT</b>\n\n"
+            f"💰 Nominal per user: <b>{format_idr(amount)}</b>\n"
+            f"✅ Sukses: <b>{success_count}/{len(target_ids)}</b>\n"
+            f"❌ Gagal: <b>{fail_count}/{len(target_ids)}</b>\n"
+            f"💵 Total dikreditkan: <b>{format_idr(total_credited)}</b>\n\n"
+            f"<b>Detail:</b>\n{report}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error bulkcredit_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses bulk credit.")
+    finally:
+        db.close()
+
+
+# ============================================================
+# ADMIN REFERRAL CONFIG — /setreferral
+# ============================================================
+
+async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Konfigurasi referral program.
+
+    Format:
+      /setreferral reward <jumlah>     — Set reward per referral (Rp)
+      /setreferral bonus <jumlah>      — Set potongan/bonus transaksi pertama teman (Rp)
+      /setreferral enabled true|false  — Aktifkan/nonaktifkan program
+      /setreferral max <jumlah>        — Batas maksimal referral per user
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Format Pengaturan Referral:</b>\n\n"
+            "• <code>/setreferral reward [JUMLAH]</code> — Set reward pengundang\n"
+            "• <code>/setreferral bonus [JUMLAH]</code> — Set potongan/bonus teman\n"
+            "• <code>/setreferral min [JUMLAH]</code> — Set min. pembelian teman (0 = tanpa min)\n"
+            "• <code>/setreferral enabled true|false</code> — Aktifkan/nonaktifkan program\n"
+            "• <code>/setreferral max [JUMLAH]</code> — Batas maksimal teman/user\n\n"
+            "<i>Atau gunakan menu interaktif di Dashboard Admin ➔ Kelola Referral.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    key = context.args[0].lower()
+    value = context.args[1]
+
+    valid_keys = {
+        "reward": "reward_per_referral",
+        "enabled": "referral_enabled",
+        "bonus": "referee_discount_idr",
+        "discount": "referee_discount_idr",
+        "potongan": "referee_discount_idr",
+        "max": "max_referrals_per_user",
+        "min": "min_trade_amount_idr",
+        "minimal": "min_trade_amount_idr",
+        "min_trade": "min_trade_amount_idr",
+        "minorder": "min_trade_amount_idr",
+    }
+    if key not in valid_keys:
+        await update.message.reply_text(
+            f"❌ Key tidak valid: <code>{key}</code>.\n"
+            "Gunakan salah satu: <code>reward</code>, <code>bonus</code>, <code>min</code>, <code>enabled</code>, <code>max</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    config_key = valid_keys[key]
+
+    if key in ("reward", "bonus", "discount", "potongan"):
+        try:
+            val = int(value)
+            if val < 0 or val > 1_000_000:
+                await update.message.reply_text("❌ Nilai harus antara 0 - 1.000.000")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai harus berupa angka.")
+            return
+    elif key in ("min", "minimal", "min_trade", "minorder"):
+        try:
+            val = int(value)
+            if val < 0 or val > 50_000_000:
+                await update.message.reply_text("❌ Nilai minimal harus antara 0 - 50.000.000 (0 = tanpa min)")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai minimal harus berupa angka.")
+            return
+    elif key == "max":
+        try:
+            val = int(value)
+            if val < 1 or val > 100_000:
+                await update.message.reply_text("❌ Batas maksimal harus antara 1 - 100.000")
+                return
+            value = str(val)
+        except ValueError:
+            await update.message.reply_text("❌ Nilai max harus berupa angka.")
+            return
+    elif key == "enabled":
+        if value.lower() not in ("true", "false"):
+            await update.message.reply_text("❌ Nilai harus 'true' atau 'false'.")
+            return
+        value = value.lower()
+
+    db = SessionLocal()
+    try:
+        crud.set_referral_config(db, config_key, value)
+        await update.message.reply_text(
+            f"✅ <b>Referral Config Diperbarui!</b>\n\n"
+            f"⚙️ <code>{config_key}</code> = <b>{value}</b>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error setreferral: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal update konfigurasi referral.")
+    finally:
+        db.close()
+
+
+async def admin_interactive_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Router terpusat untuk seluruh input teks interaktif admin:
+    - Pencarian pengguna & nominal kirim saldo admin
+    - Top up & atur ulang saldo kas bot (Bot Treasury)
+    - Konfigurasi nominal kustom referral (reward, bonus, min trade)
+    """
+    if not update.message or not update.message.text:
+        return False
+
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return False
+
+    raw_text = update.message.text.strip()
+    db = SessionLocal()
+
+    try:
+        # 1. Admin Send Balance — Input Target User (@username atau ID)
+        if context.user_data.get("admin_awaiting_send_bal_user"):
+            target_user = crud.get_user_by_identifier(db, raw_text)
+            if not target_user:
+                await update.message.reply_text(
+                    f"❌ <b>Pengguna Tidak Ditemukan!</b>\n\n"
+                    f"Tidak ditemukan pengguna dengan username atau ID: <code>{_esc(raw_text)}</code>.\n"
+                    f"Pastikan pengguna sudah pernah memulai bot (<code>/start</code>).\n\n"
+                    f"<i>Silakan ketik ulang @username atau ID Telegram yang benar:</i>",
+                    parse_mode="HTML",
+                )
+                return True
+
+            context.user_data.pop("admin_awaiting_send_bal_user", None)
+            context.user_data["admin_send_bal_target_id"] = target_user.telegram_id
+            text, markup = build_admin_send_balance_amount_view(target_user)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 2. Admin Send Balance — Input Nominal Kustom
+        if context.user_data.get("admin_awaiting_send_bal_custom_amt"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits:
+                await update.message.reply_text("❌ Mohon ketik angka nominal yang valid (contoh: <code>50000</code>):", parse_mode="HTML")
+                return True
+
+            amount = int(clean_digits)
+            if amount < 1000 or amount > 10_000_000:
+                await update.message.reply_text(
+                    "❌ Nominal harus antara <b>Rp 1.000</b> sampai <b>Rp 10.000.000</b>.\nSilakan ketik angka kembali:",
+                    parse_mode="HTML"
+                )
+                return True
+
+            target_id = context.user_data.get("admin_send_bal_target_id")
+            if not target_id:
+                await update.message.reply_text("⚠️ Sesi transfer kedaluwarsa. Silakan mulai kembali dari menu Kirim Saldo.")
+                context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+                return True
+
+            target_user = db.query(User).filter(User.telegram_id == target_id).first()
+            if not target_user:
+                await update.message.reply_text("❌ Pengguna tidak ditemukan di database.")
+                context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+                return True
+
+            context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
+            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 3. Bot Treasury — Topup Saldo Kas Bot Kustom
+        if context.user_data.get("admin_awaiting_treasury_custom"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits or int(clean_digits) < 1000:
+                await update.message.reply_text("❌ Nominal minimal top up adalah Rp 1.000. Silakan ketik angka kembali:")
+                return True
+
+            amount = int(clean_digits)
+            new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note="Admin Custom Topup")
+            context.user_data.pop("admin_awaiting_treasury_custom", None)
+
+            await update.message.reply_text(
+                f"✅ <b>TOP UP KAS BOT BERHASIL!</b>\n\n"
+                f"💰 <b>Nominal Ditambahkan:</b> <code>+{format_idr(amount)}</code>\n"
+                f"🏦 <b>Total Saldo Kas Bot Sekarang:</b> <b>{format_idr(new_bal)}</b>\n\n"
+                f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>",
+                parse_mode="HTML"
+            )
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 4. Bot Treasury — Atur Ulang Saldo Manual
+        if context.user_data.get("admin_awaiting_treasury_set_manual"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits:
+                await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: <code>5000000</code> atau <code>0</code>):", parse_mode="HTML")
+                return True
+
+            amount = int(clean_digits)
+            new_bal = crud.set_bot_treasury_balance(db, amount, admin_id=user_id, note="Admin Set Manual")
+            context.user_data.pop("admin_awaiting_treasury_set_manual", None)
+
+            await update.message.reply_text(
+                f"✅ <b>SALDO KAS BOT DIPERBARUI!</b>\n\n"
+                f"🏦 <b>Saldo Kas Baru:</b> <b>{format_idr(new_bal)}</b>",
+                parse_mode="HTML"
+            )
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 5. Bot Treasury — Topup QRIS Kustom (Uang Asli)
+        if context.user_data.get("admin_awaiting_treasury_qris_custom"):
+            clean_digits = "".join(ch for ch in raw_text if ch.isdigit())
+            if not clean_digits or int(clean_digits) < 5000:
+                await update.message.reply_text("❌ Minimal deposit QRIS adalah Rp 5.000. Silakan ketik angka kembali:")
+                return True
+
+            amount = int(clean_digits)
+            if amount > 10_000_000:
+                await update.message.reply_text("❌ Maksimal deposit QRIS adalah Rp 10.000.000 per transaksi (Limit BI). Silakan masukkan nominal yang lebih kecil:")
+                return True
+
+            context.user_data.pop("admin_awaiting_treasury_qris_custom", None)
+            await generate_and_send_treasury_qris(update, context, amount)
+            return True
+
+        # 5. Referral Configurations (Reward, Bonus, Min Trade)
+        is_reward = context.user_data.get("admin_awaiting_ref_custom_reward")
+        is_bonus = context.user_data.get("admin_awaiting_ref_custom_bonus")
+        is_min_trade = context.user_data.get("admin_awaiting_ref_custom_min_trade")
+
+        if is_reward or is_bonus or is_min_trade:
+            clean_val = raw_text.replace(".", "").replace(",", "").replace("Rp", "").replace("rp", "").strip()
+            try:
+                val = int(clean_val)
+                max_limit = 50_000_000 if is_min_trade else 1_000_000
+                if val < 0 or val > max_limit:
+                    await update.message.reply_text(f"❌ Nominal harus antara Rp 0 sampai Rp {max_limit:,}. Silakan ketik angka kembali:")
+                    return True
+            except ValueError:
+                await update.message.reply_text("❌ Mohon masukkan angka nominal yang valid (contoh: 50000):")
+                return True
+
+            if is_reward:
+                crud.set_referral_config(db, "reward_per_referral", str(val))
+                context.user_data["admin_awaiting_ref_custom_reward"] = False
+                await update.message.reply_text(
+                    f"✅ <b>Reward Pengundang Berhasil Diperbarui!</b>\n\n"
+                    f"💰 Nominal reward baru: <b>Rp {val:,}</b> per teman yang selesai transaksi.",
+                    parse_mode="HTML"
+                )
+            elif is_bonus:
+                crud.set_referral_config(db, "referee_discount_idr", str(val))
+                context.user_data["admin_awaiting_ref_custom_bonus"] = False
+                await update.message.reply_text(
+                    f"✅ <b>Potongan / Bonus Teman Berhasil Diperbarui!</b>\n\n"
+                    f"🎁 Nominal potongan baru: <b>Rp {val:,}</b> untuk transaksi pertama teman.",
+                    parse_mode="HTML"
+                )
+            elif is_min_trade:
+                crud.set_referral_config(db, "min_trade_amount_idr", str(val))
+                context.user_data["admin_awaiting_ref_custom_min_trade"] = False
+                desc_val = f"Rp {val:,}" if val > 0 else "Tanpa Minimal (Bebas)"
+                await update.message.reply_text(
+                    f"✅ <b>Syarat Minimal Pembelian Diperbarui!</b>\n\n"
+                    f"🛒 Minimal pembelian teman baru: <b>{desc_val}</b>.",
+                    parse_mode="HTML"
+                )
+
+            view_text = build_admin_referral_view(db)
+            markup = build_admin_referral_keyboard(db)
+            await update.message.reply_text(
+                text=view_text,
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
+            return True
+
+        return False
+    except Exception as e:
+        logger.error(f"Error in admin_interactive_text_router: {e}", exc_info=True)
+        await update.message.reply_text("❌ Terjadi kesalahan saat memproses input admin.")
+        return True
+    finally:
+        db.close()
+
+
+# Alias untuk backwards compatibility
+admin_referral_text_handler = admin_interactive_text_router
+
+
+async def topup_bot_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /topupbot <nominal> atau /saldobot untuk melihat dan topup saldo kas bot."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    db = SessionLocal()
+    try:
+        if not context.args:
+            text, markup = build_admin_treasury_view(db)
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return
+
+        clean_digits = "".join(ch for ch in context.args[0] if ch.isdigit())
+        if not clean_digits or int(clean_digits) < 1000:
+            await update.message.reply_text("⚠️ Nominal topup kas bot minimal Rp 1.000.")
+            return
+
+        amount = int(clean_digits)
+        note = " ".join(context.args[1:]) if len(context.args) > 1 else "Command Topup Bot"
+        new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note=note)
+
+        await update.message.reply_text(
+            f"✅ <b>TOP UP KAS BOT BERHASIL!</b>\n\n"
+            f"💰 <b>Nominal Ditambahkan:</b> <code>+{format_idr(amount)}</code>\n"
+            f"🏦 <b>Total Saldo Kas Bot:</b> <b>{format_idr(new_bal)}</b>\n"
+            f"📝 <b>Keterangan:</b> {_esc(note)}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Error in topup_bot_command_handler: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses topup kas bot.")
+    finally:
+        db.close()
+
+

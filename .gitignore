@@ -82,4 +82,11 @@ error/
 
 
 
+# ===========================
+# Local E2E AI Agent Tester & Sessions (DO NOT PUSH)
+# ===========================
+local_e2e_agent/
+local_reports/
+*.session
+*.session-journal
 railway-env-raw.txt

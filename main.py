@@ -15,12 +15,14 @@ Startup sequence:
 
 import asyncio
 import logging
+import re
 import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 from telegram import BotCommand, Update
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -59,7 +61,12 @@ from bot.handlers.admin import (
     listemojis_handler,
     resetemojis_handler,
     check_api_command,
+    credit_balance_handler,
+    bulkcredit_handler,
+    setreferral_handler,
 )
+from bot.handlers.referral import referral_menu_handler
+from bot.handlers.admin_campaign import campaign_command_handler
 
 # FastAPI app & webhook bridge
 from services.bot_runtime import bot_app, set_bot_app
@@ -98,6 +105,7 @@ def init_database():
     Create all SQLAlchemy tables (no-op if they already exist)
     and seed default data for fee_tiers and price_config.
     """
+    import database.models  # Pastikan semua model ter-load ke Base.metadata
     import database.connection as db_conn
     logger.info("Creating database tables (if not exist)...")
     try:
@@ -111,11 +119,13 @@ def init_database():
         db_conn.SessionLocal.configure(bind=db_conn.engine)
         Base.metadata.create_all(bind=db_conn.engine)
 
-    # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders
+    # Migrasi schema (SQLite/Postgres): users, wallet_balances, inventory, orders, campaigns
     _migrate_users_schema()
     _migrate_wallet_balance_schema()
     _migrate_inventory_schema()
     _migrate_orders_schema()
+    _migrate_campaign_schema()
+    _migrate_phase7_schema()   # Phase 7: Referral Discount, Loyalty, Enhanced Wallet
 
     db = db_conn.SessionLocal()
     try:
@@ -154,8 +164,106 @@ def _migrate_users_schema():
                     if col not in existing_cols:
                         conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {dtype}")
                         logger.info("Migrasi users: kolom %s ditambahkan.", col)
+                conn.exec_driver_sql("UPDATE users SET is_banned = FALSE WHERE is_banned IS NULL")
     except Exception as exc:
         logger.error("Migrasi users gagal: %s", exc, exc_info=True)
+
+
+def _migrate_campaign_schema():
+    """
+    Memastikan tabel campaigns dan campaign_distributions terbuat
+    (kompatibel SQLite & PostgreSQL).
+    """
+    from sqlalchemy import inspect
+    from database.connection import engine, Base
+    import database.models
+    try:
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+        if "campaigns" not in table_names or "campaign_distributions" not in table_names:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Migrasi campaign: tabel campaigns & campaign_distributions berhasil dibuat.")
+    except Exception as exc:
+        logger.error("Migrasi campaign gagal: %s", exc, exc_info=True)
+
+
+def _migrate_phase7_schema():
+    """
+    Phase 7: Buat tabel baru dan tambah kolom ke tabel yang sudah ada.
+    - Tabel baru: referral_discounts, loyalty_rewards, loyalty_config
+    - Kolom baru di orders: referral_discount_applied, referral_discount_pct, discount_amount_idr
+    - Kolom baru di user_saved_wallets: chain_type, is_default, auto_detected
+    - Seed default loyalty_config rows
+    """
+    from sqlalchemy import inspect
+    from database.connection import engine, Base
+    import database.models  # noqa: F401 — ensure models are loaded
+
+    try:
+        # Buat tabel baru yang belum ada (idempotent via create_all)
+        Base.metadata.create_all(bind=engine)
+        inspector = inspect(engine)
+
+        # ── Kolom baru di tabel orders ──────────────────────────────
+        if "orders" in inspector.get_table_names():
+            existing_order_cols = {c["name"] for c in inspector.get_columns("orders")}
+            new_order_cols = [
+                ("referral_discount_applied", "BOOLEAN DEFAULT FALSE"),
+                ("referral_discount_pct", "NUMERIC(5, 2)"),
+                ("discount_amount_idr", "BIGINT DEFAULT 0"),
+            ]
+            with engine.begin() as conn:
+                for col, dtype in new_order_cols:
+                    if col not in existing_order_cols:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE orders ADD COLUMN {col} {dtype}"
+                        )
+                        logger.info("Phase7 migration: orders.%s ditambahkan.", col)
+
+        # ── Kolom baru di tabel user_saved_wallets ──────────────────
+        if "user_saved_wallets" in inspector.get_table_names():
+            existing_wallet_cols = {c["name"] for c in inspector.get_columns("user_saved_wallets")}
+            new_wallet_cols = [
+                ("chain_type", "VARCHAR(20)"),
+                ("is_default", "BOOLEAN DEFAULT FALSE"),
+                ("auto_detected", "BOOLEAN DEFAULT FALSE"),
+            ]
+            with engine.begin() as conn:
+                for col, dtype in new_wallet_cols:
+                    if col not in existing_wallet_cols:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE user_saved_wallets ADD COLUMN {col} {dtype}"
+                        )
+                        logger.info("Phase7 migration: user_saved_wallets.%s ditambahkan.", col)
+
+        # ── Seed default loyalty_config ─────────────────────────────
+        from database.connection import SessionLocal
+        from database.models import LoyaltyConfig
+        DEFAULT_LOYALTY = {
+            "loyalty_enabled": "true",
+            "window_days": "5",
+            "min_tx_count": "5",
+            "reward_amount_idr": "25000",
+            "min_tx_amount_idr": "50000",
+        }
+        _db = SessionLocal()
+        try:
+            for key, val in DEFAULT_LOYALTY.items():
+                exists = _db.query(LoyaltyConfig).filter(LoyaltyConfig.key == key).first()
+                if not exists:
+                    _db.add(LoyaltyConfig(key=key, value=val))
+            _db.commit()
+            logger.info("Phase7 migration: loyalty_config defaults selesai di-seed.")
+        except Exception as seed_err:
+            _db.rollback()
+            logger.warning("Phase7 migration: seed loyalty_config gagal: %s", seed_err)
+        finally:
+            _db.close()
+
+        logger.info("Phase 7 schema migration selesai.")
+    except Exception as exc:
+        logger.error("Phase 7 migration gagal: %s", exc, exc_info=True)
+
 
 
 def _migrate_orders_schema():
@@ -341,9 +449,19 @@ def build_bot_application() -> Application:
     """
     logger.info("Building Telegram bot application...")
 
+    # Konfigurasi request HTTPX yang tangguh untuk long-polling & auto-reconnect
+    trequest = HTTPXRequest(
+        connection_pool_size=100,
+        read_timeout=30.0,
+        write_timeout=20.0,
+        connect_timeout=15.0,
+        pool_timeout=15.0,
+    )
+
     application = (
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
+        .request(trequest)
         .post_init(set_bot_commands)
         .build()
     )
@@ -360,6 +478,13 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("sellorders", sellorders_handler))
     application.add_handler(CommandHandler("confirm", confirm_handler))
     application.add_handler(CommandHandler("broadcast", broadcast_handler))
+    # Handler siaran foto / dokumen gambar dengan caption diawali /broadcast (agar tidak tertangkap oleh router bukti transfer)
+    application.add_handler(
+        MessageHandler(
+            (filters.PHOTO | filters.Document.IMAGE) & filters.CaptionRegex(re.compile(r"^/broadcast(\s|@|$)", re.IGNORECASE)),
+            broadcast_handler,
+        )
+    )
     application.add_handler(CommandHandler("ban", ban_handler))
     application.add_handler(CommandHandler("unban", unban_handler))
     application.add_handler(CommandHandler("stats", stats_handler))
@@ -377,6 +502,18 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("resetemojis", resetemojis_handler))
     application.add_handler(CommandHandler("checkapi", check_api_command))
     application.add_handler(CommandHandler("cekurl", check_api_command))
+    application.add_handler(CommandHandler(["credit", "sendsaldo", "kirimsaldo"], credit_balance_handler))
+    application.add_handler(CommandHandler("bulkcredit", bulkcredit_handler))
+    application.add_handler(CommandHandler("campaign", campaign_command_handler))
+    application.add_handler(CommandHandler("giveaway", campaign_command_handler))
+    application.add_handler(CommandHandler("setreferral", setreferral_handler))
+    application.add_handler(CommandHandler("referral", referral_menu_handler))
+    from bot.handlers.saved_accounts import show_saved_wallets_menu, show_saved_banks_menu
+    application.add_handler(CommandHandler(["wallet", "dompet"], show_saved_wallets_menu))
+    from bot.handlers.admin import weekly_report_command_handler, test_testimony_command_handler, topup_bot_command_handler
+    application.add_handler(CommandHandler(["weeklyreport", "report"], weekly_report_command_handler))
+    application.add_handler(CommandHandler(["testtesti", "testchannel"], test_testimony_command_handler))
+    application.add_handler(CommandHandler(["topupbot", "saldobot", "dompetbot"], topup_bot_command_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands
@@ -391,6 +528,10 @@ def build_bot_application() -> Application:
     # Satu router: foto diarahkan ke alur Buy ATAU Topup (hindari forward ganda ke admin).
     application.add_handler(MessageHandler(filters.PHOTO, _route_transfer_proof))
 
+    # --- Admin & Interactive User Input (Text) ---
+    # Menangani input teks user (simpan wallet/rekening) dan admin (kirim saldo, kas bot, campaign, referral)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _route_admin_text))
+
     # --- Callback Query Handler (catch-all for inline keyboard buttons) ---
     # Handles menu_* callbacks and any other inline-button presses.
     application.add_handler(CallbackQueryHandler(menu_callback_handler))
@@ -400,6 +541,37 @@ def build_bot_application() -> Application:
 
     logger.info("All handlers registered")
     return application
+
+
+async def _route_admin_text(update: Update, context) -> None:
+    """
+    Router pesan teks interaktif untuk input user (simpan wallet/rekening)
+    dan input wizard admin (kirim saldo, kas bot, nominal budget campaign, notifikasi, referral).
+    """
+    if not update.message or not update.message.text:
+        return
+
+    # Routing input user untuk simpan wallet atau simpan rekening
+    if context.user_data.get("awaiting_save_wallet") or context.user_data.get("awaiting_save_bank"):
+        from bot.handlers.saved_accounts import handle_saved_account_text_input
+        handled = await handle_saved_account_text_input(update, context)
+        if handled:
+            return
+
+    user_id = update.effective_user.id
+    from bot.handlers.admin import is_admin
+    if not is_admin(user_id):
+        return
+
+    # Routing seluruh input interaktif admin (kirim saldo user, top up kas bot, config referral)
+    from bot.handlers.admin import admin_interactive_text_router
+    handled = await admin_interactive_text_router(update, context)
+    if handled:
+        return
+
+    # Fallback ke wizard campaign / giveaway
+    from bot.handlers.admin_campaign import campaign_text_input_handler
+    await campaign_text_input_handler(update, context)
 
 
 async def _route_transfer_proof(update: Update, context) -> None:
@@ -413,6 +585,11 @@ async def _route_transfer_proof(update: Update, context) -> None:
     from bot.handlers.balance import handle_topup_transfer_proof
 
     user_id = update.effective_user.id
+    # Guard: jangan pernah tangani pesan /broadcast di router bukti transfer
+    caption = (update.message.caption or "").strip() if update.message else ""
+    if caption.lower().startswith("/broadcast"):
+        return
+
     # Cek jika admin sedang mengirimkan foto bukti transfer untuk order Sell
     if context.user_data.get("admin_awaiting_proof_order_id"):
         from bot.handlers.admin import handle_admin_upload_proof, is_admin
@@ -436,7 +613,15 @@ async def error_handler(update: object, context) -> None:
     Global error handler for the Telegram bot.
     Logs the error and notifies the user + all admins.
     """
-    logger.error("Unhandled exception: %s", context.error, exc_info=context.error)
+    from telegram.error import NetworkError, TimedOut, RetryAfter
+
+    err = context.error
+    # Abaikan error jaringan sementara (ReadError/Timeout) yang otomatis di-retry oleh updater
+    if isinstance(err, (NetworkError, TimedOut, RetryAfter)):
+        logger.warning("Transient Telegram NetworkError (auto-reconnect): %s", err)
+        return
+
+    logger.error("Unhandled exception: %s", err, exc_info=err)
 
     # Notify user (if we know who they are)
     if update and isinstance(update, Update) and update.effective_chat:
@@ -725,20 +910,51 @@ async def _job_low_balance_alert():
 
 
 async def _complete_topup(db, topup):
-    """Tandai topup SUCCESS (atomic claim), credit saldo user, dan kirim notifikasi Telegram."""
+    """Tandai topup SUCCESS (atomic claim), credit saldo user atau kas bot, dan kirim notifikasi Telegram."""
     from services.bot_runtime import bot_app
-    from database.crud import claim_topup_success, credit_user_balance
+    from database.crud import claim_topup_success, credit_user_balance, topup_bot_treasury
     from bot.utils.formatter import format_idr
+    from bot.utils.emojis import tg_emoji
 
     if not claim_topup_success(db, topup.topup_id):
         return
-    new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+
+    topup_mdr = int(topup.mdr_idr or 0)
+    net_amt = topup.amount_idr - topup_mdr
+
+    if str(topup.topup_id).startswith("TREASURY-") or str(topup.topup_id).startswith("TOPUP-TREASURY-"):
+        new_treasury_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+        if bot_app:
+            try:
+                msg = (
+                    f"{tg_emoji('BANK', '🏦')} ✅ <b>PEMBAYARAN QRIS KAS BOT TERVERIFIKASI (OTOMATIS)!</b>\n\n"
+                    f"🎉 Top up kas bot sebesar <b>{format_idr(net_amt)}</b> telah berhasil masuk!\n"
+                    f"💰 <b>Total Saldo Kas Bot Sekarang:</b> <b>{format_idr(new_treasury_bal)}</b>\n\n"
+                    f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>"
+                )
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                menu_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Buka Wizard Campaign", callback_data="admin_panel_campaign")],
+                    [InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="camp_treasury_view")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ])
+                await bot_app.bot.send_message(
+                    chat_id=topup.telegram_id,
+                    text=msg,
+                    reply_markup=menu_keyboard,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Gagal kirim notifikasi treasury topup ke admin {topup.telegram_id}: {e}")
+        return
+
+    new_bal = credit_user_balance(db, topup.telegram_id, net_amt)
 
     if bot_app:
         try:
             msg = (
                 f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
-                f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
+                f"🎉 Topup saldo sebesar <b>{format_idr(net_amt)}</b> telah berhasil!\n"
                 f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
                 f"<i>Anda dapat langsung menggunakan saldo ini untuk membeli koin crypto secara instan.</i>"
             )
@@ -976,6 +1192,7 @@ async def main():
         await application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
+            bootstrap_retries=-1,
         )
 
         logger.info("=" * 50)

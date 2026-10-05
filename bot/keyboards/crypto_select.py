@@ -14,8 +14,8 @@ from bot.utils.emojis import (
 # Mapping simbol ke daftar network yang tersedia untuk Beli/Jual Crypto
 BUY_NETWORKS_BY_SYMBOL = {
     "USDT": ["BSC", "POLYGON", "ARB", "TON", "SOLANA", "ETH"],
-    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON"],
-    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH"],
+    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON", "MORPH"],
+    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH", "MORPH"],
     "SOL": ["SOLANA"],
     "TRX": ["TRON"],
     "BNB": ["BSC"],
@@ -50,6 +50,11 @@ def _get_symbol_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarku
             row = []
     if row:
         keyboard.append(row)
+
+    if prefix == "buy":
+        keyboard.append([InlineKeyboardButton("👛 Alamat Wallet", callback_data="buy_saved_wallets")])
+    elif prefix == "sell":
+        keyboard.append([InlineKeyboardButton("👛 Rekening Pencairan", callback_data="sell_saved_banks")])
 
     keyboard.append([InlineKeyboardButton("Kembali ke Menu", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
     keyboard.append([get_owner_button()])

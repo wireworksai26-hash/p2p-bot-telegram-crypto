@@ -34,7 +34,7 @@ NETWORK_LABELS = {
     "TRON": "TRON (TRC20)", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
     "ROBINHOOD": "Robinhood", "SUI": "Sui Mainnet", "APTOS": "Aptos Mainnet",
     "AVAX": "Avalanche C-Chain", "KAIA": "Kaia Network", "BERA": "Berachain",
-    "HYPEREVM": "HyperEVM",
+    "HYPEREVM": "HyperEVM", "MORPH": "Morph Network",
 }
 
 
