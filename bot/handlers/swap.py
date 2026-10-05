@@ -317,7 +317,7 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if src_price_info and tgt_price_info:
             src_mkt = src_price_info.get("market_price_idr", 0)
             tgt_mkt = tgt_price_info.get("market_price_idr", 1)
-            usdt_rate = src_price_info.get("usdt_idr_rate", 16000)
+            usdt_rate = src_price_info.get("usdt_idr_rate") or src_mkt
 
             src_usd = 1.0 if src_sym.upper() in ["USDT", "USDC"] else (src_mkt / usdt_rate if usdt_rate else 0)
             tgt_usd = 1.0 if tgt_sym.upper() in ["USDT", "USDC"] else (tgt_mkt / usdt_rate if usdt_rate else 0)
@@ -379,7 +379,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     src_market_price = src_price_info.get("market_price_idr") or src_price_info.get("sell_price_idr", 0)
     tgt_market_price = tgt_price_info.get("market_price_idr") or tgt_price_info.get("buy_price_idr", 0)
-    usdt_idr_rate = src_price_info.get("usdt_idr_rate", 16000.0)
+    usdt_idr_rate = src_price_info.get("usdt_idr_rate") or src_market_price
 
     try:
         src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_market_price, usdt_idr_rate, src_sym)
@@ -492,8 +492,13 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fee_idr = context.user_data["swap_fee_idr"]
 
     # Ambil deposit wallet seller
-    src_sender = CryptoSenderFactory.get_sender(src_net)
-    seller_deposit_wallet = getattr(src_sender, "wallet_address", settings.EVM_WALLET_ADDRESS)
+    from config.assets import get_wallet_address
+    src_sender = None
+    try:
+        src_sender = CryptoSenderFactory.get_sender(src_net)
+    except Exception:
+        pass
+    seller_deposit_wallet = (getattr(src_sender, "wallet_address", "") or "").strip() or get_wallet_address(src_net)
 
     context.user_data["swap_seller_deposit_wallet"] = seller_deposit_wallet
 
@@ -807,8 +812,28 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
 async def cancel_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
+        order_id = None
+        if query.data and query.data.startswith("cancel_swap_order_"):
+            order_id = query.data.replace("cancel_swap_order_", "")
+        if not order_id and context.user_data:
+            order_id = context.user_data.get("active_swap_order_id")
+
+        if order_id:
+            db = SessionLocal()
+            try:
+                from database.crud import update_order_status, get_order_by_id
+                order = get_order_by_id(db, order_id)
+                if order and (order.status or "").upper() in {
+                    "WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED",
+                }:
+                    update_order_status(db, order_id, new_status="cancelled", failure_reason="Dibatalkan oleh pengguna")
+            except Exception as e:
+                logger.warning(f"Gagal membatalkan order swap {order_id}: {e}")
+            finally:
+                db.close()
+
         try:
-            await query.answer()
+            await query.answer("❌ Transaksi convert dibatalkan.", show_alert=True)
         except Exception:
             pass
         from bot.handlers.start import send_main_menu

@@ -284,6 +284,7 @@ def _migrate_orders_schema():
                 ("payment_method", "VARCHAR(30)"),
                 ("unique_code", "INTEGER DEFAULT 0"),
                 ("deposit_proof_file_id", "VARCHAR(500)"),
+                ("mdr_idr", "BIGINT DEFAULT 0"),  # Pajak QRIS 0,3%
             ]
             with engine.begin() as conn:
                 for col, dtype in new_columns_orders:
@@ -297,6 +298,10 @@ def _migrate_orders_schema():
                 with engine.begin() as conn:
                     conn.exec_driver_sql("ALTER TABLE topup_orders ADD COLUMN unique_code INTEGER DEFAULT 0")
                     logger.info("Migrasi topup_orders: kolom unique_code ditambahkan.")
+            if "mdr_idr" not in existing_topups:
+                with engine.begin() as conn:
+                    conn.exec_driver_sql("ALTER TABLE topup_orders ADD COLUMN mdr_idr BIGINT DEFAULT 0")
+                    logger.info("Migrasi topup_orders: kolom mdr_idr ditambahkan.")
     except Exception as exc:
         logger.error("Migrasi orders gagal: %s", exc, exc_info=True)
 
@@ -397,24 +402,31 @@ def _migrate_wallet_balance_schema():
 
 
 def _seed_price_configs(db):
-    """Insert default price configs (spread per symbol) if the table is empty."""
-    if db.query(PriceConfig).count() > 0:
-        logger.info("Price configs already exist — skipping seed")
-        return
-
-    symbols = {
-        "USDT": 0.5, "USDC": 0.5, "ETH": 0.5, "SOL": 0.5,
-        "TRX": 0.5, "BNB": 0.5, "SUI": 0.5, "TON": 0.5,
-        "POL": 0.5, "MATIC": 0.5, "ARB": 0.5, "AVAX": 0.5,
-        "KAIA": 0.5, "BERA": 0.5, "APT": 0.5, "HYPE": 0.5,
-        "USDG": 0.5,
-    }
-    configs = [
-        PriceConfig(symbol=sym, spread_pct=spread, is_active=True)
-        for sym, spread in symbols.items()
-    ]
-    db.add_all(configs)
-    logger.info("Seeded %d price configs", len(configs))
+    """
+    Insert default price configs jika tabel kosong.
+    Jika DEFAULT_SPREAD_PCT diset 0.0 (keputusan client: 0% spread / pure harga real time market),
+    sinkronkan semua config agar tidak ada markup/markdown tersembunyi.
+    """
+    target_spread = float(settings.DEFAULT_SPREAD_PCT)
+    if db.query(PriceConfig).count() == 0:
+        symbols = [
+            "USDT", "USDC", "ETH", "SOL",
+            "TRX", "BNB", "SUI", "TON",
+            "POL", "MATIC", "ARB", "AVAX",
+            "KAIA", "BERA", "APT", "HYPE",
+            "USDG",
+        ]
+        configs = [
+            PriceConfig(symbol=sym, spread_pct=target_spread, is_active=True)
+            for sym in symbols
+        ]
+        db.add_all(configs)
+        logger.info("Seeded %d price configs with spread %.2f%%", len(configs), target_spread)
+    elif target_spread == 0.0:
+        # Reset baris lama yang masih menyimpan spread > 0
+        updated = db.query(PriceConfig).filter(PriceConfig.spread_pct > 0).update({PriceConfig.spread_pct: 0.0})
+        if updated:
+            logger.info("Sinkronisasi spread 0%%: %d koin diupdate ke 0.0%% (pure harga pasar realtime)", updated)
 
 
 # =============================================================

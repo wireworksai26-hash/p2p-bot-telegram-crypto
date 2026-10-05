@@ -155,11 +155,11 @@ class TestHandlerKategoriDanSpread(unittest.TestCase):
         # USDT jauh lebih murah dari altcoin di nominal sama
         self.assertLess(calculate_fee_idr(100_000, "USD"), calculate_fee_idr(100_000, "ALTCOIN"))
 
-    def test_default_spread_05(self):
+    def test_default_spread_0(self):
         from config.settings import settings
-        self.assertEqual(settings.DEFAULT_SPREAD_PCT, 0.5)
+        self.assertEqual(settings.DEFAULT_SPREAD_PCT, 0.0)
         default = PriceConfig.__table__.c.spread_pct.default
-        self.assertEqual(float(default.arg), 0.5)
+        self.assertEqual(float(default.arg), 0.0)
 
 
 class TestKodeUnikQris(unittest.TestCase):

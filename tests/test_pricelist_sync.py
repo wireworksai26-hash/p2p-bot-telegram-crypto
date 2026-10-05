@@ -66,7 +66,7 @@ class TestPricelistSync(unittest.TestCase):
         self.assertIn("2.500", self.text)
         self.assertIn("7.500", self.text)
         self.assertIn("0,3%", self.text)
-        self.assertIn("0,5%", self.text)
+        self.assertIn("0%", self.text)
         self.assertIn("01-200", self.text)
         self.assertNotIn("tanya admin", self.text)
         self.assertNotIn("sphread", self.text)

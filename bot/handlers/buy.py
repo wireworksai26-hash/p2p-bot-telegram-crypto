@@ -1054,6 +1054,8 @@ async def finalize_gopay_buy_payment(
                 **extra,
             )
             jejak = f"\nTX (broadcast): <code>{tx_hash_gagal}</code>" if tx_hash_gagal else ""
+            if result.get("explorer_url"):
+                jejak += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
             pm = (getattr(order, "payment_method", "") or "").lower()
             if pm in ("balance", "saldo"):
                 pay_label = "Saldo Bot"

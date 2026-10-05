@@ -457,8 +457,13 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="HTML",
             )
 
-            bot_user = await context.bot.get_me()
-            bot_username = bot_user.username or ""
+            bot_username = ""
+            try:
+                bot_user = await context.bot.get_me()
+                if hasattr(bot_user, "username") and isinstance(bot_user.username, str):
+                    bot_username = bot_user.username
+            except Exception:
+                bot_username = ""
 
             result = execute_campaign(
                 db=db,

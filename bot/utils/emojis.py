@@ -111,6 +111,7 @@ DEFAULT_EMOJI_IDS = {
     "NET_BASE": "6176933879622934017",
     "NET_OPTIMISM": "6177169656147619617",
     "NET_ROBINHOOD": "6177109603914883733",
+    "NET_MORPH": "6172549821820314286",
 }
 
 DEFAULT_EMOJI_ALTS = {
@@ -186,6 +187,7 @@ DEFAULT_EMOJI_ALTS = {
     "NET_BERA":       "🐻",
     "NET_APTOS":      "⚫",
     "NET_HYPEREVM":   "🟢",
+    "NET_MORPH":      "🟢",
     }
 
 # Retire historical unverified IDs even when an old saved config contains them.

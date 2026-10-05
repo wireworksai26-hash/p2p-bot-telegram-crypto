@@ -121,8 +121,8 @@ def get_official_price_list_text() -> str:
         "",
         "⛽ <i>Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON): +Rp 2.500 & min Rp 7.500 semua jenis transaksi.</i>",
         "🧾 <i>Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).</i>",
-        f"📦 <i>Spread 0,5% | Kode unik 01-200.</i>\n",
-        "📣 <i>Fee beda-beda karena harga crypto fluktuatif & spread berubah-ubah, untuk menghindari kerugian stok admin.</i> 📣",
+        f"📦 <i>Tanpa spread (0% markup/markdown) | Kode unik 01-200.</i>\n",
+        "📣 <i>Harga realtime pasar murni mengikuti bursa global tanpa spread tersembunyi.</i> 📣",
     ]
     return "\n".join(lines)
 
@@ -151,7 +151,7 @@ async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if price_data:
                 price_idr = price_data.get("market_price_idr", 0)
                 price_str = format_idr(price_idr)
-                usdt_rate = price_data.get("usdt_idr_rate", 16000)
+                usdt_rate = price_data.get("usdt_idr_rate") or price_data.get("market_price_idr", 0)
                 if symbol.upper() in ["USDT", "USDC"]:
                     usd_str = "$1.00"
                 else:

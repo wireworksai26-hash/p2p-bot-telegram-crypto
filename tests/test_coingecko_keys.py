@@ -141,8 +141,10 @@ class TestFetchCoingecko(unittest.IsolatedAsyncioTestCase):
         client.get.return_value = _resp(200, PAYLOAD)
         with patch.object(settings, "COINGECKO_API_KEYS", ("kA",)):
             await self._dengan_client(client, self.svc.refresh_all_prices)
+            calls_first = client.get.call_count
+            self.assertGreater(calls_first, 0, "harus ada network call pada fetch pertama")
             await self._dengan_client(client, self.svc.refresh_all_prices)
-        self.assertEqual(client.get.call_count, 1, "panggilan kedua harus cache-hit")
+            self.assertEqual(client.get.call_count, calls_first, "panggilan kedua harus cache-hit")
 
 
 if __name__ == "__main__":

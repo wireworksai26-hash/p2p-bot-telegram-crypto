@@ -15,6 +15,8 @@ from config.settings import settings
 from database import crud
 
 logger = logging.getLogger(__name__)
+OKX_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers?instType=SPOT"
+YAHOO_SPOT_URL = "https://query1.finance.yahoo.com/v8/finance/chart/USDIDR=X?interval=1m&range=1d"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
 PAPRIKA_TICKERS_URL = "https://api.coinpaprika.com/v1/tickers?quotes=USD"
 CMC_QUOTES_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
@@ -22,9 +24,8 @@ FX_URLS = (
     "https://open.er-api.com/v6/latest/USD",
     "https://api.frankfurter.dev/latest?from=USD&to=IDR",
 )
-# 60 dtk: data demo CoinGecko delay "from 60 s" (lebih cepat = buang kredit).
-# Burn ~43.200 call/bln terbagi rata ke COINGECKO_API_KEYS (kuota 10k/bln/akun).
-CACHE_TTL_SECONDS = 60
+# Cache 15 dtk untuk harga real-time dinamis mengikuti pergerakan pasar.
+CACHE_TTL_SECONDS = 15
 MAX_PRICE_AGE_SECONDS = 600
 MAX_CLOCK_SKEW_SECONDS = 60
 COINGECKO_IDS = {
@@ -193,22 +194,124 @@ class PriceService:
             logger.warning("Fallback CoinMarketCap tidak tersedia (%s)", type(exc).__name__)
         return None
 
+    async def _fetch_spot_fx(self):
+        """Kurs USD->IDR spot realtime (Yahoo Finance spot chart -> open.er-api)."""
+        try:
+            client = await self._get_client()
+            # 1. Yahoo Finance chart (spot realtime)
+            try:
+                resp = await client.get(
+                    YAHOO_SPOT_URL,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = (data.get("chart") or {}).get("result")
+                    if results and isinstance(results, list):
+                        meta = results[0].get("meta") or {}
+                        val = float(meta.get("regularMarketPrice") or 0)
+                        if val > 0:
+                            return val
+            except Exception as e:
+                logger.debug("Yahoo spot FX tidak tersedia (%s)", e)
+
+            # 2. open.er-api / frankfurter fallback
+            for url in FX_URLS:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        val = float(resp.json()["rates"]["IDR"])
+                        if val > 0:
+                            return val
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.warning("Gagal fetch spot FX USD/IDR: %s", exc)
+        return None
+
+    async def _fetch_okx_usd(self):
+        """Ambil harga USD dari bursa global OKX spot tickers."""
+        try:
+            client = await self._get_client()
+            resp = await client.get(
+                OKX_TICKERS_URL,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code != 200:
+                return None
+            body = resp.json()
+            rows = body.get("data")
+            if not isinstance(rows, list) or len(rows) < 5:
+                return None
+            by_inst = {
+                item.get("instId"): float(item["last"])
+                for item in rows
+                if "instId" in item and "last" in item and float(item.get("last", 0)) > 0
+            }
+
+            usd = {}
+            for symbol, coin_id in COINGECKO_IDS.items():
+                if coin_id in STABLE_COIN_IDS:
+                    usd[coin_id] = 1.0
+                    continue
+                pair = f"{symbol}-USDT"
+                if pair in by_inst:
+                    usd[coin_id] = by_inst[pair]
+                elif symbol in ("POL", "MATIC") and "POL-USDT" in by_inst:
+                    usd[coin_id] = by_inst["POL-USDT"]
+
+            # Setidaknya ETH dan SOL harus ada untuk menjamin integritas feed OKX
+            if "ethereum" in usd and "solana" in usd:
+                return usd
+        except Exception as exc:
+            logger.debug("OKX tickers tidak tersedia (%s)", exc)
+        return None
+
     async def _refresh(self, force=False):
         async with self._lock:
             now = time.time()
             if not force and self._cache and now - self._cache.get("_fetched_at", 0) < CACHE_TTL_SECONDS:
                 return
-            data = await self._fetch_coingecko()
-            source = "CoinGecko IDR"
+
+            data = None
+            source = ""
+            fx = None
+
+            # 1. Coba Hybrid: OKX Spot Tickers x Spot FX USD/IDR
+            okx_usd = await self._fetch_okx_usd()
+            if okx_usd:
+                fx = await self._fetch_spot_fx() or await self._fetch_fx()
+                if fx and fx > 0:
+                    data = self._rows_from_usd(okx_usd, fx)
+                    if data:
+                        source = "OKX + Spot FX"
+
+            # 2. Jika OKX tidak tersedia atau gagal: CoinGecko
             if data is None:
-                fx = await self._fetch_fx()
+                data = await self._fetch_coingecko()
+                if data:
+                    source = "CoinGecko IDR"
+
+            # 3. Fallback jika CoinGecko limit: CoinPaprika + FX -> CoinMarketCap + FX
+            if data is None:
+                if not fx:
+                    fx = await self._fetch_fx()
                 if fx:
                     data = await self._fetch_paprika(fx)
                     source = "CoinPaprika+FX"
                     if data is None:
                         data = await self._fetch_cmc(fx)
                         source = "CoinMarketCap+FX"
+
             if data is not None:
+                # Per-coin fill jika OKX tidak punya koin tertentu (seperti TON / USDG)
+                for coin_id in set(COINGECKO_IDS.values()):
+                    if coin_id not in data and self._cache.get(coin_id):
+                        old_row = self._cache[coin_id]
+                        if coin_id in STABLE_COIN_IDS and fx:
+                            data[coin_id] = {"idr": fx, "usd": 1.0, "last_updated_at": int(now)}
+                        else:
+                            data[coin_id] = old_row
                 self._cache = {**data, "_fetched_at": now, "_source": source}
             else:
                 # Tetap cap waktu saat gagal: cegah badai retry (429) dari tiap get_price.

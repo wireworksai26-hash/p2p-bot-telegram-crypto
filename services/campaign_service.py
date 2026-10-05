@@ -285,10 +285,10 @@ def format_custom_notification(
         "{new_balance}": format_idr(int(new_balance)),
         "{campaign_name}": campaign_name,
         "{rank}": str(rank) if rank else "-",
-        "{bot_username}": bot_username,
+        "{bot_username}": str(bot_username) if isinstance(bot_username, str) else "",
     }
     for placeholder, val in replacements.items():
-        text = text.replace(placeholder, val)
+        text = text.replace(placeholder, str(val))
     return text
 
 

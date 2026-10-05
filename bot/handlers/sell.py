@@ -63,18 +63,8 @@ def get_hot_wallet_address(network: str) -> str:
     except Exception as e:
         logger.warning(f"Gagal mengambil wallet address untuk {network}: {e}")
         
-    net = network.upper()
-    if net in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]:
-        return settings.EVM_WALLET_ADDRESS or "0x0000000000000000000000000000000000000000"
-    elif net == "SOLANA":
-        return settings.SOL_WALLET_ADDRESS or "SolanaWalletAddressPlaceholder"
-    elif net == "TRON":
-        return settings.TRX_WALLET_ADDRESS or "TronWalletAddressPlaceholder"
-    elif net == "TON":
-        return settings.TON_WALLET_ADDRESS or "TonWalletAddressPlaceholder"
-    elif net == "SUI":
-        return settings.SUI_WALLET_ADDRESS or "SuiWalletAddressPlaceholder"
-    return settings.EVM_WALLET_ADDRESS or "WalletAddressPlaceholder"
+    from config.assets import get_wallet_address
+    return get_wallet_address(network) or "WalletAddressPlaceholder"
 
 
 async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -219,6 +209,11 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Bersih nominal IDR yang diterima customer (Gross - Fee)
         net_nominal_idr = gross_nominal_idr - fee_idr
+        if net_nominal_idr <= 0:
+            raise ValueError(
+                "Nominal penjualan terlalu kecil setelah dipotong fee layanan. "
+                "Silakan masukkan jumlah koin yang lebih besar."
+            )
         
         # Minimum transaksi ditegakkan oleh calculate_fee_idr pada nominal KOTOR (gross):
         # Rp 5.000 default; Rp 7.500 untuk pasangan gas (ETH-ETH/TRX-TRON/USDT-ETH/

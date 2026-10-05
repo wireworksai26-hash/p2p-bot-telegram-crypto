@@ -10,8 +10,8 @@ import os
 
 STOCK_MAX_AGE_SECONDS = 15 * 60
 # Emergency brake: jaringan di sini ditolak di alur beli/convert dan payout-nya
-# manual. SUI dan APTOS sudah auto-payout (sender-nya aktif dan teruji).
-MANUAL_PAYOUT_NETWORKS: set[str] = set()
+# manual. SUI dan APTOS sudah auto-payout (sender-nya aktif dan teruji). MORPH belum punya RPC/sender.
+MANUAL_PAYOUT_NETWORKS: set[str] = {"MORPH"}
 
 
 def get_wallet_address(network: str) -> str:

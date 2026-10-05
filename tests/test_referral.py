@@ -670,7 +670,8 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
-            handled = await admin_referral_text_handler(update, context)
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                handled = await admin_referral_text_handler(update, context)
 
         self.assertTrue(handled)
         self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_reward"))
@@ -721,7 +722,8 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
-            handled = await admin_referral_text_handler(update, context)
+            with patch("bot.handlers.admin.is_admin", return_value=True):
+                handled = await admin_referral_text_handler(update, context)
 
         self.assertTrue(handled)
         self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_min_trade"))

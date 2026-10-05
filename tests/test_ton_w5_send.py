@@ -47,6 +47,7 @@ from services.tx_verifier import ton_address
 # Kunci uji (bukan milik siapa pun): seed = 00..1f
 TEST_SEED_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 TEST_W5_ADDRESS = "EQDygBQZqqGzcEoNULWIjcy1UR7W4xkbmdFEoE6p6jkMUpdb"
+TEST_WALLET_ID = 2147483409
 if HAS_PYTONIQ:
     RECIPIENT = Address((0, bytes(32))).to_str(is_user_friendly=True, is_bounceable=False)
 else:
