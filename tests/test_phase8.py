@@ -18,6 +18,7 @@ import asyncio
 import unittest
 from decimal import Decimal
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pathlib import Path
@@ -33,6 +34,7 @@ os.environ.update({
     "ADMIN_CHAT_IDS": "999",
 })
 
+from config.settings import settings
 from database.connection import Base, engine, SessionLocal
 from database.models import User, Order, AuditLog
 from database import crud
@@ -204,6 +206,50 @@ class TestTestimonialService(unittest.TestCase):
             call_kwargs = bot_mock.send_message.call_args[1]
             self.assertEqual(call_kwargs["chat_id"], "@TokoKoinID")
             self.assertIn("Transaksi Selesai", call_kwargs["text"])
+
+        asyncio.run(_test())
+
+    def test_resend_testimony_command_handler(self):
+        async def _test():
+            from bot.handlers.admin import resend_testimony_command_handler
+            bot_mock = AsyncMock()
+            bot_mock.get_me = AsyncMock(return_value=MagicMock(username="TokoKoinID_Bot"))
+            bot_mock.send_message = AsyncMock(return_value=MagicMock())
+
+            db = SessionLocal()
+            order = Order(
+                order_id="ORD-RESEND-TEST",
+                telegram_id=999,
+                order_type="buy",
+                crypto_symbol="USDT",
+                network="BSC",
+                crypto_amount=Decimal("5.0"),
+                price_per_unit=16000,
+                nominal_idr=80000,
+                fee_idr=2000,
+                total_idr=80000,
+                status="completed",
+                payout_tx_hash="0x12345678",
+            )
+            db.add(order)
+            db.commit()
+            db.close()
+
+            update = SimpleNamespace(
+                effective_user=SimpleNamespace(id=999),
+                message=AsyncMock(),
+            )
+            context = SimpleNamespace(bot=bot_mock, args=["ORD-RESEND-TEST"])
+
+            orig = list(getattr(settings, "ADMIN_CHAT_IDS", []))
+            settings.ADMIN_CHAT_IDS = [999]
+            try:
+                await resend_testimony_command_handler(update, context)
+                self.assertTrue(update.message.reply_text.called)
+                reply = update.message.reply_text.call_args[0][0]
+                self.assertIn("Testimoni Terkirim", reply)
+            finally:
+                settings.ADMIN_CHAT_IDS = orig
 
         asyncio.run(_test())
 
