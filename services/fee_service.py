@@ -2,18 +2,18 @@
 services/fee_service.py — Triple-Tier Fee Engine (USD, Altcoin, & Convert)
 ==========================================================================
 Menghitung biaya transaksi IDR sesuai aturan tier resmi dari client
-(update 1 Okt 2026):
+(update 6 Okt 2026):
 
 1. USD Fee Tier (USDT/USDC/USDG): Min Rp 5.000.
 2. Altcoin Fee Tier: Min Rp 5.000.
 3. Convert Fee Tier: Min Rp 6.000.
 4. Di atas tier fixed, fee memakai persen (tanpa batas atas):
    ALTCOIN/CONVERT: 3% (1.010.001-2jt), 2,5% (2jt-3,5jt), 2% (3,5jt-8,5jt), 1,5% (>8,5jt)
-   USD: 2% (1.015.001-3,6jt), 1,5% (>3,6jt)
+   USD: 2% (1.015.001-4,6jt), 1,5% (>4,6jt)
    Fee persen dibulatkan ke bawah (int()).
 5. Jual altcoin (bukan USD) kena tambahan flat Rp 500 untuk nominal < Rp 1.010.000.
 6. Pasangan gas mahal (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH):
-   - surcharge kirim Rp 2.500 (hanya saat bot mengirim koin: Beli/Convert target),
+   - surcharge kirim Rp 3.000 (hanya saat bot mengirim koin: Beli/Convert target),
    - minimum transaksi Rp 7.500 untuk semua jenis transaksi.
 
 Lompatan/penurunan fee di batas tier adalah keputusan client (antisipasi
@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 USD_FEE_TIERS = [
     (5000, 34000, 3000),
-    (34001, 41000, 3500),
-    (41001, 67000, 4000),
-    (67001, 100000, 4500),
-    (100001, 140000, 5000),
-    (140001, 180000, 5500),
+    (34001, 50000, 3500),
+    (50001, 76000, 4000),
+    (76001, 100000, 4500),
+    (100001, 150000, 5000),
+    (150001, 180000, 5500),
     (180001, 200000, 6000),
     (200001, 245000, 6500),
     (245001, 330000, 7000),
@@ -41,21 +41,19 @@ USD_FEE_TIERS = [
     (550001, 680000, 9000),
     (680001, 875000, 11000),
     (875001, 950000, 13000),
-    (950001, 1015000, 14500),
+    (950001, 1015000, 15000),
 ]
 
 ALTCOIN_FEE_TIERS = [
     (5000, 10000, 3000),
-    (10001, 15000, 3500),
-    (15001, 44000, 4000),
-    (44001, 49000, 4400),
-    (49001, 93000, 5000),
-    (93001, 105000, 5500),
-    (105001, 110000, 6000),
-    (110001, 119000, 6500),
+    (10001, 18000, 3500),
+    (18001, 47000, 4000),
+    (47001, 55000, 4400),
+    (55001, 105000, 5000),
+    (105001, 110000, 5500),
+    (110001, 119000, 6000),
     (119001, 150000, 7000),
-    (150001, 185000, 7500),
-    (185001, 220000, 8000),
+    (150001, 220000, 7500),
     (220001, 300000, 8500),
     (300001, 330000, 9000),
     (330001, 380000, 9500),
@@ -72,10 +70,10 @@ ALTCOIN_FEE_TIERS = [
 ]
 
 CONVERT_FEE_TIERS = [
-    (6000, 10000, 3500),
-    (10001, 19000, 4000),
-    (19001, 47000, 4500),
-    (47001, 98000, 5500),
+    (6000, 10000, 3000),
+    (10001, 19000, 3500),
+    (19001, 47000, 4000),
+    (47001, 98000, 5000),
     (98001, 109000, 6000),
     (109001, 119000, 6500),
     (119001, 135000, 7000),
@@ -97,8 +95,8 @@ CONVERT_FEE_TIERS = [
 
 # Tier persen di atas tier fixed (batas sambung: fixed terakhir + 1).
 USD_PERCENT_TIERS = [
-    (1_015_001, 3_600_000, 2.0),
-    (3_600_001, None, 1.5),
+    (1_015_001, 4_600_000, 2.0),
+    (4_600_001, None, 1.5),
 ]
 ALTCOIN_PERCENT_TIERS = [
     (1_010_001, 2_000_000, 3.0),
@@ -109,7 +107,7 @@ ALTCOIN_PERCENT_TIERS = [
 CONVERT_PERCENT_TIERS = ALTCOIN_PERCENT_TIERS
 
 # Surcharge gas untuk pasangan coin/jaringan dengan biaya kirim mahal.
-GAS_SURCHARGE_IDR = 2500
+GAS_SURCHARGE_IDR = 3000
 GAS_SURCHARGE_PAIRS = {
     ("ETH", "ETH"),
     ("TRX", "TRON"),

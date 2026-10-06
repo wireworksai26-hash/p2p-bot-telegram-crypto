@@ -95,10 +95,10 @@ def _fee_card(title: str, subtitle: str, fixed_tiers, percent_tiers, footer: str
 
 PRICE_LIST_NOTE = (
     "<blockquote expandable><b>📝 Note :</b>\n"
-    "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 2.500 untuk Gas Fee Kirim &amp; "
+    "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 3.000 untuk Gas Fee Kirim &amp; "
     "min transaksi Rp 7.500 untuk List Coin tersebut, Selain itu minimal transaksi Rp. 5.000\n\n"
     "• 🧾 Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).\n\n"
-    "• ➕ Adanya kode Unik untuk biaya transaksi Qris otomatis\n\n"
+    "• ➕ Adanya kode Unik pembayaran saat transaksi di Bot untuk biaya transaksi Qris otomatis\n\n"
     "• 💱 Harga realtime pasar murni mengikuti bursa global tanpa spread tersembunyi.\n\n"
     "• 📣 Adanya fee transaksi yang berbeda-beda dikarenakan volatilitas harga coin crypto yang "
     "sangat berfluktuasi (naik-turunnya nilai) setiap detik dan Spread USD (selisih harga) yang "

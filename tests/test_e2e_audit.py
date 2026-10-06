@@ -64,10 +64,11 @@ class TestE2EAudit(unittest.IsolatedAsyncioTestCase):
         # USD Fee tests
         self.assertEqual(calculate_fee_idr(5000, "USD"), 3000)
         self.assertEqual(calculate_fee_idr(100000, "USD"), 4500)
-        self.assertEqual(calculate_fee_idr(1015000, "USD"), 14500)
+        self.assertEqual(calculate_fee_idr(1015000, "USD"), 15000)
         # Di atas tier fixed -> tier persen (2%), bukan lagi ValueError
         self.assertEqual(calculate_fee_idr(1015001, "USD"), 20300)
-        self.assertEqual(calculate_fee_idr(3600001, "USD"), 54000)
+        self.assertEqual(calculate_fee_idr(3600001, "USD"), 72000)
+        self.assertEqual(calculate_fee_idr(4600001, "USD"), 69000)  # 1,5%
 
         # Altcoin Fee tests
         self.assertEqual(calculate_fee_idr(5000, "ALTCOIN"), 3000)
@@ -78,7 +79,7 @@ class TestE2EAudit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calculate_fee_idr(2000001, "ALTCOIN"), 50000)
 
         # Convert Fee tests
-        self.assertEqual(calculate_fee_idr(6000, "CONVERT"), 3500)
+        self.assertEqual(calculate_fee_idr(6000, "CONVERT"), 3000)
         self.assertEqual(calculate_fee_idr(1010000, "CONVERT"), 18000)
         self.assertEqual(calculate_fee_idr(1010001, "CONVERT"), 30300)
 

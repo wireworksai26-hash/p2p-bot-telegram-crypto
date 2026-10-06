@@ -45,7 +45,9 @@ class TestPricelistSync(unittest.TestCase):
 
     def test_tier_fixed_altcoin_lengkap(self):
         self.assertTrue(_row(self.text, "5k - 10k", "3k"))
-        self.assertTrue(_row(self.text, "10k - 15k", "3,5k"))
+        self.assertTrue(_row(self.text, "10k - 18k", "3,5k"))
+        self.assertTrue(_row(self.text, "55k - 105k", "5k"))
+        self.assertTrue(_row(self.text, "150k - 220k", "7,5k"))
         self.assertTrue(_row(self.text, "940k - 1.010k", "19k"))
 
     def test_tier_persen_altcoin(self):
@@ -55,10 +57,12 @@ class TestPricelistSync(unittest.TestCase):
         self.assertTrue(_row(self.text, "> 8.500k", "1,5%"))
 
     def test_tier_usd_dan_convert(self):
-        self.assertTrue(_row(self.text, "950k - 1.015k", "14,5k"))
-        self.assertTrue(_row(self.text, "1.015k - 3.600k", "2%"))
-        self.assertTrue(_row(self.text, "> 3.600k", "1,5%"))
-        self.assertTrue(_row(self.text, "6k - 10k", "3,5k"))
+        self.assertTrue(_row(self.text, "950k - 1.015k", "15k"))
+        self.assertTrue(_row(self.text, "34k - 50k", "3,5k"))
+        self.assertTrue(_row(self.text, "1.015k - 4.600k", "2%"))
+        self.assertTrue(_row(self.text, "> 4.600k", "1,5%"))
+        self.assertTrue(_row(self.text, "6k - 10k", "3k"))
+        self.assertTrue(_row(self.text, "47k - 98k", "5k"))
         self.assertTrue(_row(self.text, "390k - 425k", "10,5k"))
 
     def test_jumlah_baris_sama_dengan_engine(self):
@@ -78,7 +82,8 @@ class TestPricelistSync(unittest.TestCase):
 
     def test_catatan_baru_ada_tanya_admin_hilang(self):
         self.assertIn("+Rp 500", self.text)
-        self.assertIn("2.500", self.text)
+        self.assertIn("+Rp 3.000", self.text)
+        self.assertNotIn("2.500", self.text)
         self.assertIn("7.500", self.text)
         self.assertIn("0,3%", self.text)
         self.assertIn("tanpa spread tersembunyi", self.text)
