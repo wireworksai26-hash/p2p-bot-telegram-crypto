@@ -544,6 +544,10 @@ def build_bot_application() -> Application:
     application.add_handler(swap_conv_handler)
     application.add_handler(calculator_conversation_handler)
 
+    # /cancel saat tidak ada flow aktif — flow aktif sudah ditangkap fallback di atas.
+    from bot.handlers.start import idle_cancel_handler
+    application.add_handler(CommandHandler("cancel", idle_cancel_handler))
+
     # --- Bukti Transfer QRIS (foto) ---
     # Satu router: foto diarahkan ke alur Buy ATAU Topup (hindari forward ganda ke admin).
     application.add_handler(MessageHandler(filters.PHOTO, _route_transfer_proof))
@@ -748,7 +752,7 @@ def setup_scheduler():
         "interval",
         minutes=1,
         id="order_expiry",
-        name="Expire pending orders older than 30 min",
+        name="Expire pending orders older than ORDER_EXPIRE_MINUTES",
         max_instances=1,
         coalesce=True,
     )
@@ -860,10 +864,10 @@ async def _job_expire_orders():
             )
             for order in stale_gopay:
                 try:
-                    pay_res = await gopay_service.check_payment(
-                        int(order.total_idr), order.order_id
-                    )
-                    if pay_res.get("paid"):
+                    if await gopay_service.confirm_payment(
+                        db, amount=int(order.total_idr), ref_id=order.order_id,
+                        kind="buy", created_at=order.created_at,
+                    ):
                         # [FIX MEDIUM-1] Pass bot_app agar notifikasi Telegram terkirim
                         from services.bot_runtime import bot_app as _bot_app
                         await finalize_gopay_buy_payment(db, order, bot=_bot_app)
@@ -990,9 +994,14 @@ async def _complete_topup(db, topup):
             logger.warning(f"Gagal kirim notifikasi topup ke user {topup.telegram_id}: {e}")
 
 
+def _txn_id(txn: dict) -> str:
+    """ID transaksi GoPay — sama dengan kunci klaim gateway (tx.id || order_id)."""
+    return str(txn.get("transaction_id") or txn.get("id") or txn.get("order_id") or "")
+
+
 def _match_transaction(txn: dict, amount: int, created_at, used_ids: set) -> bool:
     """Cocokkan satu transaksi riwayat mutasi dengan order/topup PENDING (nominal + waktu)."""
-    tx_id = str(txn.get("transaction_id") or txn.get("id") or "")
+    tx_id = _txn_id(txn)
     if tx_id and tx_id in used_ids:
         return False
 
@@ -1002,19 +1011,22 @@ def _match_transaction(txn: dict, amount: int, created_at, used_ids: set) -> boo
     except (TypeError, ValueError):
         return False
 
-    # Transaksi harus terjadi setelah order/topup dibuat (dengan toleransi 5 menit untuk clock drift)
+    # Refund / partial refund bukan pembayaran masuk.
+    if "refund" in str(txn.get("status") or "").lower():
+        return False
+
+    # Transaksi harus terjadi SETELAH order/topup dibuat (toleransi jam 60 detik).
+    # Tanpa waktu yang valid transaksi ditolak: lookback gateway 24 jam berarti
+    # pembayaran lama bernominal sama bisa melunasi order baru.
+    from services.gopay_service import payment_window_start, _to_utc_naive
     t_time = txn.get("transaction_time") or txn.get("time") or txn.get("created_at") or ""
-    if t_time and created_at:
-        try:
-            tx_dt = datetime.fromisoformat(str(t_time).replace("Z", "+00:00"))
-            if tx_dt.tzinfo:
-                tx_dt = tx_dt.replace(tzinfo=None)
-            from datetime import timedelta
-            if tx_dt < (created_at.replace(tzinfo=None) - timedelta(minutes=5)):
-                return False
-        except ValueError:
-            pass
-    return True
+    if not created_at or not t_time:
+        return False
+    try:
+        tx_dt = _to_utc_naive(datetime.fromisoformat(str(t_time).replace("Z", "+00:00")))
+    except ValueError:
+        return False
+    return tx_dt >= payment_window_start(created_at)
 
 
 def _match_transaction_for_topup(txn: dict, topup, used_ids: set) -> bool:
@@ -1026,7 +1038,7 @@ async def _job_check_pending_topups():
     """Poll GoPay API gateway for pending QRIS topup orders and auto-credit balances."""
     global _topup_last_transactions_fetch, _topup_matched_tx_ids
     from services.gopay_service import gopay_service
-    from database.crud import get_pending_topup_orders, update_topup_status
+    from database.crud import get_pending_topup_orders, update_topup_status, claim_qris_payment
 
     db = SessionLocal()
     try:
@@ -1039,14 +1051,16 @@ async def _job_check_pending_topups():
 
         async def _check(topup):
             async with sem:
-                # Expire topup if past expires_at
+                # Cek pembayaran DULU, baru expire: user yang bayar di menit
+                # terakhir tetap dikredit (dulu di-expire sebelum dicek).
+                if await gopay_service.confirm_payment(
+                    db, amount=topup.amount_idr, ref_id=topup.topup_id,
+                    kind="topup", created_at=topup.created_at,
+                ):
+                    await _complete_topup(db, topup)
+                    return None
                 if topup.expires_at and datetime.utcnow() > topup.expires_at:
                     update_topup_status(db, topup.topup_id, "EXPIRED")
-                    return None
-
-                pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
-                if pay_res.get("paid"):
-                    await _complete_topup(db, topup)
                     return None
                 return topup
 
@@ -1060,9 +1074,11 @@ async def _job_check_pending_topups():
             for topup in list(unmatched):
                 for txn in txns:
                     if _match_transaction(txn, int(topup.amount_idr), topup.created_at, set(_topup_matched_tx_ids.keys())):
-                        tx_id = str(txn.get("transaction_id") or txn.get("id") or "")
-                        if tx_id:
-                            _topup_matched_tx_ids[tx_id] = time.time()
+                        tx_id = _txn_id(txn)
+                        # Klaim di DB: transaksi yang sudah melunasi order/topup lain dilewati.
+                        if not tx_id or not claim_qris_payment(db, tx_id, topup.topup_id, "topup", int(topup.amount_idr)):
+                            continue
+                        _topup_matched_tx_ids[tx_id] = time.time()
                         await _complete_topup(db, topup)
                         break
         # [FIX KRITIS-4] Rolling cleanup — hapus entry > 24 jam, bukan .clear() total
@@ -1082,7 +1098,7 @@ async def _job_check_pending_buy_payments():
     """
     global _buy_matched_tx_ids
     from services.gopay_service import gopay_service
-    from database.crud import get_pending_gopay_orders, get_gopay_resume_orders
+    from database.crud import get_pending_gopay_orders, get_gopay_resume_orders, claim_qris_payment
     from bot.handlers.buy import _run_finalize_background
 
     db = SessionLocal()
@@ -1095,9 +1111,11 @@ async def _job_check_pending_buy_payments():
             for order in orders:
                 for txn in txns:
                     if _match_transaction(txn, int(order.total_idr), order.created_at, set(_buy_matched_tx_ids.keys())):
-                        tx_id = str(txn.get("transaction_id") or txn.get("id") or "")
-                        if tx_id:
-                            _buy_matched_tx_ids[tx_id] = time.time()
+                        tx_id = _txn_id(txn)
+                        # Klaim di DB: transaksi yang sudah melunasi order/topup lain dilewati.
+                        if not tx_id or not claim_qris_payment(db, tx_id, order.order_id, "buy", int(order.total_idr)):
+                            continue
+                        _buy_matched_tx_ids[tx_id] = time.time()
                         to_process.append(order.order_id)
                         break
 

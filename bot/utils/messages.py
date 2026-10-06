@@ -151,3 +151,30 @@ def build_buy_completion_message(order) -> str:
         f"<i>Koin crypto telah berhasil dikirimkan ke wallet Anda. Terima kasih telah bertransaksi!</i> 🙏"
     )
 
+
+WALLET_DUPLICATE_WARNING = (
+    "⚠️ <b>Duplikat Addres, Addres ini sudah di simpan user lain.</b>\n\n"
+    "📥 Kirim ulang addres anda yang bener"
+)
+
+# Ditampilkan tepat sebelum tombol konfirmasi Beli/Convert (keputusan client):
+# alamat terkunci ke akun setelah transaksi sukses, jadi user yang memakai wallet
+# cadangan masih bisa menggantinya dengan wallet utama sebelum konfirmasi.
+WALLET_LOCK_NOTE = (
+    "🔐 <b>Penting:</b> setelah transaksi ini <b>sukses</b>, alamat wallet di atas "
+    "akan <b>terkunci ke akun Telegram Anda</b> dan tidak bisa dipakai akun lain. "
+    "Jika ini bukan wallet utama Anda, tekan <b>Batal</b> lalu ulangi dengan wallet utama."
+)
+
+
+BANK_DUPLICATE_WARNING = (
+    "⚠️ <b>Duplikat Rekening, rekening/e-wallet ini sudah dipakai user lain.</b>\n\n"
+    "📥 Kirim ulang rekening anda yang benar"
+)
+
+# Ditampilkan tepat sebelum tombol konfirmasi Jual (sama seperti catatan kunci wallet).
+BANK_LOCK_NOTE = (
+    "🔐 <b>Penting:</b> setelah transaksi ini <b>sukses</b>, rekening/e-wallet di atas "
+    "akan <b>terkunci ke akun Telegram Anda</b> dan tidak bisa dipakai akun lain. "
+    "Jika ini bukan rekening utama Anda, tekan <b>Batal</b> lalu ulangi dengan rekening utama."
+)

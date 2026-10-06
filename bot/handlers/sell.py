@@ -34,13 +34,17 @@ from bot.keyboards.crypto_select import (
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
-from bot.utils.messages import ORDER_SUMMARY_SELL
+from bot.utils.messages import ORDER_SUMMARY_SELL, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
 from bot.utils.flow_guard import block_if_busy
+from services import quote_guard
 from bot.utils.emojis import E_CHART, E_COIN, E_DOLLAR, E_MONEY, E_CHECK, E_WARN, CUSTOM_EMOJI_IDS
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Masa berlaku quote Jual (keputusan client: 30 menit; QRIS beli/topup tetap 15 menit).
+SELL_QUOTE_MINUTES = 30
 
 # State percakapan
 SELECT_SYMBOL = 1
@@ -217,11 +221,12 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Minimum transaksi ditegakkan oleh calculate_fee_idr pada nominal KOTOR (gross):
         # Rp 5.000 default; Rp 7.500 untuk pasangan gas (ETH-ETH/TRX-TRON/USDT-ETH/
-        # USDC-ETH/USDT-TRON). Net boleh di bawah Rp 5.000 (contoh client: jual 105k -> net 99k).
+        # USDC-ETH). Net boleh di bawah Rp 5.000 (contoh client: jual 105k -> net 99k).
 
         # Simpan rincian perhitungan ke context
         context.user_data["sell_crypto_amount"] = crypto_amount
         context.user_data["sell_price_per_unit"] = sell_price_idr
+        context.user_data["sell_quoted_at"] = quote_guard.stamp()
         context.user_data["sell_gross_nominal_idr"] = gross_nominal_idr
         context.user_data["sell_fee_idr"] = fee_idr
         context.user_data["sell_net_idr"] = net_nominal_idr
@@ -289,6 +294,28 @@ async def _proceed_to_sell_confirmation(
     bank_holder: str
 ) -> int:
     """Helper untuk menyusun ringkasan penjualan dan menampilkan tombol Konfirmasi Jual."""
+    # Anti-fraud: rekening/e-wallet yang sudah terkunci ke user lain (penjualan sukses) ditolak.
+    from database.crud import is_bank_account_taken_by_other
+    lock_db = SessionLocal()
+    try:
+        taken = is_bank_account_taken_by_other(lock_db, bank_acc, update.effective_user.id)
+    finally:
+        lock_db.close()
+    if taken:
+        warn_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()],
+        ])
+        if update.callback_query:
+            await update.callback_query.answer("Rekening ini sudah dipakai user lain.", show_alert=True)
+            await update.callback_query.message.reply_text(BANK_DUPLICATE_WARNING, reply_markup=warn_markup, parse_mode="HTML")
+        else:
+            await update.message.reply_text(BANK_DUPLICATE_WARNING, reply_markup=warn_markup, parse_mode="HTML")
+        return INPUT_BANK
+
+    # "|" memisahkan kolom di order (BANK | NOMOR | NAMA); netralkan dari input user agar
+    # nama/nomor tidak bisa menyisipkan kolom palsu (anti poisoning kunci rekening).
+    bank_name, bank_acc, bank_holder = (str(v).replace("|", "/") for v in (bank_name, bank_acc, bank_holder))
     context.user_data["sell_bank_name"] = bank_name
     context.user_data["sell_bank_acc"] = bank_acc
     context.user_data["sell_bank_holder"] = bank_holder
@@ -314,6 +341,7 @@ async def _proceed_to_sell_confirmation(
         bank_acc=bank_acc,
         bank_holder=bank_holder
     )
+    summary += "\n\n" + BANK_LOCK_NOTE
 
     keyboard = [
         [
@@ -387,7 +415,18 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         user_id = update.effective_user.id
         db = SessionLocal()
         try:
-            from database.crud import save_user_bank
+            from database.crud import save_user_bank, is_bank_account_taken_by_other
+            if is_bank_account_taken_by_other(db, bank_acc, user_id):
+                # Jangan simpan rekening milik user lain ke profil ini.
+                await update.message.reply_text(
+                    BANK_DUPLICATE_WARNING,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                        [get_owner_button()],
+                    ]),
+                    parse_mode="HTML",
+                )
+                return INPUT_BANK
             save_user_bank(db, user_id, bank_name, bank_acc, bank_holder)
         except Exception as exc:
             logger.debug(f"Auto save bank error: {exc}")
@@ -453,7 +492,26 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     nominal_idr = context.user_data["sell_gross_nominal_idr"] # nominal kotor
     fee_idr = context.user_data["sell_fee_idr"]
     net_idr = context.user_data["sell_net_idr"] # nominal bersih
-    
+
+    # Rekening bisa terkunci ke user lain sejak diinput — cek ulang sebelum order dibuat.
+    from database.crud import is_bank_account_taken_by_other
+    with SessionLocal() as lock_db:
+        locked = is_bank_account_taken_by_other(lock_db, context.user_data.get("sell_bank_acc", ""), user_id)
+    if locked:
+        context.user_data.pop("sell_order_id", None)  # order belum dibuat
+        await query.edit_message_text(BANK_DUPLICATE_WARNING, parse_mode="HTML")
+        return ConversationHandler.END
+
+    # Quote basi? (harga dibekukan saat input jumlah, percakapan tanpa timeout)
+    if not await quote_guard.prices_still_valid(context.user_data.get("sell_quoted_at"), {symbol: price_per_unit}):
+        context.user_data.pop("sell_order_id", None)  # order belum dibuat
+        await query.edit_message_text(
+            text=quote_guard.QUOTE_MOVED_TEXT,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     hot_wallet = get_hot_wallet_address(network)
     
     db = SessionLocal()
@@ -474,7 +532,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             "buyer_wallet": f"{context.user_data['sell_bank_name']} | {context.user_data['sell_bank_acc']} | {context.user_data['sell_bank_holder']}", # Kita simpan info bank disini
             "deposit_wallet": hot_wallet,
             "status": "WAITING_CRYPTO_DEPOSIT",
-            "expired_at": datetime.utcnow() + timedelta(minutes=15) # Sell order expire dalam 15 menit
+            "expired_at": datetime.utcnow() + timedelta(minutes=SELL_QUOTE_MINUTES),
         }
         create_order(db, order_data)
         
@@ -493,7 +551,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             f"Network: <b>{network}</b>\n"
             f"{token_hint}"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
-            f"⏳ <b>Batas Waktu Quote:</b> 15 Menit\n"
+            f"⏳ <b>Batas Waktu Quote:</b> {SELL_QUOTE_MINUTES} Menit\n"
             f"• Koin yang masuk tetap dicek otomatis hingga <b>24 jam</b> setelah order dibuat.\n"
             f"• Kirim <b>hanya {symbol} di jaringan {network}</b>. Koin lain atau native coin "
             f"(mis. ETH/BNB/POL) tidak dapat diverifikasi otomatis dan harus diproses admin.\n\n"
@@ -506,7 +564,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         keyboard = [
             [InlineKeyboardButton("⛓ Salin Alamat Hot Wallet", copy_text=CopyTextButton(text=hot_wallet))],
             [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
-            [InlineKeyboardButton("? Upload Bukti Transfer", callback_data="sell_upload_proof")],
+            [InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data="sell_upload_proof")],
             [InlineKeyboardButton("Batal Jual", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
@@ -650,9 +708,11 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 not_after=deposit_detector.deposit_deadline(order),
             )
             alasan = (hasil or {}).get("reason") or ""
+            # verified=True membawa reason "OK" — itu sukses, bukan penolakan.
+            lolos = bool((hasil or {}).get("verified"))
             tertunda = (not alasan or alasan.startswith("Menunggu konfirmasi")
                         or "belum dapat diverifikasi" in alasan)
-            if not tertunda:
+            if not lolos and not tertunda:
                 await update.message.reply_text(
                     f"\u274c <b>Deposit Belum Bisa Diverifikasi</b>\n\n"
                     f"Order ID: <code>{order_id}</code>\n"
@@ -802,30 +862,36 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Membatalkan alur jual dan kembali ke menu utama."""
     query = update.callback_query
+    # Order hanya dibatalkan lewat tombol "Batal" eksplisit. "Menu Utama" / /cancel /
+    # /start sekadar keluar dari flow: order yang sudah dibuat tetap menunggu deposit
+    # (user mungkin sudah mengirim koin — order cancelled tidak dipindai detector).
+    order_id = context.user_data.pop("sell_order_id", None)
     if query:
-        order_id = context.user_data.get("sell_order_id")
-        batal_ok = True
-        if order_id:
+        alert = None
+        if order_id and query.data == "sell_cancel":
+            alert = "❌ Penjualan dibatalkan."
             db = SessionLocal()
             try:
                 from database.crud import update_order_status
                 order = get_order_by_id(db, order_id)
-                if order is None or (order.status or "").upper() in {
-                    "WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED",
-                }:
+                if order is None:
+                    pass
+                elif order.telegram_id != update.effective_user.id:
+                    alert = None
+                elif order.deposit_tx_hash or order.deposit_proof_file_id:
+                    alert = "⚠️ TX Hash / bukti sudah dikirim — order tidak dibatalkan dan tetap diproses."
+                elif (order.status or "").upper() in {"WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED"}:
                     update_order_status(db, order_id, new_status="cancelled", failure_reason="Dibatalkan oleh pengguna")
                 else:
-                    batal_ok = False
+                    alert = "⚠️ Deposit sudah terkonfirmasi dan order diteruskan ke admin."
             except Exception as e:
                 logger.warning(f"Gagal membatalkan order sell {order_id}: {e}")
             finally:
                 db.close()
 
         try:
-            if batal_ok:
-                await query.answer("❌ Penjualan dibatalkan.", show_alert=True)
-            else:
-                await query.answer("⚠️ Deposit sudah terkonfirmasi dan order diteruskan ke admin.", show_alert=True)
+            if alert:
+                await query.answer(alert, show_alert=True)
         except Exception:
             pass
 

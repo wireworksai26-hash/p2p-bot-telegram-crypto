@@ -61,13 +61,9 @@ CURATED_PRICE_ASSETS = [
 ]
 
 
-def _fmt_rp(v: int) -> str:
-    """5000 -> 5k ; 10001 -> 10.001 ; 2000000 -> 2.000.000."""
-    if v >= 1_000_000:
-        return f"{v:,}".replace(",", ".")
-    if v % 1000 == 0:
-        return f"{v // 1000}k"
-    return f"{v:,}".replace(",", ".")
+def _fmt_k(v: int) -> str:
+    """Nominal selalu dalam K: 5000 -> 5k ; 10001 -> 10k ; 1010000 -> 1.010k."""
+    return f"{v // 1000:,}".replace(",", ".") + "k"
 
 
 def _fmt_fee(f: int) -> str:
@@ -82,49 +78,57 @@ def _fmt_pct(p: float) -> str:
     return f"{p:g}%".replace(".", ",")
 
 
-def _fixed_rows(prefix: str, tiers) -> list:
-    """Baris tabel fee fixed, digenerate dari konstanta engine (anti-drift)."""
-    return [
-        f"➡️ {prefix} {_fmt_rp(lo)}-{_fmt_rp(hi)} = fee {_fmt_fee(fee)} IDR"
-        for lo, hi, fee in tiers
-    ]
+def _fee_card(title: str, subtitle: str, fixed_tiers, percent_tiers, footer: str = "") -> str:
+    """Kartu fee: <blockquote expandable> berisi judul + baris monospace rapi."""
+    rows = [(f"{_fmt_k(lo)} - {_fmt_k(hi)}", _fmt_fee(fee)) for lo, hi, fee in fixed_tiers]
+    for lo, hi, pct in percent_tiers:
+        rng = f"> {_fmt_k(lo - 1)}" if hi is None else f"{_fmt_k(lo - 1)} - {_fmt_k(hi)}"
+        rows.append((rng, _fmt_pct(pct)))
+    width = max(len(r) for r, _ in rows)
+    fee_width = max(len(f) for _, f in rows)
+    lines = [title, subtitle]
+    lines += [f"<code>{rng:<{width}}  {fee:>{fee_width}}</code>" for rng, fee in rows]
+    if footer:
+        lines.append(footer)
+    return "<blockquote expandable>" + chr(10).join(lines) + "</blockquote>"
 
 
-def _percent_rows(prefix: str, tiers) -> list:
-    """Baris tabel fee persen, digenerate dari konstanta engine (anti-drift)."""
-    rows = []
-    for lo, hi, pct in tiers:
-        if hi is None:
-            rows.append(f"➡️ {prefix} di atas {_fmt_rp(lo - 1)} = fee {_fmt_pct(pct)}")
-        else:
-            rows.append(f"➡️ {prefix} {_fmt_rp(lo)}-{_fmt_rp(hi)} = fee {_fmt_pct(pct)}")
-    return rows
+PRICE_LIST_NOTE = (
+    "<blockquote expandable><b>📝 Note :</b>\n"
+    "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 2.500 untuk Gas Fee Kirim &amp; "
+    "min transaksi Rp 7.500 untuk List Coin tersebut, Selain itu minimal transaksi Rp. 5.000\n\n"
+    "• 🧾 Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).\n\n"
+    "• ➕ Adanya kode Unik untuk biaya transaksi Qris otomatis\n\n"
+    "• 💱 Harga realtime pasar murni mengikuti bursa global tanpa spread tersembunyi.\n\n"
+    "• 📣 Adanya fee transaksi yang berbeda-beda dikarenakan volatilitas harga coin crypto yang "
+    "sangat berfluktuasi (naik-turunnya nilai) setiap detik dan Spread USD (selisih harga) yang "
+    "berubah ubah guna menghindari kerugian stok coin pihak admin.</blockquote>"
+)
 
 
 def get_official_price_list_text() -> str:
     """Teks Price List Fee — selalu sinkron dengan services/fee_service.py."""
-    lines = [
-        f"{E_CHART()} <b>PRICE LIST & CARA PERHITUNGAN TRANSAKSI</b>\n",
-        "<b>Price list khusus FEE ALTCOIN (USDT BEDA dan lebih murah)</b>",
-        f"{E_COIN()} <b>Minimum pembelian 5000</b> {E_COIN()}\n",
-        *_fixed_rows("Jual/Beli", ALTCOIN_FEE_TIERS),
-        *_percent_rows("Jual/Beli", ALTCOIN_PERCENT_TIERS),
-        "📌 <i>Khusus JUAL altcoin: +Rp 500 utk nominal di bawah Rp 1.010.000 (jual USD tidak kena).</i>\n",
-        f"{E_DOLLAR()} <b>List fee Khusus USD</b>",
-        f"{E_COIN()} <b>Minimum pembelian 5k</b> {E_COIN()}\n",
-        *_fixed_rows("Jual/Beli", USD_FEE_TIERS),
-        *_percent_rows("Jual/Beli", USD_PERCENT_TIERS),
+    return "\n".join([
+        f"{E_CHART()} <b>PRICE LIST &amp; CARA PERHITUNGAN TRANSAKSI</b>",
         "",
-        f"{E_SWAP()} <b>Minimum Convert 6000</b> {E_SWAP()}\n",
-        *_fixed_rows("Convert", CONVERT_FEE_TIERS),
-        *_percent_rows("Convert", CONVERT_PERCENT_TIERS),
-        "",
-        "⛽ <i>Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON): +Rp 2.500 & min Rp 7.500 semua jenis transaksi.</i>",
-        "🧾 <i>Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).</i>",
-        f"📦 <i>Tanpa spread (0% markup/markdown) | Kode unik 01-200.</i>\n",
-        "📣 <i>Harga realtime pasar murni mengikuti bursa global tanpa spread tersembunyi.</i> 📣",
-    ]
-    return "\n".join(lines)
+        _fee_card(
+            f"{E_COIN()} <b>Fee ALTCOIN</b> <i>(USDT beda &amp; lebih murah)</i>",
+            "<i>Min. Jual/Beli 5k · fee dalam IDR</i>",
+            ALTCOIN_FEE_TIERS, ALTCOIN_PERCENT_TIERS,
+            "📌 <i>Khusus JUAL altcoin: +Rp 500 utk nominal di bawah Rp 1.010k (jual USD tidak kena).</i>",
+        ),
+        _fee_card(
+            f"{E_DOLLAR()} <b>Fee Khusus USD</b>",
+            "<i>Min. Jual/Beli 5k · fee dalam IDR</i>",
+            USD_FEE_TIERS, USD_PERCENT_TIERS,
+        ),
+        _fee_card(
+            f"{E_SWAP()} <b>Fee Convert</b>",
+            "<i>Min. Convert 6k · fee dalam IDR</i>",
+            CONVERT_FEE_TIERS, CONVERT_PERCENT_TIERS,
+        ),
+        PRICE_LIST_NOTE,
+    ])
 
 
 async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

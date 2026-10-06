@@ -226,6 +226,7 @@ def update_order_status(
         logger.info(f"Order {order_id} status updated: {old_status} -> {new_status}")
 
         if new_status and str(new_status).lower() == "completed":
+            auto_save_order_accounts(db, order)
             try:
                 amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
                 complete_referral(db, order.telegram_id, trade_amount_idr=amt)
@@ -329,12 +330,62 @@ def claim_topup_success(db: Session, topup_id: str) -> bool:
         raise
 
 
+def is_treasury_topup(topup_id: str) -> bool:
+    tid = str(topup_id or "")
+    return tid.startswith("TREASURY-") or tid.startswith("TOPUP-TREASURY-")
+
+
+def credit_claimed_topup(db: Session, topup) -> tuple[bool, int, float]:
+    """Kreditkan topup yang SUDAH di-claim (claim_topup_success) — satu aturan untuk semua jalur.
+
+    Yang masuk = amount_idr - pajak QRIS (mdr_idr); topup TREASURY masuk kas bot,
+    bukan saldo pribadi admin. Returns (is_treasury, net_amount, new_balance).
+    """
+    net_amt = int(topup.amount_idr) - int(topup.mdr_idr or 0)
+    if is_treasury_topup(topup.topup_id):
+        new_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+        return True, net_amt, new_bal
+    return False, net_amt, credit_user_balance(db, topup.telegram_id, net_amt)
+
+
+def claim_qris_payment(db: Session, tx_id: str, ref_id: str, kind: str, amount_idr: int = None) -> bool:
+    """Klaim atomik transaksi QRIS untuk satu order/topup (UNIQUE tx_id di DB).
+
+    True bila transaksi baru diklaim untuk ref_id ini, ATAU sudah diklaim oleh
+    ref_id yang sama (idempoten untuk re-check). False bila sudah dipakai
+    order/topup lain — pembayaran itu tidak boleh melunasi ref_id ini.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from database.models import QrisPaymentClaim
+
+    tx_id = str(tx_id or "").strip()
+    if not tx_id:
+        return False
+    existing = db.query(QrisPaymentClaim).filter(QrisPaymentClaim.tx_id == tx_id).first()
+    if existing:
+        return existing.ref_id == ref_id
+    try:
+        db.add(QrisPaymentClaim(tx_id=tx_id, ref_id=ref_id, kind=kind, amount_idr=amount_idr))
+        db.commit()
+        return True
+    except IntegrityError:
+        db.rollback()  # balapan: proses lain menang duluan
+        existing = db.query(QrisPaymentClaim).filter(QrisPaymentClaim.tx_id == tx_id).first()
+        return bool(existing and existing.ref_id == ref_id)
+
+
+def is_qris_payment_claimed(db: Session, tx_id: str) -> bool:
+    from database.models import QrisPaymentClaim
+    tx_id = str(tx_id or "").strip()
+    return bool(tx_id) and db.query(QrisPaymentClaim.id).filter(QrisPaymentClaim.tx_id == tx_id).first() is not None
+
+
 def get_gopay_resume_orders(db: Session) -> list[Order]:
     """
     Order GOPAY_QRIS berstatus 'paid' tanpa payout_tx_hash.
     Artinya payout pernah gagal/crash sebelum selesai — layak di-retry otomatis.
     """
-    return (
+    gopay_stuck = (
         db.query(Order)
         .filter(
             Order.payment_method == "GOPAY_QRIS",
@@ -343,9 +394,22 @@ def get_gopay_resume_orders(db: Session) -> list[Order]:
         )
         .all()
     )
+    # Beli pakai Saldo Bot: saldo sudah dipotong (paid_at terisi) tapi order masih
+    # 'pending' bila task payout hilang (crash/restart sebelum finalize jalan).
+    balance_paid = (
+        db.query(Order)
+        .filter(
+            Order.payment_method == "BOT_BALANCE",
+            Order.status == "pending",
+            Order.paid_at.isnot(None),
+            Order.payout_tx_hash.is_(None),
+        )
+        .all()
+    )
+    return gopay_stuck + balance_paid
 
 
-def expire_stale_orders(db: Session, minutes: int = 30) -> int:
+def expire_stale_orders(db: Session, minutes: int = 15) -> int:
     """
     Menandai order yang kedaluwarsa menjadi 'expired':
       - Order 'pending' lama (created_at > cutoff).
@@ -361,7 +425,9 @@ def expire_stale_orders(db: Session, minutes: int = 30) -> int:
             db.query(Order)
             .filter(
                 Order.status == "pending",
-                Order.created_at <= cutoff_time
+                Order.created_at <= cutoff_time,
+                # Sudah dibayar (Saldo Bot) — jangan expire, biarkan resume payout.
+                Order.paid_at.is_(None),
             )
             .all()
         )
@@ -792,9 +858,9 @@ def get_low_balance_wallets(db: Session) -> list[WalletBalance]:
         raise
 
 
-def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int = 200) -> int:
+def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int = 400) -> int:
     """
-    Menghasilkan kode unik kecil (01..200) yang belum dipakai oleh order/topup PENDING
+    Menghasilkan kode unik kecil (001..400) yang belum dipakai oleh order/topup PENDING
     lainnya. Mencegah selisih pembayaran terlalu jauh dari nominal asli transaksi.
     """
     import random
@@ -813,12 +879,12 @@ def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int =
         }
         used_codes = pending_order_codes.union(pending_topup_codes)
 
-        # Cari kode unik yang belum terpakai di rentang kecil (01..200)
+        # Cari kode unik yang belum terpakai di rentang kecil (001..400)
         available = [c for c in range(min_code, max_code + 1) if c not in used_codes]
         if available:
             return random.choice(available)
 
-        # Fallback jika ada >200 order pending bersamaan — tetap di rentang 01..200
+        # Fallback jika ada >400 order pending bersamaan — tetap di rentang 001..400
         wider_available = [c for c in range(1, 201) if c not in used_codes]
         if wider_available:
             return random.choice(wider_available)
@@ -1453,6 +1519,120 @@ def get_saved_wallet_by_id(db: Session, wallet_id: int, telegram_id: int = None)
     return query.first()
 
 
+# Alamat terkunci ke satu user HANYA setelah transaksi sukses (keputusan client).
+# Menyimpan alamat di profil tidak mengunci — kalau mengunci, siapa pun bisa
+# "menyimpan" alamat orang lain duluan dan memblokir pemilik aslinya.
+_ADDRESS_LOCK_ORDER_TYPES = ("buy", "swap")
+
+
+def _is_hex_address(addr: str) -> bool:
+    """0x + hex (EVM 40, Sui/Aptos 64): hex tidak case-sensitive."""
+    body = addr[2:]
+    return addr[:2].lower() == "0x" and bool(body) and all(c in "0123456789abcdefABCDEF" for c in body)
+
+
+def _normalize_wallet_address(wallet_address: str) -> str:
+    """Strip spasi; alamat hex (EVM/Sui/Aptos) dibandingkan case-insensitive."""
+    addr = (wallet_address or "").strip()
+    return addr.lower() if _is_hex_address(addr) else addr
+
+
+def is_wallet_address_taken_by_other(db: Session, wallet_address: str, current_telegram_id: int) -> bool:
+    """True bila alamat sudah terkunci ke user LAIN lewat transaksi sukses (anti-fraud binding)."""
+    addr = _normalize_wallet_address(wallet_address)
+    if not addr:
+        return False
+    order_col = func.lower(Order.buyer_wallet) if _is_hex_address(addr) else Order.buyer_wallet
+    return (
+        db.query(Order.id)
+        .filter(
+            order_col == addr,
+            Order.telegram_id != current_telegram_id,
+            func.lower(Order.order_type).in_(_ADDRESS_LOCK_ORDER_TYPES),
+            func.lower(Order.status) == "completed",
+        )
+        .first()
+        is not None
+    )
+
+
+def normalize_account_number(account_number: str) -> str:
+    """Nomor rekening / HP e-wallet: hanya huruf-angka, huruf besar (tanpa spasi/strip)."""
+    return "".join(c for c in (account_number or "") if c.isalnum()).upper()
+
+
+def account_number_keys(text: str) -> set[str]:
+    """Semua 'nomor' (>= 6 digit) yang terbaca dari teks bebas, dinormalkan untuk pembandingan.
+
+    Menangani spasi / titik / strip ("0812.3456.7890", "1234 5678 90"), awalan "+62"/"62"
+    nomor HP (disamakan ke "0…"), dan teks tanpa koma ("1234567890 BCA Budi").
+    """
+    import re
+    keys = set()
+    for chunk in re.findall(r"\+?\d[\d .\-]{4,}\d", text or ""):
+        digits = re.sub(r"\D", "", chunk)
+        if digits.startswith("62") and len(digits) >= 10:
+            digits = "0" + digits[2:]
+        if len(digits) >= 6:
+            keys.add(digits)
+    return keys
+
+
+def _bank_field_of(buyer_wallet: str) -> str:
+    """Kolom nomor dari info bank order Jual "BANK | NOMOR | NAMA".
+
+    Hanya kolom ke-2 yang dipakai: karakter "|" yang disisipkan di nama bank / pemilik
+    tidak bisa membuat nomor orang lain tampak milik user tsb (poisoning).
+    """
+    parts = (buyer_wallet or "").split("|")
+    return parts[1] if len(parts) >= 3 else (buyer_wallet or "")
+
+
+def is_bank_account_taken_by_other(db: Session, account_number: str, current_telegram_id: int) -> bool:
+    """True bila rekening/e-wallet sudah terkunci ke user LAIN lewat penjualan yang sukses.
+
+    Aturan sama dengan alamat wallet (keputusan client): terkunci hanya setelah transaksi
+    sukses. Dicocokkan per nomor (bukan nama bank, yang bisa ditulis macam-macam), memakai
+    pembacaan angka yang toleran format (lihat account_number_keys).
+    """
+    wanted = account_number_keys(account_number)
+    if not wanted:
+        return False
+    rows = (
+        db.query(Order.buyer_wallet)
+        .filter(
+            func.lower(Order.order_type) == "sell",
+            func.lower(Order.status) == "completed",
+            Order.telegram_id != current_telegram_id,
+            Order.buyer_wallet.isnot(None),
+        )
+        .all()
+    )
+    return any(wanted & account_number_keys(_bank_field_of(r[0])) for r in rows)
+
+
+def auto_save_order_accounts(db: Session, order) -> None:
+    """Setelah transaksi SUKSES: simpan otomatis alamat wallet (Beli/Convert) atau
+    rekening pencairan (Jual) ke profil user. Idempoten; tidak pernah menggagalkan penyelesaian order."""
+    try:
+        otype = (order.order_type or "").lower()
+        tid = order.telegram_id
+        target = (order.buyer_wallet or "").strip()
+        if not tid or not target:
+            return
+        if otype == "buy":
+            save_user_wallet(db, tid, target, network=order.network)
+        elif otype == "swap":
+            save_user_wallet(db, tid, target, network=order.target_network)
+        elif otype == "sell":
+            parts = [p.strip() for p in target.split("|")]
+            if len(parts) >= 3 and normalize_account_number(parts[1]):
+                save_user_bank(db, tid, parts[0], parts[1], " ".join(parts[2:]))
+    except Exception as exc:  # jangan ganggu penyelesaian order
+        db.rollback()
+        logger.warning("Auto-save wallet/rekening order %s gagal: %s", getattr(order, "order_id", "?"), exc)
+
+
 def save_user_wallet(
     db: Session,
     telegram_id: int,
@@ -1854,18 +2034,75 @@ def get_loyalty_eligible_users(db: Session) -> list[dict]:
 # PHASE 7 — TOP SPENDER CRUD
 # ============================================================
 
+def get_milestone_excluded_ids(db: Session) -> set[int]:
+    """ID user yang dikecualikan dari peringkat Top Milestone (tetap bebas bertransaksi)."""
+    from database.models import MilestoneExclusion
+    return {row[0] for row in db.query(MilestoneExclusion.telegram_id).all()}
+
+
+def list_milestone_exclusions(db: Session) -> list:
+    from database.models import MilestoneExclusion
+    return db.query(MilestoneExclusion).order_by(MilestoneExclusion.created_at.desc()).all()
+
+
+def add_milestone_exclusion(db: Session, telegram_id: int, note: Optional[str] = None,
+                            created_by: Optional[int] = None) -> bool:
+    """Tambah pengecualian. True bila baru; False bila sudah ada (catatan diperbarui)."""
+    from database.models import MilestoneExclusion
+    existing = db.query(MilestoneExclusion).filter(MilestoneExclusion.telegram_id == telegram_id).first()
+    if existing:
+        if note:
+            existing.note = note[:200]
+            db.commit()
+        return False
+    db.add(MilestoneExclusion(telegram_id=telegram_id, note=(note or None) and note[:200], created_by=created_by))
+    db.add(AuditLog(telegram_id=telegram_id, action="MILESTONE_EXCLUDE_ADD",
+                    details=f"User {telegram_id} dikecualikan dari Top Milestone oleh admin {created_by}. {note or ''}".strip()))
+    db.commit()
+    return True
+
+
+def remove_milestone_exclusion(db: Session, telegram_id: int, removed_by: Optional[int] = None) -> bool:
+    from database.models import MilestoneExclusion
+    deleted = db.query(MilestoneExclusion).filter(MilestoneExclusion.telegram_id == telegram_id).delete()
+    if deleted:
+        db.add(AuditLog(telegram_id=telegram_id, action="MILESTONE_EXCLUDE_REMOVE",
+                        details=f"Pengecualian Top Milestone user {telegram_id} dicabut oleh admin {removed_by}."))
+    db.commit()
+    return bool(deleted)
+
+
+# Volume Top Milestone = akumulasi SEMUA transaksi selesai: beli + jual + convert (keputusan client).
+MILESTONE_ORDER_TYPES = ("buy", "sell", "swap")
+
+
+def order_volume_idr():
+    """Nilai satu order untuk volume milestone: total_idr (dasar yang sama dengan plan Phase 7).
+
+    Catatan: total_idr beli = bayar (termasuk pajak QRIS + kode unik), jual = bersih setelah
+    fee, convert = nilai IDR. Selisihnya kecil (<~3%); dasar hitung sengaja tidak diubah.
+    Cukup ganti di sini bila client ingin nilai bruto (nominal_idr).
+    """
+    return Order.total_idr
+
+
 def get_top_spenders(
     db: Session, limit: int = 10, period_days: Optional[int] = 30
 ) -> list[dict]:
     """
     Ambil top N spender berdasarkan total nominal transaksi COMPLETED dalam periode tertentu.
+    Hanya user nyata yang menyelesaikan >= 1 transaksi, dan bukan user yang dikecualikan
+    dari milestone (pengecualian dibuang SEBELUM limit, jadi daftar tetap terisi top N).
     Return: [{rank, telegram_id, username, full_name, total_spent_idr, tx_count}, ...]
     """
     filters = [
         func.lower(Order.status) == "completed",
-        func.lower(Order.order_type) == "buy",
+        func.lower(Order.order_type).in_(MILESTONE_ORDER_TYPES),
         or_(User.is_banned == False, User.is_banned.is_(None)),  # noqa: E712
     ]
+    excluded = get_milestone_excluded_ids(db)
+    if excluded:
+        filters.append(Order.telegram_id.notin_(excluded))
     if period_days and period_days > 0:
         cutoff = datetime.utcnow() - timedelta(days=period_days)
         filters.append(Order.created_at >= cutoff)
@@ -1875,13 +2112,13 @@ def get_top_spenders(
             Order.telegram_id,
             User.username,
             User.full_name,
-            func.sum(Order.total_idr).label("total_spent"),
+            func.sum(order_volume_idr()).label("total_spent"),
             func.count(Order.id).label("tx_count"),
         )
         .join(User, User.telegram_id == Order.telegram_id)
         .filter(*filters)
         .group_by(Order.telegram_id, User.username, User.full_name)
-        .order_by(func.sum(Order.total_idr).desc())
+        .order_by(func.sum(order_volume_idr()).desc(), Order.telegram_id.asc())  # tie-break deterministik
         .limit(limit)
         .all()
     )
@@ -2141,9 +2378,18 @@ def topup_bot_treasury(
     if amount_idr <= 0:
         raise ValueError("Nominal topup kas bot harus lebih besar dari 0.")
 
+    from sqlalchemy import update, cast, BigInteger, String
     current_bal = get_bot_treasury_balance(db)
-    new_bal = current_bal + amount_idr
-    set_loyalty_config(db, "bot_treasury_balance_idr", str(new_bal))
+    # Tambah atomik (UPDATE value = value + n) agar tidak menimpa potongan yang baru terjadi.
+    result = db.execute(
+        update(LoyaltyConfig)
+        .where(LoyaltyConfig.key == "bot_treasury_balance_idr")
+        .values(value=cast(cast(LoyaltyConfig.value, BigInteger) + amount_idr, String), updated_at=datetime.utcnow())
+    )
+    db.commit()
+    if result.rowcount != 1:      # baris belum ada (saldo awal 0): buat
+        set_loyalty_config(db, "bot_treasury_balance_idr", str(amount_idr))
+    new_bal = get_bot_treasury_balance(db)
 
     try:
         audit = AuditLog(
@@ -2193,6 +2439,38 @@ def set_bot_treasury_balance(
         logger.warning("Gagal mencatat audit set kas bot: %s", audit_err)
 
     return amount_idr
+
+
+def try_deduct_bot_treasury(db: Session, amount_idr: int, admin_id: Optional[int] = None,
+                            note: str = "Reward") -> Optional[int]:
+    """Potong Kas Bot HANYA bila saldo cukup. Mengembalikan saldo baru, atau None bila kurang.
+
+    Beda dengan deduct_bot_treasury (yang diam-diam membulatkan ke 0): reward ke user
+    tidak boleh terkirim kalau dananya tidak ada.
+    """
+    if amount_idr <= 0:
+        return get_bot_treasury_balance(db)
+    from sqlalchemy import update, cast, BigInteger, String
+    balance = cast(LoyaltyConfig.value, BigInteger)
+    # Satu UPDATE bersyarat (saldo >= jumlah): dua proses/tap bersamaan tidak bisa sama-sama lolos
+    # lalu membelanjakan Kas Bot melebihi saldo (baca-lalu-tulis lama bisa).
+    result = db.execute(
+        update(LoyaltyConfig)
+        .where(LoyaltyConfig.key == "bot_treasury_balance_idr", balance >= amount_idr)
+        .values(value=cast(balance - amount_idr, String), updated_at=datetime.utcnow())
+    )
+    db.commit()
+    if result.rowcount != 1:
+        return None
+    new_bal = get_bot_treasury_balance(db)
+    try:
+        db.add(AuditLog(telegram_id=admin_id, action="DEDUCT_BOT_TREASURY",
+                        details=f"Potong Kas Bot: -Rp {amount_idr:,} (saldo baru: Rp {new_bal:,}) oleh admin {admin_id}. Note: {note}"))
+        db.commit()
+    except Exception as audit_err:
+        db.rollback()
+        logger.warning("Gagal mencatat audit potong kas bot: %s", audit_err)
+    return new_bal
 
 
 def deduct_bot_treasury(

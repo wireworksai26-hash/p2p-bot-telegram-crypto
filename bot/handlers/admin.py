@@ -17,7 +17,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import settings
 from database.connection import SessionLocal
-from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, TopupOrder
+from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, TopupOrder, RewardBatch
 from database import crud
 from html import escape as _esc
 from services.crypto_sender import CryptoSenderFactory
@@ -52,6 +52,9 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         [
             InlineKeyboardButton("💳 Kirim Saldo User", callback_data="admin_panel_send_balance"),
             InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="admin_panel_treasury"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Kirim Reward ke User Pilihan", callback_data="admin_panel_reward"),
         ],
         [
             InlineKeyboardButton(order_label, callback_data="admin_panel_orders"),
@@ -618,11 +621,17 @@ def build_admin_top_spenders_view(db, period_days: int = 30) -> str:
 
     lines = [
         f"{tg_emoji('TROPHY', '🏆')} <b>TOP SPENDER — LEADERBOARD TRANSAKSI TERBANYAK</b>",
-        f"📅 <b>Periode:</b> <code>{period_label}</code> | 💰 <b>Total Hadiah:</b> <code>{format_idr(total_pool)}</code>\n",
+        f"📅 <b>Periode:</b> <code>{period_label}</code> | 💰 <b>Total Hadiah:</b> <code>{format_idr(total_pool)}</code>",
+        "<i>Volume = akumulasi semua transaksi selesai (beli + jual + convert).</i>\n",
     ]
 
+    excluded_count = len(crud.get_milestone_excluded_ids(db))
+    if excluded_count:
+        lines.append(f"🚫 <i>{excluded_count} user dikecualikan dari milestone (tetap bisa transaksi). "
+                     f"Peringkat tetap Top 10 dari user lain.</i>\n")
+
     if not top_spenders:
-        lines.append("<i>Belum ada data transaksi pembelian selesai pada periode ini.</i>\n")
+        lines.append("<i>Belum ada data transaksi selesai pada periode ini.</i>\n")
     else:
         lines.append(f"📊 <b>Daftar Peringkat Top {len(top_spenders)} Spender Terbesar:</b>\n")
         for u in top_spenders:
@@ -638,16 +647,34 @@ def build_admin_top_spenders_view(db, period_days: int = 30) -> str:
                 f"   └── 🎁 <b>Alokasi Hadiah:</b> <code>+{format_idr(reward)}</code>\n"
             )
 
-    lines.append("💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
+    needed, balance, shortfall = top_spender_funding(db, period_days)
+    lines.append(f"🏦 <b>Kas Bot:</b> <code>{format_idr(balance)}</code> — hadiah dibayar dari Kas Bot "
+                 f"(butuh <code>{format_idr(needed)}</code>)")
+    if shortfall > 0:
+        lines.append(f"\n⚠️ <b>Kas Bot kurang {format_idr(shortfall)}.</b> Isi Kas Bot dulu via QRIS, "
+                     "lalu kembali ke sini untuk membagikan hadiah.")
+    else:
+        lines.append("\n💡 <i>Klik tombol di bawah untuk membagikan saldo hadiah langsung ke akun para pemenang:</i>")
     return "\n".join(lines)
 
 
-def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMarkup:
-    """Keyboard navigasi Top Spender."""
+def top_spender_funding(db, period_days: int = 30) -> tuple[int, int, int]:
+    """(dana dibutuhkan, saldo Kas Bot, kekurangan) untuk membayar Top Spender saat ini."""
+    from services.campaign_service import TOP_SPENDER_REWARDS
+    top = crud.get_top_spenders(db, limit=10, period_days=period_days)
+    needed = sum(TOP_SPENDER_REWARDS.get(u["rank"], 0) for u in top)
+    balance = crud.get_bot_treasury_balance(db)
+    return needed, balance, max(0, needed - balance)
+
+
+def build_admin_top_spenders_keyboard(period_days: int = 30, shortfall: int = 0) -> InlineKeyboardMarkup:
+    """Keyboard navigasi Top Spender. Kas Bot kurang -> tombol bagi diganti tombol isi Kas Bot (QRIS)."""
+    if shortfall > 0:
+        first_row = [InlineKeyboardButton("📲 Isi Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu")]
+    else:
+        first_row = [InlineKeyboardButton("💰 Eksekusi & Bagikan Hadiah ke Top 10", callback_data=f"admin_top_spender_exec_{period_days}")]
     buttons = [
-        [
-            InlineKeyboardButton("💰 Eksekusi & Bagikan Hadiah ke Top 10", callback_data=f"admin_top_spender_exec_{period_days}"),
-        ],
+        first_row,
         [
             InlineKeyboardButton("📅 7 Hari", callback_data="admin_top_spender_p_7"),
             InlineKeyboardButton("📅 30 Hari", callback_data="admin_top_spender_p_30"),
@@ -656,6 +683,7 @@ def build_admin_top_spenders_keyboard(period_days: int = 30) -> InlineKeyboardMa
         ],
         [
             InlineKeyboardButton("🔄 Refresh Data", callback_data=f"admin_top_spender_p_{period_days}"),
+            InlineKeyboardButton("🚫 Pengecualian", callback_data="admin_milestone_excl"),
         ],
         [
             InlineKeyboardButton("🔙 Kembali ke Campaign & Giveaway", callback_data="admin_panel_campaign"),
@@ -1151,6 +1179,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_admin(user_id):
         await update.message.reply_text("⛔ Anda tidak memiliki akses ke menu administrator.")
         return
+    _clear_reward_flags(context)
 
     db = SessionLocal()
     try:
@@ -1165,6 +1194,199 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     finally:
         db.close()
+
+
+# ─────────────────────────────────────────────────────────
+#  Kirim Reward ke User Pilihan Admin  &  Pengecualian Top Milestone
+# ─────────────────────────────────────────────────────────
+
+WIZARD_TTL_SECONDS = 600
+_REWARD_WIZARD_FLAGS = ("admin_awaiting_reward_list", "admin_awaiting_reward_msg",
+                        "admin_awaiting_milestone_excl")
+
+
+def _clear_reward_flags(context) -> None:
+    """Batalkan SEMUA prompt teks admin yang menunggu (reward / pengecualian / kirim saldo / kas bot / …).
+
+    Dipanggil untuk setiap tombol baru dan /admin: satu prompt aktif pada satu waktu, sehingga
+    teks berikutnya tidak 'ditelan' wizard lama yang sudah ditinggalkan admin.
+    """
+    for key in list(context.user_data):
+        if key.startswith("admin_awaiting_") or key in ("admin_reward_batch_id", "admin_reward_skipped",
+                                                         "admin_wizard_ts"):
+            context.user_data.pop(key, None)
+
+
+def _arm_reward_wizard(context, *flags: str) -> None:
+    """Pasang flag wizard baru (setelah membersihkan yang lama) + cap waktu untuk kedaluwarsa."""
+    import time
+    _clear_reward_flags(context)
+    for flag in flags:
+        context.user_data[flag] = True
+    context.user_data["admin_wizard_ts"] = time.time()
+
+
+def _expire_stale_reward_wizard(context) -> None:
+    import time
+    if any(context.user_data.get(f) for f in _REWARD_WIZARD_FLAGS):
+        if time.time() - context.user_data.get("admin_wizard_ts", 0) > WIZARD_TTL_SECONDS:
+            for f in _REWARD_WIZARD_FLAGS:
+                context.user_data.pop(f, None)
+
+
+def _fmt_skipped(skipped: list, errors: list, limit: int = 8) -> str:
+    """Ringkasan baris yang dilewati (maks `limit` baris supaya pesan tidak panjang)."""
+    lines = []
+    for err in errors:
+        lines.append(f"• baris {err['line']}: {_esc(err['reason'][:120])}")
+    for sk in skipped:
+        lines.append(f"• <code>{_esc(sk['target'][:40])}</code>: {_esc(sk['reason'][:120])}")
+    if not lines:
+        return ""
+    more = f"\n… dan {len(lines) - limit} lainnya" if len(lines) > limit else ""
+    return "⚠️ <b>Dilewati:</b>\n" + "\n".join(lines[:limit]) + more + "\n\n"
+
+
+def build_reward_intro_view(db, admin_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    from services import reward_service as rs
+    treasury = crud.get_bot_treasury_balance(db)
+    text = (
+        "🎁 <b>KIRIM REWARD KE USER PILIHAN</b>\n\n"
+        "Kirim saldo bot ke beberapa orang sekaligus. Nominal <b>bebas beda tiap orang</b>, "
+        "pesan boleh santai/custom, dananya diambil dari <b>Kas Bot</b>.\n"
+        f"🏦 <b>Kas Bot saat ini:</b> <code>{format_idr(treasury)}</code>\n\n"
+        "<b>Cara:</b>\n"
+        "1️⃣ Tekan <b>Susun Daftar Reward</b>\n"
+        "2️⃣ Ketik daftar — satu orang per baris:\n"
+        "<code>@budi 50000\n123456789 25k\n@adminchannel 100.000 | pesan khusus orang ini</code>\n"
+        "3️⃣ Tulis pesan untuk penerima (atau pakai pesan standar)\n"
+        "4️⃣ Cek ringkasan lalu <b>Kirim</b>\n\n"
+        f"<i>Nominal {format_idr(rs.MIN_REWARD_IDR)} – {format_idr(rs.MAX_REWARD_IDR)} per orang · "
+        f"maks {rs.MAX_RECIPIENTS} penerima per batch · penerima harus sudah pernah /start bot.</i>"
+    )
+    buttons = [[InlineKeyboardButton("✏️ Susun Daftar Reward", callback_data="admin_reward_start")]]
+    draft = db.query(RewardBatch).filter(
+        RewardBatch.created_by == admin_id, RewardBatch.status == "DRAFT"
+    ).order_by(RewardBatch.id.desc()).first()
+    if draft:
+        buttons.append([InlineKeyboardButton(
+            f"▶️ Lanjutkan Draft #{draft.id} ({draft.recipient_count} orang · {format_idr(draft.total_amount)})",
+            callback_data=f"admin_reward_preview_{draft.id}")])
+    buttons += [
+        [InlineKeyboardButton("📜 Riwayat Reward", callback_data="admin_reward_history"),
+         InlineKeyboardButton("🏦 Kas Bot", callback_data="camp_treasury_view")],
+        [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def build_reward_preview_view(db, batch, skipped_text: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    from services import reward_service as rs
+    items = rs.get_batch_items(batch)
+    treasury = crud.get_bot_treasury_balance(db)
+    total = sum(i["amount"] for i in items)
+    rows = []
+    for n, it in enumerate(items, start=1):
+        mark = " 💬" if it.get("message") else ""
+        rows.append(f"{n}. {_esc(it['label'][:40])} — <b>{format_idr(it['amount'])}</b>{mark}")
+    lines = [f"🎁 <b>KONFIRMASI REWARD #{batch.id}</b>\n", f"👥 <b>Penerima ({len(items)}):</b>", "{ROWS}"]
+    msg = batch.default_message
+    msg_preview = _esc(msg if len(msg) <= 160 else msg[:157] + "…") if msg else "pesan standar"
+    lines += [
+        "",
+        f"💬 <b>Pesan:</b> <i>{msg_preview}</i>" + ("\n<i>💬 = punya pesan khusus sendiri</i>" if any(i.get("message") for i in items) else ""),
+        "",
+        (skipped_text.rstrip() + "\n") if skipped_text.strip() else None,
+        f"💰 <b>Total:</b> <code>{format_idr(total)}</code>",
+        f"🏦 <b>Kas Bot:</b> <code>{format_idr(treasury)}</code>",
+    ]
+    lines = [ln for ln in lines if ln is not None]
+    buttons = []
+    if treasury < total:
+        lines.append(
+            f"\n⚠️ <b>Kas Bot kurang {format_idr(total - treasury)}.</b>\n"
+            "Isi Kas Bot dulu via QRIS, lalu kembali ke sini (draft tersimpan)."
+        )
+        buttons.append([InlineKeyboardButton("📲 Isi Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu")])
+        buttons.append([InlineKeyboardButton("🔄 Cek Ulang Kas Bot", callback_data=f"admin_reward_preview_{batch.id}")])
+    else:
+        lines.append(f"📉 <b>Sisa Kas Bot setelah kirim:</b> <code>{format_idr(treasury - total)}</code>")
+        buttons.append([InlineKeyboardButton(f"🚀 Kirim Reward Sekarang ({format_idr(total)})",
+                                             callback_data=f"admin_reward_exec_{batch.id}")])
+    buttons.append([InlineKeyboardButton("✏️ Ubah Pesan", callback_data=f"admin_reward_editmsg_{batch.id}"),
+                    InlineKeyboardButton("❌ Batalkan", callback_data=f"admin_reward_cancel_{batch.id}")])
+    text = "\n".join(lines)
+    # Batas Telegram 4096: potong daftar penerima (total & tombol tetap utuh).
+    shown = len(rows)
+    while True:
+        block = "\n".join(rows[:shown]) + (f"\n… dan {len(rows) - shown} penerima lainnya" if shown < len(rows) else "")
+        candidate = text.replace("{ROWS}", block)
+        if len(candidate) <= 3900 or shown <= 3:
+            return candidate[:4000], InlineKeyboardMarkup(buttons)
+        shown = max(3, shown - 5)
+
+
+def build_reward_result_text(result: dict) -> str:
+    lines = [
+        f"✅ <b>REWARD TERKIRIM — Batch #{result['batch_id']}</b>\n",
+        f"💸 <b>{result['paid_count']} penerima</b> · total <code>{format_idr(result['paid_total'])}</code>",
+        f"🏦 Kas Bot: {format_idr(result['treasury_before'])} → <b>{format_idr(result['treasury_after'])}</b>",
+        f"🔔 Notifikasi terkirim: {len(result['notif_ok'])}/{result['paid_count']}",
+    ]
+    if result["notif_fail"]:
+        lines.append("\n📭 <b>Notifikasi gagal</b> (saldo tetap masuk; mereka belum chat / memblokir bot):\n"
+                     + ", ".join(_esc(x[:40]) for x in result["notif_fail"]))
+    if result["failed"]:
+        lines.append("\n⚠️ <b>Gagal dikredit &amp; dikembalikan ke Kas Bot:</b> "
+                     + ", ".join(_esc(r["label"][:40]) for r in result["failed"]))
+    if result["dropped"]:
+        lines.append("\n⏭ <b>Dilewati saat eksekusi:</b> "
+                     + ", ".join(_esc(d["label"][:40]) for d in result["dropped"]))
+    text = "\n".join(lines)
+    # Batas Telegram 4096 (maks 30 penerima × nama panjang bisa melewatinya).
+    return text if len(text) <= 3900 else text[:3880].rsplit("\n", 1)[0] + "\n… (daftar dipotong)"
+
+
+def build_reward_history_view(db, admin_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    rows = db.query(RewardBatch).filter(RewardBatch.status.in_(("COMPLETED", "CANCELLED", "DRAFT", "RUNNING"))
+                                        ).order_by(RewardBatch.id.desc()).limit(10).all()
+    lines = ["📜 <b>RIWAYAT REWARD (10 terakhir)</b>\n"]
+    if not rows:
+        lines.append("<i>Belum ada batch reward.</i>")
+    labels = {"COMPLETED": "✅ Terkirim", "CANCELLED": "❌ Dibatalkan", "DRAFT": "📝 Draft", "RUNNING": "⏳ Berjalan"}
+    for b in rows:
+        when = (b.executed_at or b.created_at)
+        lines.append(f"<b>#{b.id}</b> · {when.strftime('%d %b %H:%M')} · {b.recipient_count} orang · "
+                     f"{format_idr(b.total_amount)} · {labels.get(b.status, b.status)}")
+    buttons = [[InlineKeyboardButton("🎁 Kirim Reward Baru", callback_data="admin_panel_reward")],
+               [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")]]
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
+def build_milestone_exclusion_view(db) -> tuple[str, InlineKeyboardMarkup]:
+    rows = crud.list_milestone_exclusions(db)
+    lines = [
+        "🚫 <b>PENGECUALIAN TOP MILESTONE</b>\n",
+        "User di daftar ini <b>tidak ikut peringkat Top Milestone</b> (mis. admin channel airdrop yang "
+        "sudah pasti menang). Mereka <b>tetap bisa bertransaksi normal</b> di bot. Peringkat tetap Top 10 — "
+        "yang dikecualikan dilewati, urutan berikutnya naik.\n",
+        "<i>Hanya user yang menyelesaikan minimal 1 transaksi yang bisa masuk peringkat.</i>\n",
+    ]
+    buttons = []
+    if not rows:
+        lines.append("<i>Belum ada user yang dikecualikan.</i>")
+    for r in rows[:25]:   # batas pesan Telegram & jumlah tombol
+        user = db.query(User).filter(User.telegram_id == r.telegram_id).first()
+        name = f"@{user.username}" if user and user.username else (user.full_name if user and user.full_name else "—")
+        note = f" — {_esc(r.note[:60])}" if r.note else ""
+        lines.append(f"• <code>{r.telegram_id}</code> {_esc(name[:40])}{note}")
+        buttons.append([InlineKeyboardButton(f"🗑 Cabut {r.telegram_id}",
+                                             callback_data=f"admin_milestone_excl_rm_{r.telegram_id}")])
+    if len(rows) > 25:
+        lines.append(f"<i>… dan {len(rows) - 25} lainnya (25 terbaru ditampilkan)</i>")
+    buttons.insert(0, [InlineKeyboardButton("➕ Tambah Pengecualian", callback_data="admin_milestone_excl_add")])
+    buttons.append([InlineKeyboardButton("🔙 Kembali ke Top Spender", callback_data="admin_panel_top_spenders")])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
 async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1615,6 +1837,117 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(text="\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             await query.answer("Daftar emoji aktif dimuat.")
 
+        # ─── KIRIM REWARD KE USER PILIHAN ──────────────────
+        elif data == "admin_panel_reward":
+            _clear_reward_flags(context)
+            text, markup = build_reward_intro_view(db, user_id)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data == "admin_reward_start":
+            _arm_reward_wizard(context, "admin_awaiting_reward_list")
+            await query.answer()
+            await query.message.reply_text(
+                "✏️ <b>Ketik daftar penerima</b> — satu orang per baris:\n\n"
+                "<code>@budi 50000\n"
+                "123456789 25k\n"
+                "@adminchannel 100.000 | Makasih ya kak udah mau nerima bot kami 🙏</code>\n\n"
+                "• Penerima: <b>@username</b> atau <b>ID Telegram</b>\n"
+                "• Nominal: <code>50000</code>, <code>50.000</code>, <code>50k</code>, <code>1,5jt</code>\n"
+                "• Setelah tanda <code>|</code> (opsional) = pesan khusus untuk orang itu\n\n"
+                "<i>Kirim /cancel untuk membatalkan.</i>",
+                parse_mode="HTML",
+            )
+
+        elif data.startswith("admin_reward_preview_"):
+            from services import reward_service as rs
+            batch = db.query(RewardBatch).filter(
+                RewardBatch.id == int(data.rsplit("_", 1)[1]), RewardBatch.created_by == user_id,
+                RewardBatch.status == "DRAFT").first()
+            if not batch:
+                await query.answer("Batch tidak ditemukan / sudah diproses.", show_alert=True)
+            else:
+                skipped = context.user_data.get("admin_reward_skipped", "") if \
+                    context.user_data.get("admin_reward_batch_id") == batch.id else ""
+                text, markup = build_reward_preview_view(db, batch, skipped)
+                context.user_data.pop("admin_awaiting_reward_msg", None)
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+                await query.answer()
+
+        elif data.startswith("admin_reward_editmsg_"):
+            batch_id = int(data.rsplit("_", 1)[1])
+            if not db.query(RewardBatch.id).filter(RewardBatch.id == batch_id, RewardBatch.created_by == user_id,
+                                                   RewardBatch.status == "DRAFT").first():
+                await query.answer("Draft tidak ditemukan / bukan milik Anda.", show_alert=True)
+                return
+            _arm_reward_wizard(context, "admin_awaiting_reward_msg")
+            context.user_data["admin_reward_batch_id"] = batch_id
+            await query.answer()
+            await query.message.reply_text(
+                "💬 <b>Ketik pesan untuk para penerima</b> (boleh santai, tidak harus formal).\n"
+                "Placeholder opsional: <code>{nama}</code> <code>{nominal}</code> <code>{saldo}</code>\n\n"
+                "Info nominal &amp; saldo ditambahkan otomatis di bawah pesan.\n"
+                "<i>Penerima yang punya pesan khusus di daftarnya tetap memakai pesan khususnya.</i>",
+                parse_mode="HTML",
+            )
+
+        elif data.startswith("admin_reward_cancel_"):
+            from services import reward_service as rs
+            rs.cancel_batch(db, int(data.rsplit("_", 1)[1]), user_id)
+            _clear_reward_flags(context)
+            await query.answer("Draft reward dibatalkan.")
+            text, markup = build_reward_intro_view(db, user_id)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data.startswith("admin_reward_exec_"):
+            from services import reward_service as rs
+            batch_id = int(data.rsplit("_", 1)[1])
+            await query.answer("⏳ Mengirim reward...")
+            result = await rs.execute_batch(db, context.bot, batch_id, user_id)
+            _clear_reward_flags(context)
+            if result["ok"]:
+                markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎁 Kirim Reward Lagi", callback_data="admin_panel_reward")],
+                    [InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")],
+                ])
+                await query.edit_message_text(text=build_reward_result_text(result), reply_markup=markup, parse_mode="HTML")
+            elif result.get("error_code") == "treasury":
+                batch = db.query(RewardBatch).filter(RewardBatch.id == batch_id).first()
+                text, markup = build_reward_preview_view(db, batch)
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+                await query.answer(f"Kas Bot kurang {format_idr(result['shortfall'])}.", show_alert=True)
+            else:
+                await query.answer(result["error"], show_alert=True)
+                text, markup = build_reward_intro_view(db, user_id)
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
+        elif data == "admin_reward_history":
+            text, markup = build_reward_history_view(db, user_id)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        # ─── PENGECUALIAN TOP MILESTONE ──────────────────────
+        elif data == "admin_milestone_excl":
+            text, markup = build_milestone_exclusion_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await query.answer()
+
+        elif data == "admin_milestone_excl_add":
+            _arm_reward_wizard(context, "admin_awaiting_milestone_excl")
+            await query.answer()
+            await query.message.reply_text(
+                "➕ <b>Ketik user yang dikecualikan</b> dari Top Milestone — satu per baris, catatan opsional:\n\n"
+                "<code>@adminchannelA admin channel airdrop\n123456789</code>\n\n"
+                "<i>Mereka tetap bisa bertransaksi normal. Kirim /cancel untuk membatalkan.</i>",
+                parse_mode="HTML",
+            )
+
+        elif data.startswith("admin_milestone_excl_rm_"):
+            removed = crud.remove_milestone_exclusion(db, int(data.rsplit("_", 1)[1]), removed_by=user_id)
+            await query.answer("Pengecualian dicabut." if removed else "Sudah tidak ada di daftar.")
+            text, markup = build_milestone_exclusion_view(db)
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+
         # ─── TOP SPENDER (Phase 7) ──────────────────────────
         elif data == "admin_panel_top_spenders" or data.startswith("admin_top_spender_p_"):
             period = 30
@@ -1624,7 +1957,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception:
                     period = 30
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer(f"Top Spender ({period} hari) dimuat.")
 
@@ -1651,7 +1984,6 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             if result.get("error"):
                 await query.answer(f"⚠️ {result['error']}", show_alert=True)
             else:
-                from bot.utils.formatter import format_idr
                 cnt = result.get("distributed_count", 0)
                 tot = result.get("total_amount", 0)
                 ns = result.get("notif_success", 0)
@@ -1661,7 +1993,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
 
         # ─── RANDOM DRAW / UNDI PEMENANG (Phase 7) ───────────
@@ -1700,7 +2032,6 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 if res.get("error"):
                     await query.answer(f"⚠️ {res['error']}", show_alert=True)
                 else:
-                    from bot.utils.formatter import format_idr
                     cnt = res.get("distributed_count", 0)
                     tot = res.get("total_amount", 0)
                     ns = res.get("notif_success", 0)
@@ -3244,11 +3575,14 @@ async def admin_approve_buy_callback(update: Update, context: ContextTypes.DEFAU
             _run_finalize_background(order.order_id, context.bot, allow_admin=True)
         )
 
-        caption_now = query.message.caption or ""
-        await query.edit_message_caption(
-            caption=f"{caption_now}\n\n✅ <b>APPROVED & DIESEKUSI OTOMATIS OLEH ADMIN</b>",
-            parse_mode="HTML"
-        )
+        stamp = "\n\n✅ <b>APPROVED &amp; DIESEKUSI OTOMATIS OLEH ADMIN</b>"
+        try:
+            if query.message.caption is not None:  # bukti foto
+                await query.edit_message_caption(caption=query.message.caption_html + stamp, parse_mode="HTML")
+            else:  # notifikasi teks (mis. payout terputus)
+                await query.edit_message_text(text=(query.message.text_html or "") + stamp, parse_mode="HTML")
+        except Exception as edit_err:
+            logger.debug(f"Tandai approve {order_id} gagal (payout tetap jalan): {edit_err}")
     except Exception as e:
         logger.error(f"Error admin_approve_buy_callback {order_id}: {e}", exc_info=True)
         await query.answer("❌ Gagal memproses approval.", show_alert=True)
@@ -3311,15 +3645,17 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
             await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
             return
 
-        new_bal = crud.credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+        # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
+        is_treasury, net_amt, new_bal = crud.credit_claimed_topup(db, topup)
+        label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
 
         from bot.utils.telegram_utils import safe_send_message
         menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
         await safe_send_message(
             context.bot, topup.telegram_id,
             f"✅ <b>PEMBAYARAN TOPUP TERVERIFIKASI ADMIN!</b>\n\n"
-            f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil di-approve!\n"
-            f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>",
+            f"🎉 Topup sebesar <b>{format_idr(net_amt)}</b> telah berhasil di-approve!\n"
+            f"💳 <b>Total {label} Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>",
             reply_markup=menu_keyboard
         )
 
@@ -3389,7 +3725,8 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Memeriksa ulang deposit on-chain...")
         from services.detector import deposit_detector
         if order.status == "WAITING_CRYPTO_DEPOSIT":
-            await deposit_detector._process_order(db, order, context.application)
+            # trusted: admin sudah memastikan pemilik deposit / kurs (eskalasi detector).
+            await deposit_detector._process_order(db, order, context.application, trusted=True)
         else:
             await deposit_detector._execute_payout(db, order, context.application)
         db.refresh(order)
@@ -3887,6 +4224,85 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
     db = SessionLocal()
 
     try:
+        _expire_stale_reward_wizard(context)
+
+        # 0a. Kirim Reward — daftar penerima + nominal (satu orang per baris)
+        if context.user_data.get("admin_awaiting_reward_list"):
+            from services import reward_service as rs
+            rows, errors = rs.parse_reward_lines(raw_text)
+            items, skipped = rs.resolve_recipients(db, rows)
+            if not items:
+                await update.message.reply_text(
+                    "❌ <b>Belum ada penerima yang valid.</b>\n\n"
+                    f"{_fmt_skipped(skipped, errors)}"
+                    "Perbaiki lalu kirim ulang daftarnya, atau /cancel untuk batal.",
+                    parse_mode="HTML",
+                )
+                return True
+            batch = rs.create_batch(db, user_id, items)
+            _arm_reward_wizard(context, "admin_awaiting_reward_msg")
+            context.user_data["admin_reward_batch_id"] = batch.id
+            context.user_data["admin_reward_skipped"] = _fmt_skipped(skipped, errors)
+            await update.message.reply_text(
+                f"✅ <b>{len(items)} penerima terbaca</b> · total <code>{format_idr(batch.total_amount)}</code>\n\n"
+                f"{_fmt_skipped(skipped, errors)}"
+                "💬 <b>Sekarang ketik pesan untuk para penerima</b> (boleh santai, tidak harus formal).\n"
+                "Placeholder opsional: <code>{nama}</code> <code>{nominal}</code> <code>{saldo}</code>\n"
+                "Info nominal &amp; saldo ditambahkan otomatis di bawah pesan.\n\n"
+                "<i>Tidak mau menulis pesan? Tekan tombol di bawah.</i>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Pakai Pesan Standar", callback_data=f"admin_reward_preview_{batch.id}")],
+                    [InlineKeyboardButton("❌ Batalkan", callback_data=f"admin_reward_cancel_{batch.id}")],
+                ]),
+                parse_mode="HTML",
+            )
+            return True
+
+        # 0b. Kirim Reward — pesan untuk penerima
+        if context.user_data.get("admin_awaiting_reward_msg"):
+            from services import reward_service as rs
+            if len(raw_text) > rs.MAX_CUSTOM_MESSAGE_CHARS:
+                await update.message.reply_text(
+                    f"❌ Pesan terlalu panjang ({len(raw_text)} karakter, maks {rs.MAX_CUSTOM_MESSAGE_CHARS}). Persingkat lalu kirim ulang:")
+                return True
+            batch_id = context.user_data.get("admin_reward_batch_id")
+            context.user_data.pop("admin_awaiting_reward_msg", None)
+            if not batch_id or not rs.set_default_message(db, batch_id, user_id, raw_text):
+                await update.message.reply_text("⚠️ Draft reward tidak ditemukan / sudah diproses. Mulai lagi dari menu Kirim Reward.")
+                return True
+            batch = db.query(RewardBatch).filter(RewardBatch.id == batch_id).first()
+            text, markup = build_reward_preview_view(db, batch, context.user_data.get("admin_reward_skipped", ""))
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+
+        # 0c. Pengecualian Top Milestone — daftar user (satu per baris, catatan opsional)
+        if context.user_data.get("admin_awaiting_milestone_excl"):
+            added, problems = [], []
+            for raw in raw_text.splitlines():
+                parts = raw.strip().split(None, 1)
+                if not parts:
+                    continue
+                target, note = parts[0], (parts[1] if len(parts) > 1 else None)
+                user = crud.get_user_by_identifier(db, target)
+                if user:
+                    t_id = user.telegram_id
+                elif re.fullmatch(r"[0-9]{1,15}", target.lstrip("@")):
+                    t_id = int(target.lstrip("@"))
+                else:
+                    problems.append(f"• <code>{_esc(target)}</code>: tidak ditemukan (belum pernah /start). Pakai ID numerik.")
+                    continue
+                created = crud.add_milestone_exclusion(db, t_id, note=note, created_by=user_id)
+                added.append(f"• <code>{t_id}</code>{' (sudah ada, catatan diperbarui)' if not created else ''}")
+            context.user_data.pop("admin_awaiting_milestone_excl", None)
+            view, markup = build_milestone_exclusion_view(db)
+            report = ""
+            if added:
+                report += "✅ <b>Dikecualikan:</b>\n" + "\n".join(added) + "\n\n"
+            if problems:
+                report += "⚠️ <b>Tidak diproses:</b>\n" + "\n".join(problems) + "\n\n"
+            await update.message.reply_text(report + view, reply_markup=markup, parse_mode="HTML")
+            return True
+
         # 1. Admin Send Balance — Input Target User (@username atau ID)
         if context.user_data.get("admin_awaiting_send_bal_user"):
             target_user = crud.get_user_by_identifier(db, raw_text)

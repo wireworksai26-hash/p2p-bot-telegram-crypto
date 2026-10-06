@@ -28,6 +28,7 @@ from services.campaign_service import (
     simulate_campaign,
     execute_campaign,
     format_custom_notification,
+    TreasuryInsufficient,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,9 @@ def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("⏳ Pengaturan Loyalty Reward", callback_data="admin_panel_loyalty"),
             InlineKeyboardButton("⚡ Flash Giveaway Acak", callback_data="camp_tpl_tpl_flash_random"),
+        ],
+        [
+            InlineKeyboardButton("🎁 Kirim Reward ke User Pilihan", callback_data="admin_panel_reward"),
         ],
         [
             InlineKeyboardButton("🏦 Dompet & Kas Bot", callback_data="camp_treasury_view"),
@@ -188,7 +192,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
         # Top Spender Leaderboard
         if data == "admin_panel_top_spenders" or data.startswith("admin_top_spender_p_"):
-            from bot.handlers.admin import build_admin_top_spenders_view, build_admin_top_spenders_keyboard
+            from bot.handlers.admin import build_admin_top_spenders_view, build_admin_top_spenders_keyboard, top_spender_funding
             period = 30
             if data.startswith("admin_top_spender_p_"):
                 try:
@@ -196,7 +200,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 except Exception:
                     period = 30
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period)
+            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             return
 
@@ -465,13 +469,30 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             except Exception:
                 bot_username = ""
 
-            result = execute_campaign(
-                db=db,
-                campaign_id=camp.id,
-                admin_id=user_id,
-                bot=context.bot,
-                bot_username=bot_username,
-            )
+            try:
+                result = execute_campaign(
+                    db=db,
+                    campaign_id=camp.id,
+                    admin_id=user_id,
+                    bot=context.bot,
+                    bot_username=bot_username,
+                )
+            except TreasuryInsufficient as short:
+                # Draft tetap utuh; admin isi Kas Bot lalu kembali ke preview yang sama.
+                await query.edit_message_text(
+                    f"⚠️ <b>KAS BOT KURANG</b>\n\n"
+                    f"Event: <b>{_esc(camp.title)}</b>\n"
+                    f"💰 Dana dibutuhkan: <code>{format_idr(short.needed)}</code>\n"
+                    f"🏦 Saldo Kas Bot: <code>{format_idr(short.balance)}</code>\n"
+                    f"❗ Kurang: <b>{format_idr(short.shortfall)}</b>\n\n"
+                    f"Hadiah milestone dibayar dari Kas Bot. Isi dulu via QRIS, lalu kembali ke preview.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📲 Isi Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu")],
+                        [InlineKeyboardButton("🔙 Kembali ke Preview", callback_data=f"camp_back_preview_{camp.id}")],
+                    ]),
+                    parse_mode="HTML",
+                )
+                return
 
             text_done = (
                 f"🎉 <b>CAMPAIGN BERHASIL DISELESAIKAN!</b>\n\n"
@@ -660,6 +681,23 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
             metric_str = f" (Vol: {format_idr(w['metric_value'])})" if w.get("metric_value") else ""
         winners_preview.append(f"  • {rank_str}<b>{_esc(w['username'])}</b> — <code>+{format_idr(w['amount'])}</code>{metric_str}")
 
+    funding_str = ""
+    if (camp.mode or "").upper() == "MILESTONE":
+        # Hadiah milestone selalu dari Kas Bot (keputusan client).
+        _db = SessionLocal()
+        try:
+            balance = crud.get_bot_treasury_balance(_db)
+        finally:
+            _db.close()
+        shortfall = max(0, int(sim["total_distributed"]) - balance)
+        funding_str = f"🏦 <b>Kas Bot:</b> <code>{format_idr(balance)}</code>\n"
+        if shortfall:
+            funding_str += (f"⚠️ <b>Kas Bot kurang {format_idr(shortfall)}</b> — isi dulu via QRIS "
+                            f"(Dompet &amp; Kas Bot) sebelum eksekusi.\n")
+        funding_str += "\n"
+    else:
+        funding_str = "\n"
+
     more_str = f"\n  <i>...dan {len(sim['winners']) - 5} pemenang lainnya.</i>" if len(sim["winners"]) > 5 else ""
     winners_list_str = "\n".join(winners_preview) if winners_preview else "  <i>Belum ada user yang memenuhi kriteria</i>"
 
@@ -670,7 +708,8 @@ def _build_preview_text(camp: Campaign, sim: dict) -> str:
         f"👥 <b>Total Pemenang:</b> <code>{sim['winner_count']} user</code>\n"
         f"💵 <b>Hadiah per User:</b> <code>{format_idr(sim['reward_per_winner'])}</code>\n"
         f"💰 <b>Total Anggaran Keluar:</b> <code>{format_idr(sim['total_distributed'])}</code>\n"
-        f"🛡️ <b>Maksimal Anggaran (Cap):</b> <code>{format_idr(camp.total_pool)}</code>\n\n"
+        f"🛡️ <b>Maksimal Anggaran (Cap):</b> <code>{format_idr(camp.total_pool)}</code>\n"
+        f"{funding_str}"
         f"📋 <b>Daftar Pemenang Terpilih:</b>\n"
         f"{winners_list_str}{more_str}\n\n"
         f"✉️ <b>Pratinjau Notifikasi ke Pemenang:</b>\n"

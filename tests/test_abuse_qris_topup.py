@@ -147,8 +147,10 @@ class TestCheckTopupDoubleCredit(unittest.IsolatedAsyncioTestCase):
         query.data = "check_topup_TOPUP-ABUSE-1"
         query.from_user = SimpleNamespace(id=PEMILIK)
         update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
-        gopay = SimpleNamespace(check_payment=AsyncMock(
-            return_value={"paid": True, "transaction": {"transaction_id": "TX-1"}}))
+        from services.gopay_service import GopayGatewayService
+        gopay = GopayGatewayService()
+        gopay.check_payment = AsyncMock(
+            return_value={"paid": True, "transaction": {"transaction_id": "TX-1"}})
         with patch("bot.handlers.balance.SessionLocal", side_effect=lambda: SessionLocal()), \
              patch("bot.handlers.balance.gopay_service", gopay):
             await check_topup_payment_manual(update, SimpleNamespace())

@@ -12,7 +12,7 @@ Menghitung biaya transaksi IDR sesuai aturan tier resmi dari client
    USD: 2% (1.015.001-3,6jt), 1,5% (>3,6jt)
    Fee persen dibulatkan ke bawah (int()).
 5. Jual altcoin (bukan USD) kena tambahan flat Rp 500 untuk nominal < Rp 1.010.000.
-6. Pasangan gas mahal (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON):
+6. Pasangan gas mahal (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH):
    - surcharge kirim Rp 2.500 (hanya saat bot mengirim koin: Beli/Convert target),
    - minimum transaksi Rp 7.500 untuk semua jenis transaksi.
 
@@ -115,7 +115,6 @@ GAS_SURCHARGE_PAIRS = {
     ("TRX", "TRON"),
     ("USDT", "ETH"),
     ("USDC", "ETH"),
-    ("USDT", "TRON"),
 }
 GAS_PAIR_MIN_IDR = 7500
 

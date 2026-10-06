@@ -91,7 +91,6 @@ class TestMatchTransactionCrossAttribution(unittest.TestCase):
                "transaction_time": "2026-09-26T10:00:30Z"}
         self.assertTrue(_match_transaction(txn, 50077, WAKTU_ORDER, set()))
 
-    @unittest.expectedFailure
     def test_transaksi_sebelum_order_tidak_boleh_mencocok(self):
         """Crossvalidation ketat: tx 3 menit SEBELUM order dibuat tidak boleh dianggap bayar.
 
@@ -130,17 +129,14 @@ class TestKodeUnikDaurUlang(unittest.TestCase):
         kode = crud.generate_unique_payment_code(self.db, min_code=1, max_code=1)
         self.assertNotEqual(kode, 1, "kode order pending tidak boleh dipakai order baru")
 
-    @unittest.expectedFailure
-    def test_kode_order_expired_tidak_didaur_ulang(self):
-        """Kode order expired didaur ulang padahal transaksi pembayarannya masih
-        di jendela lookback 24 jam → berpotensi 1 pembayaran memenuhi 2 order."""
-        self.db.add(_order(order_id="ORD-EXPIRED", status="expired", code=1))
-        self.db.commit()
-        kode = crud.generate_unique_payment_code(self.db, min_code=1, max_code=1)
-        self.assertNotEqual(
-            kode, 1,
-            "kode milik order expired tidak boleh didaur ulang selama pembayarannya masih bisa di-match",
-        )
+    def test_kode_daur_ulang_tidak_bisa_dilunasi_pembayaran_lama(self):
+        """Kode order expired boleh didaur ulang, TAPI pembayaran yang sudah
+        melunasi order lama tidak bisa melunasi order baru bernominal sama:
+        transaksi diklaim permanen di DB (qris_payment_claims)."""
+        self.assertTrue(crud.claim_qris_payment(self.db, "TX-LAMA", "ORD-LAMA", "buy", 50077))
+        self.assertFalse(crud.claim_qris_payment(self.db, "TX-LAMA", "ORD-BARU", "buy", 50077))
+        # Re-check order yang sama tetap idempoten.
+        self.assertTrue(crud.claim_qris_payment(self.db, "TX-LAMA", "ORD-LAMA", "buy", 50077))
 
 
 class TestAtomicClaims(unittest.TestCase):

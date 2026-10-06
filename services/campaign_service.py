@@ -117,12 +117,17 @@ def get_top_users_by_milestone(
     Hanya menghitung order yang statusnya COMPLETED dan user non-banned.
     """
     order_filter = [func.lower(Order.status) == "completed"]
+    # User yang dikecualikan dari Top Milestone dibuang sebelum limit (tetap bebas bertransaksi).
+    from database.crud import get_milestone_excluded_ids, order_volume_idr
+    excluded = get_milestone_excluded_ids(db)
+    if excluded:
+        order_filter.append(Order.telegram_id.notin_(excluded))
     if days and days > 0:
         cutoff = datetime.utcnow() - timedelta(days=days)
         order_filter.append(Order.created_at >= cutoff)
 
     metric_col = (
-        func.sum(Order.total_idr).label("metric_val")
+        func.sum(order_volume_idr()).label("metric_val")
         if metric.upper() == "VOLUME_IDR"
         else func.count(Order.id).label("metric_val")
     )
@@ -138,7 +143,7 @@ def get_top_users_by_milestone(
         .filter(or_(User.is_banned == False, User.is_banned.is_(None)), *order_filter)  # noqa: E712
         .group_by(Order.telegram_id, User.username, User.balance_idr)
         .having(metric_col >= min_value)
-        .order_by(metric_col.desc())
+        .order_by(metric_col.desc(), Order.telegram_id.asc())  # tie-break deterministik (preview == eksekusi)
         .limit(limit)
     )
 
@@ -338,6 +343,23 @@ def execute_campaign(
     if sim["total_distributed"] > campaign.total_pool:
         raise ValueError("Kalkulasi distribusi melebihi batas budget yang ditentukan!")
 
+    # Hadiah milestone SELALU dari Kas Bot (keputusan client). Kurang -> admin wajib mengisi dulu.
+    from_treasury = (campaign.mode or "").upper() == "MILESTONE"
+    needed = int(sim["total_distributed"])
+    if from_treasury:
+        balance = crud.get_bot_treasury_balance(db)
+        if balance < needed:
+            raise TreasuryInsufficient(needed, balance)
+        # RUNNING di-commit SEBELUM kas dipotong: crash di antaranya tidak membuat re-run
+        # memotong Kas Bot dua kali (paling buruk campaign macet RUNNING tanpa uang keluar).
+        campaign.status = "RUNNING"
+        db.commit()
+        if crud.try_deduct_bot_treasury(db, needed, admin_id=admin_id,
+                                        note=f"Campaign milestone '{campaign.title}' (ID {campaign.id})") is None:
+            campaign.status = "DRAFT"   # kas berkurang di antara cek & potong (proses lain)
+            db.commit()
+            raise TreasuryInsufficient(needed, crud.get_bot_treasury_balance(db))
+
     successful_distributions = []
     total_given = 0
 
@@ -416,7 +438,15 @@ def execute_campaign(
             db.commit()
         except Exception:
             pass
+        if from_treasury:
+            crud.topup_bot_treasury(db, needed, admin_id=admin_id,
+                                    note=f"Refund campaign milestone ID {campaign_id} (eksekusi gagal)")
         raise e
+
+    if from_treasury and needed - total_given > 0:
+        # Penerima yang dilewati (diblokir / sudah menerima) -> kembalikan ke Kas Bot.
+        crud.topup_bot_treasury(db, needed - total_given, admin_id=admin_id,
+                                note=f"Sisa campaign milestone ID {campaign.id} yang tidak terbayar")
 
     # Pengiriman notifikasi ke penerima (background asynchronous)
     notif_success = 0
@@ -496,6 +526,27 @@ TOP_SPENDER_REWARDS: dict[int, int] = {
 }
 
 
+TOP_SPENDER_COOLDOWN_MINUTES = 5
+
+
+class TreasuryInsufficient(ValueError):
+    """Kas Bot tidak cukup untuk hadiah milestone — admin harus mengisinya dulu (QRIS)."""
+
+    def __init__(self, needed: int, balance: int):
+        self.needed, self.balance = int(needed), int(balance)
+        self.shortfall = self.needed - self.balance
+        super().__init__(
+            f"Kas Bot kurang {format_idr(self.shortfall)} "
+            f"(butuh {format_idr(self.needed)}, saldo {format_idr(self.balance)}). Isi Kas Bot dulu."
+        )
+
+
+def milestone_funding_status(db, needed: int) -> tuple[int, int]:
+    """(saldo Kas Bot, kekurangan). Kekurangan 0 bila cukup."""
+    balance = crud.get_bot_treasury_balance(db)
+    return balance, max(0, int(needed) - balance)
+
+
 async def execute_top_spender_campaign(
     db,
     bot,
@@ -529,81 +580,120 @@ async def execute_top_spender_campaign(
             "error": "Tidak ada user yang memenuhi kriteria top spender.",
         }
 
-    # Buat campaign record
-    campaign_code = f"TOP_SPENDER_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-    total_pool = sum(TOP_SPENDER_REWARDS.get(s["rank"], 0) for s in top_spenders)
-    campaign = Campaign(
-        campaign_code=campaign_code,
-        title=f"🏆 Top Spender Milestone ({period_days}D)",
-        template_type="tpl_top_spenders",
-        mode="MILESTONE",
-        target_segment="BUYERS",
-        total_pool=total_pool,
-        max_winners=len(top_spenders),
-        milestone_metric="VOLUME_IDR",
-        status="RUNNING",
-        created_by=admin_id,
-    )
-    db.add(campaign)
-    db.flush()  # Dapat ID campaign tanpa commit
+    # Anti dobel-tekan: tombol eksekusi tidak punya langkah konfirmasi, jadi tap ganda
+    # (atau salinan tombol di chat admin lain) bisa membayar Top 10 dua kali.
+    recent = db.query(Campaign).filter(
+        Campaign.template_type == "tpl_top_spenders",
+        Campaign.created_at >= datetime.utcnow() - timedelta(minutes=TOP_SPENDER_COOLDOWN_MINUTES),
+    ).first()
+    if recent:
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [],
+            "error": (f"Hadiah Top Spender sudah dibagikan barusan ({recent.campaign_code}). "
+                      f"Tunggu {TOP_SPENDER_COOLDOWN_MINUTES} menit sebelum eksekusi berikutnya."),
+        }
 
-    total_given = 0
-    winners_result = []
-    notif_success = 0
-    notif_fail = 0
+    # Hadiah milestone SELALU dari Kas Bot (keputusan client). Kurang -> admin wajib mengisi dulu.
+    needed = sum(TOP_SPENDER_REWARDS.get(s["rank"], 0) for s in top_spenders)
+    balance = crud.get_bot_treasury_balance(db)
+    if balance < needed:
+        err = TreasuryInsufficient(needed, balance)
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [], "error": str(err), "treasury_shortfall": err.shortfall,
+        }
+    crud.try_deduct_bot_treasury(db, needed, admin_id=admin_id,
+                                 note=f"Hadiah Top Spender Milestone ({period_days}D)")
 
-    for spender in top_spenders:
-        rank = spender["rank"]
-        reward = TOP_SPENDER_REWARDS.get(rank, 0)
-        if reward <= 0:
-            continue
-
-        t_id = spender["telegram_id"]
-        user = db.query(User).filter(User.telegram_id == t_id).first()
-        if not user or user.is_banned:
-            continue
-
-        old_balance = user.balance_idr or Decimal("0")
-        user.balance_idr = old_balance + Decimal(reward)
-        new_balance = user.balance_idr
-
-        dist = CampaignDistribution(
-            campaign_id=campaign.id,
-            telegram_id=t_id,
-            amount_idr=reward,
-            rank=rank,
-            metric_value=spender["total_spent_idr"],
-            status="SUCCESS",
-            notified=False,
+    try:
+        # Buat campaign record
+        campaign_code = f"TOP_SPENDER_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        total_pool = sum(TOP_SPENDER_REWARDS.get(s["rank"], 0) for s in top_spenders)
+        campaign = Campaign(
+            campaign_code=campaign_code,
+            title=f"🏆 Top Spender Milestone ({period_days}D)",
+            template_type="tpl_top_spenders",
+            mode="MILESTONE",
+            target_segment="BUYERS",
+            total_pool=total_pool,
+            max_winners=len(top_spenders),
+            milestone_metric="VOLUME_IDR",
+            status="RUNNING",
+            created_by=admin_id,
         )
-        db.add(dist)
+        db.add(campaign)
+        db.flush()  # Dapat ID campaign tanpa commit
 
-        audit = AuditLog(
-            telegram_id=t_id,
-            action="TOP_SPENDER_REWARD",
-            details=(
-                f"Top Spender Rank #{rank}: +{format_idr(reward)} "
-                f"(volume: {format_idr(spender['total_spent_idr'])}) "
-                f"oleh admin {admin_id}"
-            ),
-        )
-        db.add(audit)
-        total_given += reward
+        total_given = 0
+        winners_result = []
+        notif_success = 0
+        notif_fail = 0
 
-        winners_result.append({
-            "rank": rank,
-            "telegram_id": t_id,
-            "username": spender["username"],
-            "total_spent_idr": spender["total_spent_idr"],
-            "reward": reward,
-            "new_balance": new_balance,
-        })
+        for spender in top_spenders:
+            rank = spender["rank"]
+            reward = TOP_SPENDER_REWARDS.get(rank, 0)
+            if reward <= 0:
+                continue
 
-    campaign.status = "COMPLETED"
-    campaign.distributed_amount = total_given
-    campaign.distributed_count = len(winners_result)
-    campaign.executed_at = datetime.utcnow()
-    db.commit()
+            t_id = spender["telegram_id"]
+            user = db.query(User).filter(User.telegram_id == t_id).first()
+            if not user or user.is_banned:
+                continue
+
+            old_balance = user.balance_idr or Decimal("0")
+            user.balance_idr = old_balance + Decimal(reward)
+            new_balance = user.balance_idr
+
+            dist = CampaignDistribution(
+                campaign_id=campaign.id,
+                telegram_id=t_id,
+                amount_idr=reward,
+                rank=rank,
+                metric_value=spender["total_spent_idr"],
+                status="SUCCESS",
+                notified=False,
+            )
+            db.add(dist)
+
+            audit = AuditLog(
+                telegram_id=t_id,
+                action="TOP_SPENDER_REWARD",
+                details=(
+                    f"Top Spender Rank #{rank}: +{format_idr(reward)} "
+                    f"(volume: {format_idr(spender['total_spent_idr'])}) "
+                    f"oleh admin {admin_id}"
+                ),
+            )
+            db.add(audit)
+            total_given += reward
+
+            winners_result.append({
+                "rank": rank,
+                "telegram_id": t_id,
+                "username": spender["username"],
+                "total_spent_idr": spender["total_spent_idr"],
+                "reward": reward,
+                "new_balance": new_balance,
+            })
+
+        campaign.status = "COMPLETED"
+        campaign.distributed_amount = total_given
+        campaign.distributed_count = len(winners_result)
+        campaign.executed_at = datetime.utcnow()
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        crud.topup_bot_treasury(db, needed, admin_id=admin_id,
+                                note="Refund hadiah Top Spender (eksekusi gagal)")
+        raise
+
+    # Di LUAR try: hadiah sudah ter-commit; gagal refund sisa tidak boleh memicu refund penuh.
+    leftover = needed - total_given
+    if leftover > 0:   # penerima yang dilewati (diblokir / hilang) -> kembalikan ke Kas Bot
+        crud.topup_bot_treasury(db, leftover, admin_id=admin_id,
+                                note="Sisa hadiah Top Spender yang tidak terbayar")
 
     # Kirim notifikasi ke pemenang
     tpl = CAMPAIGN_TEMPLATES["tpl_top_spenders"]["default_notif"]

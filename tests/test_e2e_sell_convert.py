@@ -328,6 +328,38 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         order_with_proof = get_order_by_id(self.db, order_id)
         self.assertEqual(order_with_proof.deposit_proof_file_id, "AgACAgUAAxkBAAI_SELL_PROOF")
 
+    async def test_sell_verified_tx_hash_is_accepted_not_rejected(self):
+        """Hash yang langsung terverifikasi (reason "OK") dulu dibalas 'Belum Bisa Diverifikasi'."""
+        order_id = "SELL-20261006-OK"
+        create_order(self.db, {
+            "order_id": order_id, "telegram_id": self.user_id, "order_type": "sell",
+            "crypto_symbol": "USDT", "network": "BSC", "crypto_amount": Decimal("10.0"),
+            "price_per_unit": 18000, "nominal_idr": 180000, "fee_idr": 5000, "total_idr": 175000,
+            "buyer_wallet": "BCA | 12345 | Test",
+            "deposit_wallet": "0x1111111111111111111111111111111111111111",
+            "status": "WAITING_CRYPTO_DEPOSIT",
+        })
+        message = AsyncMock(text="0x" + "b" * 64)
+        update_tx = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=self.user_id))
+        context_tx = SimpleNamespace(
+            user_data={"sell_order_id": order_id, "sell_symbol": "USDT", "sell_network": "BSC",
+                       "sell_crypto_amount": 10.0, "sell_net_idr": 175000, "sell_bank_name": "BCA",
+                       "sell_bank_acc": "12345", "sell_bank_holder": "Test"},
+            bot=AsyncMock(), application=None,
+        )
+        verified = {"verified": True, "amount": 10.0, "reason": "OK", "from_address": "0xabc"}
+        with patch("services.tx_verifier.verify_deposit", new=AsyncMock(return_value=verified)), \
+             patch("services.detector.deposit_detector.verifikasi_cepat", new=AsyncMock()) as fast, \
+             patch("bot.handlers.sell.notify_admins", new=AsyncMock()) as notify:
+            state = await sell_handle_tx_hash(update_tx, context_tx)
+
+        self.assertEqual(state, SELL_WAITING_TX)
+        sent = message.reply_text.await_args.kwargs.get("text") or message.reply_text.await_args.args[0]
+        self.assertIn("TX Hash Diterima", sent)
+        self.assertNotIn("Belum Bisa Diverifikasi", sent)
+        fast.assert_called_once()
+        notify.assert_awaited_once()
+
     async def test_sell_cancellation_updates_db(self):
         """Uji pembatalan order sell mengupdate status di DB menjadi 'cancelled'."""
         order_id = "SELL-CANCEL-TEST"

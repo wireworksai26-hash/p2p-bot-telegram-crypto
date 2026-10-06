@@ -347,6 +347,8 @@ class TestTopSpendersCampaign(unittest.TestCase):
 
     def test_execute_top_spender_campaign(self):
         mock_bot = AsyncMock()
+        # Hadiah milestone selalu dari Kas Bot (keputusan client) — isi dulu.
+        crud.topup_bot_treasury(self.db, 1_000_000, admin_id=999)
 
         async def _run():
             return await execute_top_spender_campaign(

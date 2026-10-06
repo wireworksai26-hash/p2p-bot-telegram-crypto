@@ -89,7 +89,7 @@ class Settings:
     ADMIN_GROUP_ID = int(_admin_group) if _admin_group and _admin_group.lstrip("-").isdigit() else None
 
     # App logic configurations
-    ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 30))
+    ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 15))
     # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
     SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
     # Kunci explorer (Etherscan V2, multichain) untuk fallback verifikasi bila RPC publik kena limit.

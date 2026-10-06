@@ -12,7 +12,7 @@ from database.connection import SessionLocal
 from database.crud import get_all_wallet_balances, wallet_balance_is_fresh
 from services.price_service import price_service
 from bot.keyboards.main_menu import get_owner_button
-from bot.utils.formatter import format_datetime
+from bot.utils.formatter import display_symbol, format_datetime
 from bot.utils.emojis import get_coin_emoji, get_network_emoji
 
 logger = logging.getLogger(__name__)
@@ -64,68 +64,132 @@ async def fetch_usd_prices(symbols: list[str]) -> dict[str, float]:
         except Exception:
             pass
         return symbol, 0.0
-    return dict(await asyncio.gather(*(fetch(symbol) for symbol in symbols)))
+    async def fetch_idr_rate():
+        try:
+            info = await price_service.get_price("USDT")
+            return "_IDR", float((info or {}).get("market_price_idr", 0))
+        except Exception:
+            return "_IDR", 0.0
+    return dict(await asyncio.gather(fetch_idr_rate(), *(fetch(symbol) for symbol in symbols)))
+
+
+CHAIN_SHORT_LABELS = {
+    "BSC": "BEP20", "ETH": "ERC20", "POLYGON": "Poly", "ARB": "Arb", "BASE": "Base",
+    "SOLANA": "Solana", "TRON": "TRC20", "TON": "TON", "OPTIMISM": "OP",
+    "ROBINHOOD": "Robinhood", "SUI": "Sui", "APTOS": "Aptos", "AVAX": "Avax",
+    "KAIA": "Kaia", "BERA": "Bera", "HYPEREVM": "HyperEVM", "MORPH": "Morph",
+}
+# Kartu stok: (judul, simbol). Simbol di luar daftar masuk "Token Lainnya".
+STOCK_CARDS = [
+    ("USDT + CHAIN", "USDT"),
+    ("USDC + CHAIN", "USDC"),
+    ("ETH + CHAIN", "ETH"),
+]
+OTHER_CARD_TITLE = "Token Lainnya"
+STOCK_FOOTER = "\n<i>⚠️ Data lama / gagal dibaca tidak dihitung sebagai stok terverifikasi.</i>"
+
+
+def format_stock_qty(balance: float) -> str:
+    """Jumlah ringkas: 13.28 · 0.0105 · 1500 · 0 (tanpa nol di belakang).
+
+    Tanpa pemisah ribuan: "1,500" mudah terbaca 1,5 oleh user Indonesia.
+    """
+    if balance <= 0:
+        return "0"
+    if balance >= 1:
+        return f"{balance:.2f}".rstrip("0").rstrip(".")
+    if balance < 0.0001:
+        return f"{balance:.8f}".rstrip("0").rstrip(".")
+    return f"{balance:.4g}"
+
+
+def format_rp_compact(value: float) -> str:
+    """Rupiah ringkas: Rp467 · Rp269rb · Rp1,2jt · Rp1,8M (miliar)."""
+    value = round(max(float(value), 0.0))
+    if value < 1000:
+        return f"Rp{value}"
+    if round(value / 1000) < 1000:
+        return f"Rp{round(value / 1000)}rb"
+    for divisor, unit in ((1_000_000, "jt"), (1_000_000_000, "M")):
+        scaled = round(value / divisor, 1)
+        if scaled < 1000 or unit == "M":
+            text = f"{scaled:.1f}".replace(".", ",").removesuffix(",0")
+            return f"Rp{text}{unit}"
+
+
+def _stock_row(label: str, emoji: str, wallet, prices: dict, now) -> tuple[float, str]:
+    """Satu baris kartu: (nilai urut, html). Kolom rapi dalam <code>."""
+    symbol, network = wallet.symbol.upper(), wallet.network.upper()
+    balance = float(wallet.balance or 0)
+    fresh = wallet_balance_is_fresh(wallet, now)
+    if fresh:
+        usd = balance * prices.get(symbol, 0)
+        idr_rate = prices.get("_IDR", 0)
+        rupiah = format_rp_compact(usd * idr_rate) if idr_rate > 0 and (usd > 0 or balance == 0) else ""
+        cells = f"{label:<9}{format_stock_qty(balance):>9}  {rupiah}".rstrip()
+        return usd, f"{emoji} <code>{escape(cells)}</code>"
+    if network in MANUAL_PAYOUT_NETWORKS:
+        # Jaringan kirim manual (admin): tidak ada saldo otomatis, jangan tampilkan error.
+        cells = f"{label:<9}{'Manual':>9}"
+        return -1.0, f"{emoji} <code>{escape(cells)}</code>"
+    qty = format_stock_qty(balance) if wallet.last_success_at else "-"
+    cells = f"{label:<9}{qty:>9}"
+    return -1.0, f"{emoji} <code>{escape(cells)}</code> ⚠️"
+
+
+def _stock_card(title_html: str, rows: list[tuple[float, str]]) -> str:
+    rows = sorted(rows, key=lambda row: row[0], reverse=True)
+    return "<blockquote expandable>" + "\n".join([title_html] + [html for _, html in rows]) + "</blockquote>\n"
 
 
 def build_stock_pages(balances, prices: dict, now=None) -> list[str]:
-    """Build bounded HTML pages; keep each coin and its networks together."""
+    """Kartu ringkas (blockquote expandable) per grup; dipecah bila melebihi batas pesan.
+
+    `prices`: harga USD per simbol, plus kunci opsional "_IDR" (kurs USD->IDR)
+    untuk kolom nilai Rupiah.
+    """
     now = now or datetime.utcnow()
     grouped = {}
     for wallet in balances:
         grouped.setdefault(wallet.symbol.upper(), []).append(wallet)
-    symbols = [sym for sym in COIN_ORDER if sym in grouped]
-    symbols += sorted(set(grouped) - set(symbols))
-    header = "📦 <b>STOK CRYPTO</b>\n<i>Saldo hot wallet; diperbarui setiap 5 menit.</i>\n\n"
+    header = "📦 <b>Stock Tersedia</b>\n"
     fresh_times = [w.last_success_at for w in balances if wallet_balance_is_fresh(w, now)]
     if fresh_times:
-        header += f"<i>Saldo terverifikasi tertua: {format_datetime(min(fresh_times))}.</i>\n\n"
-    footer = "\n<i>Data lama/gagal dibaca tidak dihitung sebagai stok terverifikasi.</i>"
+        header += f"<i>Saldo terverifikasi tertua: {format_datetime(min(fresh_times))}</i>\n"
+    header += "\n"
+
     blocks = []
-    for symbol in symbols:
-        wallets = grouped[symbol]
-        lines = [f"{get_coin_emoji(symbol)} <b>{escape(COIN_FULL_NAMES.get(symbol, symbol))}</b>"]
-        total, fresh_count = 0.0, 0
-        for wallet in wallets:
-            network = wallet.network.upper()
-            label = escape(NETWORK_LABELS.get(network, network))
-            prefix = f"  {get_network_emoji(network)} {label}: "
-            balance = float(wallet.balance or 0)
-            fresh = wallet_balance_is_fresh(wallet, now)
-            if fresh:
-                total += balance
-                fresh_count += 1
-                line = prefix + f"<code>{format_crypto_qty(balance, symbol)}</code>"
-                price = prices.get(symbol, 0)
-                if balance == 0:
-                    line += " <i>(Kosong)</i>"
-                elif price > 0:
-                    line += f" (~${balance * price:,.2f})"
-                if network in MANUAL_PAYOUT_NETWORKS:
-                    line += " <i>· pengiriman admin</i>"
-            elif wallet.last_success_at:
-                reason = "sinkronisasi gagal" if wallet.sync_status == "ERROR" else "belum diperbarui"
-                line = prefix + f"<code>{format_crypto_qty(balance, symbol)}</code> ⚠️\n"
-                line += f"    <i>Data lama: {format_datetime(wallet.last_success_at)}; {reason}.</i>"
-            else:
-                status = "Gagal membaca saldo" if wallet.sync_status == "ERROR" else "Menunggu sinkronisasi"
-                line = prefix + f"<i>{status}</i> ⚠️"
-            lines.append(line)
-        if len(wallets) > 1:
-            if fresh_count:
-                lines.append(f"  <b>Total terverifikasi:</b> <code>{format_crypto_qty(total, symbol)}</code>")
-            else:
-                lines.append("  <i>Total belum dapat dikonfirmasi.</i>")
-        blocks.append("\n".join(lines) + "\n\n")
+    card_symbols = {symbol for _, symbol in STOCK_CARDS}
+    for title, symbol in STOCK_CARDS:
+        wallets = grouped.get(symbol)
+        if not wallets:
+            continue
+        rows = [
+            _stock_row(CHAIN_SHORT_LABELS.get(w.network.upper(), w.network.title()),
+                       get_network_emoji(w.network.upper()), w, prices, now)
+            for w in wallets
+        ]
+        blocks.append(_stock_card(f"{get_coin_emoji(symbol)} <b>{title}</b>", rows))
+
+    other_symbols = [sym for sym in COIN_ORDER if sym in grouped and sym not in card_symbols]
+    other_symbols += sorted(set(grouped) - set(other_symbols) - card_symbols)
+    rows = []
+    for symbol in other_symbols:
+        for w in grouped[symbol]:
+            rows.append(_stock_row(display_symbol(symbol), get_coin_emoji(symbol), w, prices, now))
+    if rows:
+        blocks.append(_stock_card(f"<b>{OTHER_CARD_TITLE}</b>", rows))
     if not blocks:
         blocks = ["⏳ Data stok belum tersedia.\n"]
+
     pages, current = [], header
     for block in blocks:
         # Conservative serialized HTML limit also stays below Telegram's parsed limit.
-        if len(current) + len(block) + len(footer) > 3800 and current != header:
-            pages.append(current + footer)
+        if len(current) + len(block) + len(STOCK_FOOTER) > 3800 and current != header:
+            pages.append(current + STOCK_FOOTER)
             current = header
         current += block
-    pages.append(current + footer)
+    pages.append(current + STOCK_FOOTER)
     return pages
 
 
@@ -163,7 +227,7 @@ async def show_stocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             keyboard.append(navigation)
         keyboard += [[InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back")], [get_owner_button()]]
         await query.edit_message_text(
-            text=pages[page] + f"\nHalaman {page + 1}/{len(pages)}",
+            text=pages[page] + (f"\nHalaman {page + 1}/{len(pages)}" if len(pages) > 1 else ""),
             reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML",
         )
     except Exception:

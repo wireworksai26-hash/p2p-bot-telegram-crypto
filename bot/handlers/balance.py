@@ -39,6 +39,7 @@ from bot.utils.formatter import format_idr
 from bot.utils.flow_guard import block_if_busy
 from bot.utils.validator import validate_amount_idr
 from config.assets import QRIS_STATIC_IMAGE
+from config.settings import settings
 from bot.utils.emojis import (
     E_MONEY,
     E_USER,
@@ -71,8 +72,8 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.close()
 
     text = (
-        f"{E_MONEY()} <b>CEK SALDO & PROFIL USER</b>\n\n"
-        f"{E_USER()} <b>Nama</b>    : {user.full_name or 'N/A'}\n"
+        f"{E_MONEY()} <b>CEK SALDO &amp; PROFIL USER</b>\n\n"
+        f"{E_USER()} <b>Nama</b>    : {_esc(user.full_name or 'N/A')}\n"
         f"{E_TAG()} <b>Username</b>: @{user.username or 'N/A'}\n"
         f"{E_ID()} <b>ID User</b> : <code>{user.id}</code>\n"
         f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n\n"
@@ -102,8 +103,9 @@ async def start_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     """Menampilkan pilihan nominal preset topup saldo."""
     if await block_if_busy("topup", update, context):
         return None
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query  # None saat dipanggil via /topup
+    if query:
+        await query.answer()
 
     text = (
         f"{E_MONEY()} <b>TOPUP SALDO BOT (QRIS)</b>\n\n"
@@ -128,7 +130,10 @@ async def start_topup_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [get_owner_button()]
     ]
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    if query:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return SELECT_TOPUP_NOMINAL
 
 
@@ -188,7 +193,7 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
         status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice pembayaran...</i>", parse_mode="HTML")
 
     topup_id = f"TOPUP-{int(datetime.utcnow().timestamp())}"
-    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES)
 
     db = SessionLocal()
     try:
@@ -216,7 +221,7 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
         f"🎫 <b>ID Topup</b>: <code>{topup_id}</code>\n"
         f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_amount)}</b>"
         f"{mdr_line}\n"
-        f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
+        f"⏰ <b>Batas Waktu</b>: {settings.ORDER_EXPIRE_MINUTES} Menit\n\n"
         f"📌 <b>Cara Bayar:</b>\n"
         f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
         f"2. Nominal <b>{format_idr(final_amount)}</b> akan muncul otomatis (QRIS Dinamis).\n"
@@ -290,12 +295,15 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
 
         # Check with Gopay Gateway
         try:
-            pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
+            paid = await gopay_service.confirm_payment(
+                db, amount=topup.amount_idr, ref_id=topup.topup_id,
+                kind="topup", created_at=topup.created_at,
+            )
         except Exception as gw_err:
             logger.warning(f"GoPay Gateway error for {topup_id}: {gw_err}")
-            pay_res = {"paid": False, "transaction": None}
+            paid = False
 
-        if pay_res and pay_res.get("paid"):
+        if paid:
             if not claim_topup_success(db, topup.topup_id):
                 await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
                 return
@@ -423,15 +431,20 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
 
         # 3. Cek otomatis via API GoPay di background
         try:
-            pay_res = await gopay_service.check_payment(topup.amount_idr, topup.topup_id)
-            if pay_res and pay_res.get("paid"):
+            if await gopay_service.confirm_payment(
+                db, amount=topup.amount_idr, ref_id=topup.topup_id,
+                kind="topup", created_at=topup.created_at,
+            ):
                 if claim_topup_success(db, topup.topup_id):
-                    new_bal = credit_user_balance(db, topup.telegram_id, topup.amount_idr)
+                    from database.crud import credit_claimed_topup
+                    # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
+                    is_treasury, net_amt, new_bal = credit_claimed_topup(db, topup)
+                    label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
                     menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
                     await update.message.reply_text(
                         f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
-                        f"🎉 Topup saldo sebesar <b>{format_idr(topup.amount_idr)}</b> telah berhasil!\n"
-                        f"💳 <b>Total Saldo Bot Anda Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
+                        f"🎉 Topup sebesar <b>{format_idr(net_amt)}</b> telah berhasil!\n"
+                        f"💳 <b>Total {label} Saat Ini</b>: <b>{format_idr(int(new_bal))}</b>\n\n"
                         f"<i>Anda dapat langsung menggunakan saldo ini untuk membeli koin crypto secara instan.</i>",
                         reply_markup=menu_keyboard,
                         parse_mode="HTML"

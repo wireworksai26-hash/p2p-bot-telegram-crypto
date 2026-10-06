@@ -251,7 +251,15 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     data = query.data if query else None
     logger.info(f"Callback query received: {data}")
-    
+
+    # Tombol baru membatalkan prompt teks admin yang masih menunggu (reward, pengecualian,
+    # kirim saldo, kas bot…): kalau tidak, teks berikutnya "ditelan" wizard lama yang sudah
+    # ditinggalkan (mis. mengecualikan user dari milestone tanpa sengaja). Callback wizard
+    # reward/pengecualian mengatur flag-nya sendiri.
+    if data and not data.startswith(("admin_reward_", "admin_milestone_")):
+        from bot.handlers.admin import _clear_reward_flags
+        _clear_reward_flags(context)
+
     if data == "menu_snk":
         # Tampilkan Syarat & Ketentuan
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
@@ -410,6 +418,8 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         or data.startswith("admin_treasury_")
         or data.startswith("admin_ref_")
         or data.startswith("admin_top_spender_")
+        or data.startswith("admin_reward_")
+        or data.startswith("admin_milestone_")
         or data.startswith("admin_draw_")
         or data.startswith("admin_loyalty_")
         or data.startswith("admin_weekly_")
@@ -455,5 +465,46 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await show_history(update, context)
         
     else:
+        # Tombol dari sesi yang sudah berakhir (dibatalkan, timeout, atau bot
+        # baru restart/deploy — state ConversationHandler hanya di memori).
+        # Tanpa balasan, user mengira bot macet.
         logger.warning(f"Unhandled callback query: {data}")
+        if query and query.message:
+            await query.message.reply_text(
+                SESSION_EXPIRED_TEXT,
+                reply_markup=_back_to_menu_markup(),
+                parse_mode="HTML",
+            )
+
+
+SESSION_EXPIRED_TEXT = (
+    "⌛ <b>Sesi tombol ini sudah berakhir.</b>\n"
+    "Silakan mulai lagi dari menu utama."
+)
+NO_ACTIVE_FLOW_TEXT = "ℹ️ Tidak ada proses yang sedang berjalan."
+
+
+def _back_to_menu_markup():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Menu Utama", callback_data="menu_back",
+                             icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+    ]])
+
+
+async def idle_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cancel di luar ConversationHandler (flow aktif ditangani fallback-nya).
+
+    Juga membatalkan input teks yang menunggu (simpan wallet/rekening, campaign
+    admin): router teks memakai filter ~COMMAND sehingga /cancel tak pernah sampai.
+    """
+    user_data = context.user_data if context.user_data is not None else {}
+    waiting = [k for k in list(user_data)
+               if k.startswith(("awaiting_", "admin_awaiting_")) and user_data.get(k)]
+    for key in waiting + ["target_chain_type", "pending_wallet_address",
+                          "admin_reward_batch_id", "admin_reward_skipped"]:
+        user_data.pop(key, None)
+    text = "❌ Proses dibatalkan." if waiting else NO_ACTIVE_FLOW_TEXT
+    if update.message:
+        await update.message.reply_text(text, reply_markup=_back_to_menu_markup())
 

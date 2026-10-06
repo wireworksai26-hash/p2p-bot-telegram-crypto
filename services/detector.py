@@ -34,6 +34,9 @@ from bot.utils.telegram_utils import safe_send_message, notify_admins
 # Alasan verifikasi yang permanen: hash tidak akan pernah jadi deposit sah.
 # Hash seperti ini dilepas dari order (sekali) agar tidak diverifikasi ulang
 # terus-menerus oleh scan 20 detik.
+# Kelebihan bayar yang masih dianggap pembulatan wajar pada hash kiriman user.
+USER_HASH_OVERPAY_TOLERANCE = Decimal("0.005")
+
 ALASAN_HASH_BATAL = (
     "Transfer ke diri sendiri bukan deposit.",
     "Penerima tidak cocok.",
@@ -144,7 +147,8 @@ class DepositDetector:
         """Order sell/swap yang sudah 'expired' tetap boleh diverifikasi selama depositnya sah."""
         return order.status == "expired" and order.order_type in ("sell", "swap")
 
-    async def _process_order(self, db, order, bot_app):
+    async def _process_order(self, db, order, bot_app, trusted=False):
+        """trusted=True: admin sudah memeriksa manual (lewati guard hash user & quote kedaluwarsa)."""
         if order.status not in ("WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED") and not self.is_recoverable_expired(order):
             return
         expected_wallet = order.deposit_wallet or ""
@@ -203,6 +207,13 @@ class DepositDetector:
                 tx_hash = ""
                 verified = None
 
+        # 1b. Hash kiriman user lolos on-chain — pastikan memang deposit order ini.
+        if not trusted and verified and verified.get("verified"):
+            review = self.user_hash_review_reason(db, order, verified)
+            if review:
+                await self.escalate_user_hash(db, order, tx_hash, review, bot_app)
+                return
+
         # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi)
         if not verified or not verified.get("verified"):
             if expected_wallet:
@@ -255,6 +266,18 @@ class DepositDetector:
             return
 
         tx_hash = verified.get("tx_hash", tx_hash)
+
+        # Convert dibayar otomatis: deposit yang masuk SETELAH quote berakhir tidak boleh
+        # dibayar dengan kurs lama (dulu tetap auto-payout hingga 24 jam). Admin cek kurs dulu.
+        if (not trusted and order.order_type == "swap" and order.quote_expires_at
+                and verified.get("timestamp")
+                and verified["timestamp"] > tx_verifier._timestamp(order.quote_expires_at) + 120):
+            await self.escalate_user_hash(
+                db, order, tx_hash,
+                "Deposit masuk setelah masa quote convert berakhir — cek kurs terkini sebelum koin dikirim.",
+                bot_app,
+            )
+            return
 
         # Guard anti reuse hash: hash yang sudah diklaim order lain tidak boleh
         # mengonfirmasi order ini (jalur verifikasi hash langsung maupun auto-scan).
@@ -435,6 +458,8 @@ class DepositDetector:
                 ))
                 db.commit()
                 release_order_inventory(db, order.order_id)
+                from database.crud import auto_save_order_accounts
+                auto_save_order_accounts(db, order)
 
                 if bot_app:
                     try:
@@ -515,6 +540,78 @@ class DepositDetector:
                         )
                     except Exception as exc:
                         logger.warning("Gagal notif admin payout gagal: %s", exc)
+
+    # ---------------- Guard hash kiriman user ----------------
+    @staticmethod
+    def _deposit_fits(received, expected) -> bool:
+        """Deposit cocok untuk order: tidak kurang, dan lebih paling banyak 0,5% (pembulatan)."""
+        try:
+            received, expected = Decimal(str(received)), Decimal(str(expected))
+        except Exception:
+            return False
+        if not (received.is_finite() and expected.is_finite()) or expected <= 0:
+            return False
+        return expected <= received <= expected * (1 + USER_HASH_OVERPAY_TOLERANCE)
+
+    def user_hash_review_reason(self, db, order, verified) -> str:
+        """Alasan hash kiriman user TIDAK boleh dikonfirmasi otomatis ('' = aman).
+
+        Hot wallet dipakai bersama: siapa pun bisa menempel hash deposit milik
+        orang lain. Hash hanya auto-konfirmasi bila nominalnya pas untuk order ini
+        DAN tidak juga pas untuk order lain yang sedang menunggu deposit.
+        """
+        received = verified.get("amount", 0)
+        if not self._deposit_fits(received, order.crypto_amount):
+            return (f"Nominal deposit {received} {order.crypto_symbol} tidak sesuai order "
+                    f"({float(order.crypto_amount):g}).")
+        others = db.query(Order).filter(
+            Order.order_id != order.order_id,
+            Order.status == "WAITING_CRYPTO_DEPOSIT",
+            Order.network == order.network,
+            Order.crypto_symbol == order.crypto_symbol,
+            Order.deposit_wallet == order.deposit_wallet,
+        ).all()
+        for other in others:
+            if self._deposit_fits(received, other.crypto_amount):
+                return (f"Deposit juga cocok dengan order lain yang menunggu ({other.order_id}) — "
+                        f"pemiliknya tidak bisa dipastikan otomatis.")
+        return ""
+
+    async def escalate_user_hash(self, db, order, tx_hash, reason, bot_app) -> None:
+        """Minta admin memeriksa hash (sekali per order — scan berulang tidak spam)."""
+        # Satu notifikasi per (order, hash): scan 20 dtk tidak spam, tapi hash BARU dari user
+        # yang sama tetap sampai ke admin.
+        already = db.query(AuditLog.id).filter(
+            AuditLog.order_id == order.order_id, AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW",
+            AuditLog.details.like(f"Hash {tx_hash}:%"),
+        ).first()
+        if already:
+            return
+        db.add(AuditLog(
+            telegram_id=order.telegram_id, action="DEPOSIT_HASH_NEEDS_REVIEW",
+            order_id=order.order_id, from_status=order.status, to_status=order.status,
+            details=f"Hash {tx_hash}: {reason}",
+        ))
+        db.commit()
+        logger.warning("Order %s: hash %s butuh review admin (%s)", order.order_id, tx_hash, reason)
+        if not bot_app:
+            return
+        if order.order_type == "swap":
+            button = InlineKeyboardButton("✅ Proses Convert (sudah dicek)", callback_data=f"admin_approve_swap_{order.order_id}")
+        else:
+            button = InlineKeyboardButton("✅ Konfirmasi Deposit (sudah dicek)", callback_data=f"admin_force_sell_{order.order_id}")
+        await notify_admins(
+            bot_app,
+            f"🕵️ <b>HASH DEPOSIT PERLU DICEK MANUAL</b>\n\n"
+            f"Order: <code>{order.order_id}</code> ({order.order_type})\n"
+            f"User: <code>{order.telegram_id}</code>\n"
+            f"Order: {format_crypto(order.crypto_amount, order.crypto_symbol)} ({order.network})\n"
+            f"TX Hash: <code>{_esc(tx_hash or '-')}</code>\n"
+            f"Alasan: {_esc(reason)}\n\n"
+            f"<i>Pastikan pengirim deposit memang user ini sebelum konfirmasi.</i>",
+            reply_markup=InlineKeyboardMarkup([[button]]),
+            kind="error", butuh_tindakan=True,
+        )
 
     # ---------------- Helpers ----------------
     @staticmethod

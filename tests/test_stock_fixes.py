@@ -278,10 +278,11 @@ class SyncIntegration(unittest.IsolatedAsyncioTestCase):
         session.return_value.close.assert_called_once()
         query.message.reply_text.assert_not_awaited()
         sent = query.edit_message_text.await_args.kwargs
-        self.assertIn("Halaman 2/", sent["text"])
+        # Kartu ringkas muat satu halaman: tidak ada label/tombol halaman.
+        self.assertNotIn("Halaman", sent["text"])
         self.assertLess(len(sent["text"].encode("utf-16-le")) // 2, 4096)
         buttons = [b for row in sent["reply_markup"].inline_keyboard for b in row]
-        self.assertIn("menu_stocks_page_0", [b.callback_data for b in buttons])
+        self.assertFalse([b for b in buttons if (b.callback_data or "").startswith("menu_stocks_page_")])
 
     async def test_sync_persists_error_separately_and_menu_renders_it(self):
         Base.metadata.create_all(engine)
@@ -302,15 +303,18 @@ class SyncIntegration(unittest.IsolatedAsyncioTestCase):
                 failed = next(w for w in rows if w.network == "ROBINHOOD")
                 self.assertNotIn("SECRET", failed.last_error)
                 text = "\n".join(build_stock_pages(rows, {}))
-                self.assertIn("0.0257 SOL", text)
-                self.assertIn("3.27 APT", text)
-                self.assertIn("Gagal membaca saldo", text)
+                self.assertRegex(text, r"SOL\s+0\.0257")
+                self.assertRegex(text, r"APT\s+3\.27")
+                # Jaringan gagal dibaca ditandai ⚠️ ringkas, bukan teks error kotor.
+                self.assertRegex(text, r"Robinhood\s+-</code> ⚠️")
+                self.assertNotIn("Gagal membaca saldo", text)
                 self.assertNotIn("(Kosong)", text)
-                # Label "pengiriman admin" hanya untuk jaringan di emergency brake.
-                self.assertNotIn("pengiriman admin", text)
-                with patch.object(stocks, "MANUAL_PAYOUT_NETWORKS", {"APTOS"}):
+                self.assertNotIn("Manual", text)
+                # Jaringan kirim manual (emergency brake) tampil bersih "Manual", tanpa ⚠️.
+                with patch.object(stocks, "MANUAL_PAYOUT_NETWORKS", {"ROBINHOOD"}):
                     manual_text = "\n".join(build_stock_pages(rows, {}))
-                self.assertIn("pengiriman admin", manual_text)
+                self.assertRegex(manual_text, r"Robinhood\s+Manual</code>")
+                self.assertNotRegex(manual_text, r"Robinhood[^\n]*⚠️")
             finally:
                 db.close()
         finally:
@@ -327,19 +331,52 @@ class Presentation(unittest.TestCase):
         self.assertIn(format_datetime(stamp), page)
         self.assertNotIn(format_datetime(now), page)
 
-    def test_all_stock_rows_paginate_with_complete_html(self):
+    def test_all_stock_rows_fit_with_complete_html(self):
         now = datetime.utcnow()
         rows = [SimpleNamespace(network=net, symbol=sym, balance=1, sync_status="ERROR",
                                 last_success_at=now - timedelta(hours=1)) for sym, net in STOCK_ASSETS]
         pages = build_stock_pages(rows, {}, now)
-        self.assertGreater(len(pages), 1)
         for page in pages:
             self.assertLess(len(page.encode("utf-16-le")) // 2, 4096)
             self.assertEqual(page.count("<b>"), page.count("</b>"))
             self.assertEqual(page.count("<i>"), page.count("</i>"))
+            self.assertEqual(page.count("<blockquote expandable>"), page.count("</blockquote>"))
         text = "\n".join(pages)
-        self.assertEqual(text.count("Data lama:"), len(STOCK_ASSETS))
+        # Satu ⚠️ per baris non-manual + satu di footer; MORPH tampil "Manual" tanpa error.
+        non_manual = [net for _, net in STOCK_ASSETS if net not in stocks.MANUAL_PAYOUT_NETWORKS]
+        self.assertEqual(text.count("⚠️"), len(non_manual) + 1)
+        self.assertNotIn("Gagal membaca saldo", text)
         self.assertNotIn("(Kosong)", text)
+
+    def test_kartu_ringkas_qty_dan_rupiah(self):
+        now = datetime.utcnow()
+
+        def fresh(net, sym, bal):
+            return SimpleNamespace(network=net, symbol=sym, balance=bal, sync_status="OK", last_success_at=now)
+
+        rows = [fresh("BSC", "USDT", 13.28), fresh("TON", "USDT", 15.04),
+                fresh("BASE", "ETH", 0.0105), fresh("SOLANA", "SOL", 0.0996)]
+        prices = {"USDT": 1.0, "ETH": 4000.0, "SOL": 130.0, "_IDR": 17900.0}
+        text = "\n".join(build_stock_pages(rows, prices, now))
+        self.assertRegex(text, r"TON\s+15\.04\s+Rp269rb")
+        self.assertRegex(text, r"BEP20\s+13\.28\s+Rp238rb")
+        self.assertRegex(text, r"Base\s+0\.0105\s+Rp7\d\drb")
+        self.assertLess(text.index("TON "), text.index("BEP20"))  # nilai terbesar di atas
+        self.assertIn("<b>USDT + CHAIN</b>", text)
+        self.assertIn("<b>Token Lainnya</b>", text)
+
+    def test_format_rp_compact(self):
+        self.assertEqual(stocks.format_rp_compact(467), "Rp467")
+        self.assertEqual(stocks.format_rp_compact(269_300), "Rp269rb")
+        self.assertEqual(stocks.format_rp_compact(1_250_000), "Rp1,2jt")
+        self.assertEqual(stocks.format_rp_compact(2_000_000), "Rp2jt")
+        self.assertEqual(stocks.format_rp_compact(999_600), "Rp1jt")       # bukan "Rp1000rb"
+        self.assertEqual(stocks.format_rp_compact(1_791_500_000), "Rp1,8M")  # bukan "Rp1791,5jt"
+
+    def test_format_stock_qty_tanpa_pemisah_ribuan(self):
+        self.assertEqual(stocks.format_stock_qty(100_000), "100000")
+        self.assertEqual(stocks.format_stock_qty(13.28), "13.28")
+        self.assertEqual(stocks.format_stock_qty(0.0105), "0.0105")
 
     def test_small_nonzero_balance_does_not_round_to_zero(self):
         self.assertNotEqual(format_crypto_qty(0.000000001, "SOL"), "0 SOL")

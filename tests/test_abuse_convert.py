@@ -141,19 +141,33 @@ class TestConfirmSwapHardening(unittest.IsolatedAsyncioTestCase):
             "convert src == tgt (USDT BSC -> USDT BSC) harus ditolak server-side",
         )
 
-    @unittest.expectedFailure
     async def test_konfirmasi_wajib_segarkan_harga(self):
         """Quote dibekukan saat input nominal (bisa ditahan berjam-jam karena tidak
         ada timeout percakapan). Konfirmasi harus memvalidasi ulang kesegaran harga."""
+        import time
+        user_data = self._user_data()
+        user_data.update(swap_quoted_at=time.time() - 3600, swap_src_price=16000, swap_tgt_price=16000)
         with patch("services.price_service.PriceService.get_price", new=AsyncMock(return_value={
-            "symbol": "USDT", "buy_price_idr": 17000, "sell_price_idr": 16500,
+            "symbol": "USDT", "market_price_idr": 17000, "buy_price_idr": 17000, "sell_price_idr": 17000,
             "source": "MOCK", "price_updated_at": 0, "spread_pct": 0,
         })) as get_price:
-            await self._konfirmasi(self._user_data())
+            await self._konfirmasi(user_data)
         self.assertGreaterEqual(
             get_price.await_count, 1,
             "confirm_swap_order harus memeriksa harga terkini, bukan memakai quote beku user_data",
         )
+        # Harga bergerak 6% > 0,5% → order tidak dibuat.
+        self.assertEqual(self.db.query(Order).count(), 0)
+
+    async def test_quote_basi_tapi_harga_stabil_tetap_jalan(self):
+        import time
+        user_data = self._user_data()
+        user_data.update(swap_quoted_at=time.time() - 3600, swap_src_price=16000, swap_tgt_price=16000)
+        with patch("services.price_service.PriceService.get_price", new=AsyncMock(return_value={
+            "symbol": "USDT", "market_price_idr": 16010, "source": "MOCK", "price_updated_at": 0,
+        })):
+            await self._konfirmasi(user_data)
+        self.assertEqual(self.db.query(Order).count(), 1)
 
 
 class TestTargetAddressSelfDealing(unittest.IsolatedAsyncioTestCase):

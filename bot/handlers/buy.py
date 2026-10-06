@@ -67,6 +67,8 @@ from bot.utils.emojis import (
 )
 from config.assets import QRIS_STATIC_IMAGE, MANUAL_PAYOUT_NETWORKS
 from config.settings import settings
+from bot.utils.messages import WALLET_DUPLICATE_WARNING, WALLET_LOCK_NOTE
+from services import quote_guard
 
 logger = logging.getLogger(__name__)
 _finalize_locks = WeakValueDictionary()
@@ -310,6 +312,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["buy_received_idr"] = received_idr
         context.user_data["buy_total_idr"] = nominal_idr
         context.user_data["buy_price_per_unit"] = buy_price_idr
+        context.user_data["buy_quoted_at"] = quote_guard.stamp()
         context.user_data["buy_crypto_amount"] = crypto_amount
 
         available_inventory = get_available_inventory(db, network, symbol)
@@ -479,8 +482,26 @@ async def handle_wallet_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return INPUT_WALLET
 
-    # Auto-save alamat wallet valid ke data tersimpan user
+    # Anti-fraud: satu alamat hanya boleh milik satu user (Chat ID)
     user_id = update.effective_user.id
+    db = SessionLocal()
+    try:
+        from database.crud import is_wallet_address_taken_by_other
+        taken = is_wallet_address_taken_by_other(db, wallet_address, user_id)
+    finally:
+        db.close()
+    if taken:
+        await update.message.reply_text(
+            text=WALLET_DUPLICATE_WARNING,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                [get_owner_button()],
+            ]),
+            parse_mode="HTML",
+        )
+        return INPUT_WALLET
+
+    # Auto-save alamat wallet valid ke data tersimpan user
     db = SessionLocal()
     try:
         from database.crud import save_user_wallet
@@ -519,7 +540,31 @@ async def handle_saved_wallet_selection(update: Update, context: ContextTypes.DE
         await query.answer(f"Alamat tidak cocok dengan format network {network}!", show_alert=True)
         return INPUT_WALLET
 
+    # Anti-fraud: alamat yang sudah terkunci ke user lain (transaksi sukses) tidak boleh
+    # lolos lewat tombol 1-tap — alamat bisa saja disimpan sebelum pemiliknya bertransaksi.
+    if _wallet_locked_by_other(user_id, wallet_address):
+        await query.answer("Alamat ini sudah dipakai user lain.", show_alert=True)
+        await query.message.reply_text(
+            WALLET_DUPLICATE_WARNING,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                [get_owner_button()],
+            ]),
+            parse_mode="HTML",
+        )
+        return INPUT_WALLET
+
     return await _proceed_to_payment_selection(update, context, wallet_address)
+
+
+def _wallet_locked_by_other(user_id: int, wallet_address: str) -> bool:
+    """True bila alamat sudah terkunci ke user lain (lihat is_wallet_address_taken_by_other)."""
+    from database.crud import is_wallet_address_taken_by_other
+    db = SessionLocal()
+    try:
+        return is_wallet_address_taken_by_other(db, wallet_address, user_id)
+    finally:
+        db.close()
 
 
 
@@ -577,7 +622,8 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
             "\nℹ️ <i>Kode unik akan ditambahkan ke total bayar "
             "untuk verifikasi otomatis.</i>"
         )
-    
+    summary_text += "\n\n" + WALLET_LOCK_NOTE
+
     keyboard = [
         [
             InlineKeyboardButton("Konfirmasi & Bayar", callback_data="buy_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
@@ -600,9 +646,30 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     """
     query = update.callback_query
     await query.answer()
-    
+
     user_id = update.effective_user.id
-    
+
+    # --- 00. Alamat bisa saja terkunci ke user lain sejak dipilih (transaksi orang lain baru sukses) ---
+    if _wallet_locked_by_other(user_id, context.user_data.get("buy_wallet", "")):
+        await query.edit_message_text(
+            text=WALLET_DUPLICATE_WARNING,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
+    # --- 0. Quote basi? (harga dibekukan saat input nominal, percakapan tanpa timeout) ---
+    if not await quote_guard.prices_still_valid(
+        context.user_data.get("buy_quoted_at"),
+        {context.user_data["buy_symbol"]: context.user_data["buy_price_per_unit"]},
+    ):
+        await query.edit_message_text(
+            text=quote_guard.QUOTE_MOVED_TEXT,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     # --- 1. Rate Limiting Check (Max 5 orders aktif per 10 menit) ---
     db = SessionLocal()
     try:
@@ -725,7 +792,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "payment_method": "BOT_BALANCE",
                 "status": "pending",
                 "quoted_at": datetime.utcnow(),
-                "quote_expires_at": datetime.utcnow() + timedelta(minutes=30),
+                "quote_expires_at": datetime.utcnow() + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES),
                 "referral_discount_applied": discount_applied,
                 "referral_discount_pct": discount_pct,
                 "discount_amount_idr": discount_amount,
@@ -770,12 +837,17 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"📍 <b>Wallet Tujuan:</b> <code>{buyer_wallet}</code>\n\n"
                 f"✅ Pembayaran menggunakan Saldo Bot lunas! Koin crypto sedang diproses untuk dikirimkan ke wallet Anda."
             )
-            await query.edit_message_text(
-                text=success_msg,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
-                parse_mode="HTML"
-            )
+            # Jadwalkan payout SEBELUM edit pesan: saldo sudah terpotong, dan bila
+            # edit Telegram gagal (timeout/"not modified") payout tidak boleh ikut hilang.
             asyncio.create_task(_run_finalize_background(order.order_id, context.bot))
+            try:
+                await query.edit_message_text(
+                    text=success_msg,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+                    parse_mode="HTML"
+                )
+            except Exception as exc:
+                logger.warning(f"Gagal tampilkan sukses saldo {order.order_id}: {exc}")
             return ConversationHandler.END
 
         # --- 2b. GoPay QRIS Payment (QRIS Statis, pembayaran manual) ---
@@ -800,7 +872,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "buyer_wallet": buyer_wallet,
                 "payment_method": "GOPAY_QRIS",
                 "status": "pending",
-                "expired_at": datetime.utcnow() + timedelta(minutes=30),
+                "expired_at": datetime.utcnow() + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES),
                 "referral_discount_applied": discount_applied,
                 "referral_discount_pct": discount_pct,
                 "discount_amount_idr": discount_amount,
@@ -821,7 +893,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"{gas_surcharge_note(symbol, network)}"
                 f"{mdr_line}\n"
                 f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
-                f"⏰ <b>Batas Waktu</b>: 30 Menit\n\n"
+                f"⏰ <b>Batas Waktu</b>: {settings.ORDER_EXPIRE_MINUTES} Menit\n\n"
                 f"📌 <b>Cara Bayar:</b>\n"
                 f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
                 f"2. Nominal <b>{format_idr(final_total_idr)}</b> akan muncul otomatis (QRIS Dinamis).\n"
@@ -959,7 +1031,11 @@ async def finalize_gopay_buy_payment(
         elif order.status == "payout_processing":
             if not allow_recovery or not claim_stale_payout_processing(db, order.order_id):
                 return
-            db.refresh(order)
+            # Proses sebelumnya mati DI TENGAH pengiriman (restart/deploy/OOM): hash
+            # baru disimpan setelah sender selesai, jadi koin mungkin SUDAH terkirim.
+            # Kirim ulang otomatis = risiko payout dobel → serahkan ke admin.
+            await _escalate_interrupted_payout(db, order, bot or bot_app)
+            return
         elif order.status in ("manual_review", "expired"):
             if not allow_admin:
                 return
@@ -1086,6 +1162,30 @@ async def finalize_gopay_buy_payment(
             await safe_send_message(bot or bot_app, order.telegram_id, user_msg)
 
 
+async def _escalate_interrupted_payout(db, order, bot) -> None:
+    """Payout terputus tanpa hash: tandai manual_review & minta admin cek on-chain dulu."""
+    update_order_status(
+        db,
+        order.order_id,
+        new_status="manual_review",
+        failure_reason="Payout terputus (bot restart) — cek on-chain sebelum kirim ulang",
+    )
+    admin_msg = (
+        f"🚨 <b>PAYOUT TERPUTUS — CEK DULU SEBELUM KIRIM ULANG</b>\n\n"
+        f"Order: <code>{order.order_id}</code>\n"
+        f"User: {order.telegram_id}\n"
+        f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
+        f"Wallet: <code>{_esc(order.buyer_wallet or '')}</code>\n\n"
+        f"Bot berhenti saat sedang mengirim koin, jadi transaksi <b>mungkin sudah terkirim</b>.\n"
+        f"Cek riwayat masuk wallet tujuan di explorer. Jika belum ada, tekan "
+        f"<b>Approve &amp; Kirim Crypto</b>; jika sudah ada, selesaikan manual."
+    )
+    admin_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Approve & Kirim Crypto", callback_data=f"admin_approve_buy_{order.order_id}"),
+    ]])
+    await notify_admins(bot, admin_msg, reply_markup=admin_keyboard, kind="error", butuh_tindakan=True)
+
+
 async def _run_finalize_background(
     order_id: str,
     bot=None,
@@ -1148,8 +1248,10 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             return
 
-        pay_res = await gopay_service.check_payment(int(order.total_idr), order.order_id)
-        if pay_res and pay_res.get("paid"):
+        if await gopay_service.confirm_payment(
+            db, amount=int(order.total_idr), ref_id=order.order_id,
+            kind="buy", created_at=order.created_at,
+        ):
             try:
                 await query.answer("✅ Pembayaran diterima! Memproses pengiriman koin...", show_alert=False)
             except Exception as ans_err:
@@ -1250,8 +1352,10 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
 
         # 3. Cek otomatis via API GoPay di background (jika mutasi sudah muncul, langsung eksekusi)
         try:
-            pay_res = await gopay_service.check_payment(int(order.total_idr), order.order_id)
-            if pay_res and pay_res.get("paid"):
+            if await gopay_service.confirm_payment(
+                db, amount=int(order.total_idr), ref_id=order.order_id,
+                kind="buy", created_at=order.created_at,
+            ):
                 await finalize_gopay_buy_payment(db, order, bot=context.bot)
         except Exception as check_err:
             logger.warning("Auto-check during transfer proof failed: %s", check_err)

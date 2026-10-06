@@ -647,6 +647,10 @@ async function verifyPayment(amount, startTime, merchantIdOverride = null, userA
         const txAmount = (rawAmt > 0 && rawAmt % 100 === 0) ? Math.round(rawAmt / 100) : rawAmt;
         const txTimestamp = new Date(tx.transaction_time || tx.created_at || tx.settlement_time || 0).getTime();
         const txId = tx.id || tx.order_id || tx.wallstreet_transaction_id;
+        // Refund / partial refund bukan pembayaran masuk — jangan pernah dianggap lunas.
+        if (String(tx.transaction_status || '').toLowerCase().includes('refund')) {
+            continue;
+        }
 
         if ((txAmount === targetAmount || rawAmt === targetAmount) && txTimestamp >= filterStartTimeMs) {
             const currentScope = qrisId || 'default';

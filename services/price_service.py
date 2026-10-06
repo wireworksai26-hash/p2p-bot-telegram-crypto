@@ -195,10 +195,25 @@ class PriceService:
         return None
 
     async def _fetch_spot_fx(self):
-        """Kurs USD->IDR spot realtime (Yahoo Finance spot chart -> open.er-api)."""
+        """Kurs USD->IDR spot realtime (open.er-api -> Yahoo Finance spot chart).
+
+        open.er-api diprioritaskan karena sinkron dengan Google/Wise; Yahoo
+        1m chart kadang menyajikan previousClose saat pasar sepi (selisih ~Rp 100).
+        """
         try:
             client = await self._get_client()
-            # 1. Yahoo Finance chart (spot realtime)
+            # 1. open.er-api / frankfurter (sinkron Google/Wise)
+            for url in FX_URLS:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        val = float(resp.json()["rates"]["IDR"])
+                        if val > 0:
+                            return val
+                except Exception:
+                    continue
+
+            # 2. Yahoo Finance chart (fallback)
             try:
                 resp = await client.get(
                     YAHOO_SPOT_URL,
@@ -214,17 +229,6 @@ class PriceService:
                             return val
             except Exception as e:
                 logger.debug("Yahoo spot FX tidak tersedia (%s)", e)
-
-            # 2. open.er-api / frankfurter fallback
-            for url in FX_URLS:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        val = float(resp.json()["rates"]["IDR"])
-                        if val > 0:
-                            return val
-                except Exception:
-                    continue
         except Exception as exc:
             logger.warning("Gagal fetch spot FX USD/IDR: %s", exc)
         return None
@@ -365,6 +369,8 @@ class PriceService:
             if config is None and symbol == "POL":
                 config = crud.get_price_config(db, "MATIC")
             spread = float(config.spread_pct) if config else settings.DEFAULT_SPREAD_PCT
+            if settings.DEFAULT_SPREAD_PCT == 0.0:
+                spread = 0.0  # keputusan client: harga pasar murni, abaikan sisa spread di DB
             if not math.isfinite(spread) or not 0 <= spread < 100:
                 logger.warning("Harga %s ditolak: spread_pct %r tidak valid", symbol, spread)
                 return None

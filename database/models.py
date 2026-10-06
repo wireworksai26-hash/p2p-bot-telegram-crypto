@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Numeric, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Numeric, DateTime, ForeignKey, UniqueConstraint, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database.connection import Base
@@ -64,7 +64,7 @@ class Order(Base):
     nominal_idr = Column(BigInteger, nullable=False)    # Base value in IDR
     fee_idr = Column(BigInteger, nullable=False)        # Transaction fee in IDR
     mdr_idr = Column(BigInteger, default=0)             # Pajak QRIS 0,3% (0 bila tidak kena)
-    unique_code = Column(Integer, default=0)           # Unique payment code (1..200)
+    unique_code = Column(Integer, default=0)           # Unique payment code (1..400)
     total_idr = Column(BigInteger, nullable=False)      # Total IDR user pays (buy) or gets (sell)
 
     fee_category = Column(String(15), default='ALTCOIN') # 'USD', 'ALTCOIN', 'CONVERT'
@@ -115,6 +115,22 @@ class DepositClaim(Base):
     network = Column(String(30), nullable=False)
     tx_hash = Column(String(250), nullable=False)
     order_id = Column(String(50), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class QrisPaymentClaim(Base):
+    """Satu transaksi GoPay/QRIS hanya boleh melunasi SATU order/topup.
+
+    Dipakai semua jalur deteksi (poller /transactions, /check-payment, tombol
+    "Saya Sudah Transfer", bukti foto, final-check expiry) — persisten di DB
+    sehingga tetap berlaku setelah restart/deploy.
+    """
+    __tablename__ = "qris_payment_claims"
+    id = Column(Integer, primary_key=True)
+    tx_id = Column(String(120), nullable=False, unique=True)
+    ref_id = Column(String(60), nullable=False, index=True)   # order_id / topup_id
+    kind = Column(String(10), nullable=False)                 # "buy" / "topup"
+    amount_idr = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -258,6 +274,42 @@ class Campaign(Base):
 
     # Relationships
     distributions = relationship("CampaignDistribution", back_populates="campaign", cascade="all, delete-orphan")
+
+
+class MilestoneExclusion(Base):
+    """User yang dikecualikan dari peringkat Top Milestone (tetap bebas bertransaksi).
+
+    Tanpa FK ke users: admin boleh memasukkan ID numerik sebelum orangnya pernah /start.
+    """
+    __tablename__ = 'milestone_exclusions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False, unique=True, index=True)
+    note = Column(String(200), nullable=True)
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RewardBatch(Base):
+    """Kirim Reward ke user pilihan admin: satu batch = satu daftar penerima + nominal masing-masing.
+
+    Status: DRAFT -> RUNNING -> COMPLETED | CANCELLED. Perpindahan DRAFT -> RUNNING dilakukan
+    atomik (UPDATE bersyarat) sehingga tombol "Kirim" yang ditekan dua kali tidak membayar dua kali.
+    """
+    __tablename__ = 'reward_batches'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_by = Column(BigInteger, nullable=False, index=True)
+    status = Column(String(15), default='DRAFT', nullable=False, index=True)
+    items_json = Column(Text, nullable=False)          # [{telegram_id,label,amount,message}]
+    default_message = Column(String(1500), nullable=True)
+    total_amount = Column(BigInteger, default=0, nullable=False)
+    recipient_count = Column(Integer, default=0, nullable=False)
+    result_json = Column(Text, nullable=True)          # hasil per penerima setelah eksekusi
+    treasury_before = Column(BigInteger, nullable=True)
+    treasury_after = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    executed_at = Column(DateTime, nullable=True)
 
 
 class CampaignDistribution(Base):

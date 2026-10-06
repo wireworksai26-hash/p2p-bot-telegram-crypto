@@ -43,6 +43,8 @@ from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto
 from bot.utils.telegram_utils import notify_admins
 from bot.utils.flow_guard import block_if_busy
+from bot.utils.messages import WALLET_DUPLICATE_WARNING, WALLET_LOCK_NOTE
+from services import quote_guard
 from bot.utils.emojis import (
     E_SWAP,
     E_CHECK,
@@ -433,6 +435,9 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_nominal_idr"] = nominal_idr
     context.user_data["swap_fee_idr"] = fee_idr
     context.user_data["swap_tgt_amount"] = tgt_amount
+    context.user_data["swap_src_price"] = src_market_price
+    context.user_data["swap_tgt_price"] = tgt_market_price
+    context.user_data["swap_quoted_at"] = quote_guard.stamp()
 
     keyboard = [
         [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
@@ -481,6 +486,24 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_TARGET_ADDR
 
+    # Anti-fraud: alamat yang sudah terkunci ke user lain (transaksi sukses) ditolak.
+    db = SessionLocal()
+    try:
+        from database.crud import is_wallet_address_taken_by_other
+        taken = is_wallet_address_taken_by_other(db, target_addr, update.effective_user.id)
+    finally:
+        db.close()
+    if taken:
+        await update.message.reply_text(
+            WALLET_DUPLICATE_WARNING,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                [get_owner_button()],
+            ]),
+            parse_mode="HTML",
+        )
+        return INPUT_TARGET_ADDR
+
     context.user_data["swap_target_addr"] = target_addr
 
     src_sym = context.user_data["swap_src_symbol"]
@@ -515,6 +538,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
         f"<b>Wallet Tujuan:</b> <code>{target_addr}</code>\n\n"
+        f"{WALLET_LOCK_NOTE}\n\n"
         f"Apakah data di atas sudah sesuai?",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -553,6 +577,22 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
         available = get_available_inventory(stock_db, tgt_net, stock_symbol)
     if available is None or available < Decimal(str(tgt_amount)):
         await query.edit_message_text("Stok tujuan tidak cukup atau belum terverifikasi. Order belum dibuat; jangan menyetor crypto.")
+        return ConversationHandler.END
+
+    # Alamat tujuan bisa terkunci ke user lain sejak diinput — cek ulang sebelum order dibuat.
+    from database.crud import is_wallet_address_taken_by_other
+    with SessionLocal() as lock_db:
+        locked = is_wallet_address_taken_by_other(lock_db, target_addr, telegram_id)
+    if locked:
+        await query.edit_message_text(WALLET_DUPLICATE_WARNING, parse_mode="HTML")
+        return ConversationHandler.END
+
+    # Quote basi? Convert dibayar otomatis, jadi kedua harga harus masih valid.
+    if not await quote_guard.prices_still_valid(
+        context.user_data.get("swap_quoted_at"),
+        {src_sym: context.user_data.get("swap_src_price"), tgt_sym: context.user_data.get("swap_tgt_price")},
+    ):
+        await query.edit_message_text(quote_guard.QUOTE_MOVED_TEXT, parse_mode="HTML")
         return ConversationHandler.END
 
     quoted_at = datetime.utcnow()
@@ -708,7 +748,23 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
 
         menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
-        if verified_result and verified_result.get("verified"):
+        review = (
+            deposit_detector.user_hash_review_reason(db, order, verified_result)
+            if verified_result and verified_result.get("verified") else ""
+        )
+        if review:
+            # Hash lolos on-chain tapi bisa jadi deposit orang lain (hot wallet bersama)
+            # → jangan auto-payout; admin memastikan pemiliknya dulu.
+            await deposit_detector.escalate_user_hash(db, order, deposit_proof, review, context.application)
+            await update.message.reply_text(
+                "🕵️ <b>Deposit sedang dicek admin</b>\n\n"
+                f"ID Order: <code>{order.order_id}</code>\n"
+                "Transaksimu terdeteksi di blockchain, tapi perlu dicocokkan manual oleh admin "
+                "sebelum koin tujuan dikirim. Kamu akan menerima notifikasi setelah diproses. 🙏",
+                parse_mode="HTML",
+                reply_markup=menu_keyboard,
+            )
+        elif verified_result and verified_result.get("verified"):
             # Konfirmasi + eksekusi payout otomatis (kirim koin tujuan)
             # Pesan status verifikasi dan hasil convert dikirimkan oleh deposit_detector._confirm_order
             await deposit_detector._confirm_order(
@@ -811,29 +867,35 @@ async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, con
 
 async def cancel_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # Hanya tombol "Batal Order" (cancel_swap_order_<id>) yang membatalkan order di DB.
+    # "Batal"/"Menu Utama"/cancel lain sekadar keluar flow — dulu memakai
+    # active_swap_order_id basi sehingga membatalkan order lama yang sedang menunggu deposit.
+    if context.user_data is not None:
+        context.user_data.pop("active_swap_order_id", None)
     if query:
-        order_id = None
+        alert = "❌ Transaksi convert dibatalkan."
         if query.data and query.data.startswith("cancel_swap_order_"):
             order_id = query.data.replace("cancel_swap_order_", "")
-        if not order_id and context.user_data:
-            order_id = context.user_data.get("active_swap_order_id")
-
-        if order_id:
             db = SessionLocal()
             try:
                 from database.crud import update_order_status, get_order_by_id
                 order = get_order_by_id(db, order_id)
-                if order and (order.status or "").upper() in {
-                    "WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED",
-                }:
+                if order is None or order.telegram_id != update.effective_user.id:
+                    alert = None
+                elif order.deposit_tx_hash or order.deposit_proof_file_id:
+                    alert = "⚠️ TX Hash / bukti sudah dikirim — order tidak dibatalkan dan tetap diproses."
+                elif (order.status or "").upper() in {"WAITING_CRYPTO_DEPOSIT", "PENDING", "DRAFT", "QUOTED"}:
                     update_order_status(db, order_id, new_status="cancelled", failure_reason="Dibatalkan oleh pengguna")
+                else:
+                    alert = "⚠️ Deposit sudah terkonfirmasi — order tetap diproses."
             except Exception as e:
                 logger.warning(f"Gagal membatalkan order swap {order_id}: {e}")
             finally:
                 db.close()
 
         try:
-            await query.answer("❌ Transaksi convert dibatalkan.", show_alert=True)
+            if alert:
+                await query.answer(alert, show_alert=True)
         except Exception:
             pass
         from bot.handlers.start import send_main_menu

@@ -11,6 +11,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def resolve_bot(sender):
+    """Bot API object dari sender (Bot/ExtBot, Application, atau CallbackContext).
+
+    Jangan `getattr(sender, "bot", sender)`: pada Bot/ExtBot, `.bot` adalah
+    telegram.User milik bot (hasil get_me), bukan objek Bot — send_photo/
+    send_message(chat_id=...) di User langsung TypeError.
+    """
+    from telegram import Bot
+    if isinstance(sender, Bot):
+        return sender
+    inner = getattr(sender, "bot", None)
+    return inner if inner is not None else sender
+
+
 async def safe_edit_message(query, text: str, reply_markup=None, parse_mode="HTML", **kwargs):
     """
     Edit pesan callback_query dengan fallback ke reply_text.
@@ -145,7 +159,7 @@ async def kirim_ke_topik(sender, kind=None, order_type=None, text=None, photo=No
     row = _target_row(kind)
     if not row:
         return False
-    bot = getattr(sender, "bot", sender)
+    bot = resolve_bot(sender)
     try:
         if photo:
             await bot.send_photo(chat_id=str(row.chat_id), photo=photo, caption=text,
@@ -174,7 +188,7 @@ async def notify_admins(sender, text: str, parse_mode="HTML", reply_markup=None,
     kind = normalisasi_kind(kind or order_type)
     row = _target_row(kind)
     tujuan = admin_notification_targets(kind)
-    bot = getattr(sender, "bot", sender)
+    bot = resolve_bot(sender)
     gagal_topik = []
     for chat_id, thread_id in tujuan:
         try:

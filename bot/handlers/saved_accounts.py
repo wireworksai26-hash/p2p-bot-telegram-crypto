@@ -20,6 +20,8 @@ from database.crud import (
     get_saved_wallet_by_id,
     save_user_wallet,
     save_user_wallet_v2,
+    is_wallet_address_taken_by_other,
+    is_bank_account_taken_by_other,
     set_default_wallet,
     delete_user_saved_wallet,
     get_user_saved_banks,
@@ -36,6 +38,7 @@ from services.wallet_detector import (
 )
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_wallet_address
+from bot.utils.messages import WALLET_DUPLICATE_WARNING, BANK_DUPLICATE_WARNING
 from bot.utils.emojis import CUSTOM_EMOJI_IDS
 
 logger = logging.getLogger(__name__)
@@ -168,7 +171,7 @@ def build_saved_banks_view(telegram_id: int, db, back_callback: str = "menu_bala
 
     if not banks:
         text = (
-            "👛 <b>Rekening Pencairan</b>\n"
+            "🏦 <b>Rekening Pencairan</b>\n"
             "-------------------------------------\n\n"
             "<code>Belum ada rekening tersimpan</code>\n\n"
             "Pilih tombol dibawah untuk menambah atau ganti rekening."
@@ -189,7 +192,7 @@ def build_saved_banks_view(telegram_id: int, db, back_callback: str = "menu_bala
 
         list_text = "\n\n".join(bank_lines)
         text = (
-            "👛 <b>Rekening Pencairan</b>\n"
+            "🏦 <b>Rekening Pencairan</b>\n"
             "-------------------------------------\n\n"
             f"<b>Daftar Rekening / E-Wallet Tersimpan:</b>\n\n{list_text}\n\n"
             "Pilih tombol dibawah untuk menambah atau ganti rekening."
@@ -619,6 +622,18 @@ async def handle_saved_account_text_input(update: Update, context: ContextTypes.
 
         db = SessionLocal()
         try:
+            taken = is_wallet_address_taken_by_other(db, raw_text, user.id)
+        finally:
+            db.close()
+        if taken:
+            context.user_data["awaiting_save_wallet"] = True
+            if target_chain:
+                context.user_data["target_chain_type"] = target_chain
+            await update.message.reply_text(WALLET_DUPLICATE_WARNING, parse_mode="HTML")
+            return True
+
+        db = SessionLocal()
+        try:
             saved = save_user_wallet_v2(
                 db=db,
                 telegram_id=user.id,
@@ -728,6 +743,10 @@ async def handle_saved_account_text_input(update: Update, context: ContextTypes.
 
         db = SessionLocal()
         try:
+            if is_bank_account_taken_by_other(db, clean_num, user.id):
+                context.user_data["awaiting_save_bank"] = True   # minta input ulang
+                await update.message.reply_text(BANK_DUPLICATE_WARNING, parse_mode="HTML")
+                return True
             saved = save_user_bank(
                 db=db,
                 telegram_id=user.id,
@@ -742,7 +761,7 @@ async def handle_saved_account_text_input(update: Update, context: ContextTypes.
         type_str = "E-Wallet" if saved.account_type == "EWALLET" else "Rekening Bank"
 
         keyboard = [
-            [InlineKeyboardButton("👛 Lihat Rekening Pencairan", callback_data="menu_saved_banks")],
+            [InlineKeyboardButton("🏦 Lihat Rekening Pencairan", callback_data="menu_saved_banks")],
             [InlineKeyboardButton("🔙 Ke Menu Utama", callback_data="menu_back")]
         ]
         await update.message.reply_text(

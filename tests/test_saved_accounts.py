@@ -460,5 +460,87 @@ class TestBuyAndSellIntegration(BaseDBSessionTest, unittest.IsolatedAsyncioTestC
         self.assertIn("Rekening Pencairan", update.callback_query.edit_message_text.call_args[0][0])
 
 
+class TestWalletAntiFraudBinding(BaseDBSessionTest, unittest.IsolatedAsyncioTestCase):
+    """Alamat wallet terkunci ke satu user setelah TRANSAKSI SUKSES (keputusan client)."""
+
+    ADDR = "0x71C839556CB3250b716773B3aBE329a4a796c9c6"
+
+    def _order(self, telegram_id, wallet, status, order_type="buy", oid=None):
+        from decimal import Decimal
+        from database.models import Order
+        return Order(
+            order_id=oid or f"ORD-{telegram_id}-{status}-{order_type}", telegram_id=telegram_id,
+            order_type=order_type, crypto_symbol="USDT", network="BSC", crypto_amount=Decimal("1"),
+            price_per_unit=16000, nominal_idr=50000, fee_idr=3000, total_idr=50001,
+            buyer_wallet=wallet, status=status,
+        )
+
+    def _taken(self, addr, uid):
+        from database.crud import is_wallet_address_taken_by_other
+        return is_wallet_address_taken_by_other(self.db_session, addr, uid)
+
+    def test_completed_buy_locks_address_case_insensitive(self):
+        create_user(self.db_session, telegram_id=1)
+        self.db_session.add(self._order(1, self.ADDR, "completed"))
+        self.db_session.commit()
+        self.assertTrue(self._taken(self.ADDR.lower(), 2))
+        self.assertTrue(self._taken(f"  {self.ADDR} ", 2))
+        self.assertFalse(self._taken(self.ADDR, 1))  # pemiliknya sendiri boleh
+
+    def test_completed_convert_target_locks_address(self):
+        create_user(self.db_session, telegram_id=1)
+        self.db_session.add(self._order(1, self.ADDR, "COMPLETED", order_type="swap"))
+        self.db_session.commit()
+        self.assertTrue(self._taken(self.ADDR, 2))
+
+    def test_unfinished_orders_do_not_lock(self):
+        create_user(self.db_session, telegram_id=1)
+        for status in ("pending", "paid", "payout_processing", "manual_review", "expired", "cancelled"):
+            self.db_session.add(self._order(1, self.ADDR, status))
+        self.db_session.commit()
+        self.assertFalse(self._taken(self.ADDR, 2))
+
+    def test_saved_in_profile_only_does_not_lock(self):
+        # Kalau menyimpan mengunci, siapa pun bisa memblokir pemilik asli duluan.
+        create_user(self.db_session, telegram_id=1)
+        save_user_wallet(self.db_session, 1, self.ADDR, network="BSC")
+        self.assertFalse(self._taken(self.ADDR, 2))
+
+    def test_sui_aptos_hex_address_case_insensitive(self):
+        sui = "0x" + "ab12" * 16
+        create_user(self.db_session, telegram_id=1)
+        self.db_session.add(self._order(1, sui, "completed"))
+        self.db_session.commit()
+        self.assertTrue(self._taken(sui.upper().replace("0X", "0x"), 2))
+
+    def test_non_hex_address_is_case_sensitive(self):
+        sol = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+        create_user(self.db_session, telegram_id=1)
+        self.db_session.add(self._order(1, sol, "completed"))
+        self.db_session.commit()
+        self.assertTrue(self._taken(sol, 2))
+        self.assertFalse(self._taken(sol.lower(), 2))
+
+    async def test_save_flow_rejects_address_locked_by_other_user(self):
+        from bot.utils.messages import WALLET_DUPLICATE_WARNING
+        create_user(self.db_session, telegram_id=1)
+        self.db_session.add(self._order(1, self.ADDR, "completed"))
+        self.db_session.commit()
+        update = MagicMock()
+        update.effective_user.id = 2
+        update.message.text = self.ADDR
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.user_data = {"awaiting_save_wallet": True}
+
+        with patch("bot.handlers.saved_accounts.SessionLocal", return_value=self.db_session):
+            handled = await handle_saved_account_text_input(update, context)
+
+        self.assertTrue(handled)
+        self.assertEqual(get_user_saved_wallets(self.db_session, 2), [])
+        self.assertTrue(context.user_data.get("awaiting_save_wallet"))  # minta input ulang
+        self.assertEqual(update.message.reply_text.call_args[0][0], WALLET_DUPLICATE_WARNING)
+
+
 if __name__ == "__main__":
     unittest.main()

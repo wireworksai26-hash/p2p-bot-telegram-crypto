@@ -18,10 +18,14 @@ class GopayGatewayService:
         self.base_url = (settings.GOPAY_GATEWAY_URL or "http://127.0.0.1:3005").rstrip("/")
         self.api_key = settings.GOPAY_API_KEY or "RAHASIA"
 
-    async def check_payment(self, amount: int, trx_id: str) -> Optional[Dict[str, Any]]:
+    async def check_payment(self, amount: int, trx_id: str, start_time=None) -> Optional[Dict[str, Any]]:
         """
         Mengecek mutasi pembayaran masuk untuk nominal dan trx_id spesifik.
-        
+
+        start_time (datetime UTC naive/aware): hanya transaksi SESUDAH waktu ini
+        yang boleh cocok. Tanpa ini gateway mencari 24 jam ke belakang sehingga
+        pembayaran lama bernominal sama bisa "melunasi" order baru.
+
         Returns:
             dict: {
                 "paid": bool,
@@ -35,6 +39,8 @@ class GopayGatewayService:
                 "trx_id": trx_id,
                 "api_key": self.api_key
             }
+            if start_time is not None:
+                params["startTime"] = _iso_utc(start_time)
             async with httpx.AsyncClient(timeout=8.0) as client:
                 res = await client.get(url, params=params)
                 if res.status_code == 200:
@@ -99,6 +105,53 @@ class GopayGatewayService:
         except Exception as e:
             logger.warning(f"GopayGatewayService get_recent_transactions error: {e}")
             return []
+
+
+    async def confirm_payment(self, db, *, amount: int, ref_id: str, kind: str, created_at) -> bool:
+        """Satu pintu verifikasi QRIS: cek gateway (sejak order dibuat) + klaim tx di DB.
+
+        True hanya bila ada pembayaran setelah `created_at` yang BELUM dipakai
+        order/topup lain. Dipakai tombol "Saya Sudah Transfer", bukti foto,
+        poller topup, dan final-check sebelum expire.
+        """
+        from database.crud import claim_qris_payment
+
+        res = await self.check_payment(int(amount), ref_id, start_time=payment_window_start(created_at))
+        if not (res and res.get("paid")):
+            return False
+        tx = res.get("transaction") or {}
+        tx_id = tx.get("transaction_id") or tx.get("id") or tx.get("order_id")
+        if not tx_id:
+            logger.warning("Pembayaran %s terdeteksi tanpa transaction_id — tidak bisa diklaim, abaikan", ref_id)
+            return False
+        if not claim_qris_payment(db, str(tx_id), ref_id, kind, int(amount)):
+            logger.warning("Transaksi %s sudah dipakai order/topup lain — tolak untuk %s", tx_id, ref_id)
+            return False
+        return True
+
+
+# Toleransi jam server vs GoPay untuk transaksi yang terjadi sesaat setelah order dibuat.
+PAYMENT_CLOCK_SKEW_SECONDS = 60
+
+
+def payment_window_start(created_at):
+    """Awal jendela pembayaran yang sah untuk order/topup (UTC naive)."""
+    from datetime import timedelta
+    if created_at is None:
+        return None
+    return _to_utc_naive(created_at) - timedelta(seconds=PAYMENT_CLOCK_SKEW_SECONDS)
+
+
+def _to_utc_naive(dt):
+    from datetime import timezone
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _iso_utc(dt) -> str:
+    """ISO-8601 UTC dengan 'Z' — dibaca gateway via `new Date(...)`."""
+    return _to_utc_naive(dt).isoformat(timespec="seconds") + "Z"
 
 
 gopay_service = GopayGatewayService()

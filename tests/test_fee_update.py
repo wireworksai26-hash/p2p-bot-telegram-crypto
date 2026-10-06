@@ -1,10 +1,10 @@
 """Uji update fee client 1 Okt 2026:
 - Tier persen di atas 1.010k/1.015k (3% / 2,5% / 2% / 1,5%) — tanpa max-cap.
 - Tambahan flat Rp 500 untuk JUAL altcoin nominal < Rp 1.010.000.
-- Surcharge gas Rp 2.500 (beli/convert) + minimum Rp 7.500 untuk 5 pasangan:
-  ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH, USDT-TRON.
+- Surcharge gas Rp 2.500 (beli/convert) + minimum Rp 7.500 untuk 4 pasangan:
+  ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH.
 - Contoh client: jual 105k altcoin -> fee 6.000 -> net 99.000.
-- Kode unik QRIS 01-200 + default spread 0.5%.
+- Kode unik QRIS 001-400 + default spread 0.5%.
 """
 import os
 import sys
@@ -91,15 +91,15 @@ class TestSellAltcoinSurcharge(unittest.TestCase):
 
 
 class TestGasPair(unittest.TestCase):
-    """Surcharge gas 2.500 (beli/convert) + minimum 7.500 untuk 5 pasangan."""
+    """Surcharge gas 2.500 (beli/convert) + minimum 7.500 untuk 4 pasangan."""
 
     def test_daftar_pasangan(self):
         self.assertEqual(GAS_SURCHARGE_IDR, 2500)
         self.assertEqual(GAS_SURCHARGE_PAIRS, {
             ("ETH", "ETH"), ("TRX", "TRON"), ("USDT", "ETH"),
-            ("USDC", "ETH"), ("USDT", "TRON"),
+            ("USDC", "ETH"),
         })
-        self.assertTrue(is_gas_pair("USDT", "TRON"))
+        self.assertFalse(is_gas_pair("USDT", "TRON"))
         self.assertFalse(is_gas_pair("USDT", "BSC"))
 
     def test_surcharge_beli_convert(self):
@@ -107,7 +107,7 @@ class TestGasPair(unittest.TestCase):
         self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "TRX", "TRON"), 7_500)
         self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "ETH"), 6_500)          # 4000 + 2500
         self.assertEqual(calculate_fee_idr(50_000, "USD", "USDC", "ETH"), 6_500)
-        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "TRON"), 6_500)
+        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "TRON"), 4_000)  # bukan pasangan gas
         self.assertEqual(calculate_fee_idr(50_000, "CONVERT", "ETH", "ETH"), 8_000)       # 5500 + 2500
 
     def test_jual_tidak_kena_surcharge_gas(self):
@@ -123,7 +123,7 @@ class TestGasPair(unittest.TestCase):
         for kategori, sym, net in (
             ("ALTCOIN", "ETH", "ETH"), ("ALTCOIN", "TRX", "TRON"),
             ("USD", "USDT", "ETH"), ("USD", "USDC", "ETH"),
-            ("USD", "USDT", "TRON"), ("CONVERT", "ETH", "ETH"),
+            ("CONVERT", "ETH", "ETH"),
         ):
             with self.subTest(sym=sym, net=net):
                 with self.assertRaises(ValueError):
@@ -139,7 +139,8 @@ class TestGasPair(unittest.TestCase):
             calculate_fee_idr(5_999, "CONVERT", "ETH", "BASE")
 
     def test_note_hanya_untuk_pasangan_gas(self):
-        self.assertIn("2.500", gas_surcharge_note("USDT", "TRON"))
+        self.assertIn("2.500", gas_surcharge_note("TRX", "TRON"))
+        self.assertEqual(gas_surcharge_note("USDT", "TRON"), "")
         self.assertEqual(gas_surcharge_note("USDT", "BSC"), "")
         self.assertEqual(gas_surcharge_note("SOL", "SOLANA"), "")
 
@@ -163,7 +164,7 @@ class TestHandlerKategoriDanSpread(unittest.TestCase):
 
 
 class TestKodeUnikQris(unittest.TestCase):
-    """Kode unik QRIS 01-200 (dari 1-150; fallback 1-999 dihapus)."""
+    """Kode unik QRIS 001-400 (dari 1-200)."""
 
     def setUp(self):
         Base.metadata.create_all(bind=engine)
@@ -181,25 +182,25 @@ class TestKodeUnikQris(unittest.TestCase):
             unique_code=code, status="pending",
         )
 
-    def test_default_max_200(self):
+    def test_default_max_400(self):
         import inspect
         sig = inspect.signature(crud.generate_unique_payment_code)
-        self.assertEqual(sig.parameters["max_code"].default, 200)
+        self.assertEqual(sig.parameters["max_code"].default, 400)
 
-    def test_selalu_dalam_rentang_1_200(self):
-        # Isi pool penuh 1..200 → fallback pun harus tetap di rentang 1..200.
-        for c in range(1, 201):
+    def test_selalu_dalam_rentang_1_400(self):
+        # Isi pool penuh 1..400 → fallback pun harus tetap di rentang 1..400.
+        for c in range(1, 401):
             self.db.add(self._order(f"ORD-{c:03d}", c))
         self.db.commit()
         kode = crud.generate_unique_payment_code(self.db)
         self.assertGreaterEqual(kode, 1)
-        self.assertLessEqual(kode, 200)
+        self.assertLessEqual(kode, 400)
 
     def test_kode_pending_tidak_dipakai_ulang(self):
-        for c in range(1, 200):
+        for c in range(1, 400):
             self.db.add(self._order(f"ORD-{c:03d}", c))
         self.db.commit()
-        self.assertEqual(crud.generate_unique_payment_code(self.db), 200)
+        self.assertEqual(crud.generate_unique_payment_code(self.db), 400)
 
 
 if __name__ == "__main__":
