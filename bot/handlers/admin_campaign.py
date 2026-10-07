@@ -39,6 +39,20 @@ try:
 except Exception as _init_err:
     logger.warning("Auto DDL create_all campaign: %s", _init_err)
 
+async def _safe_edit(query, text: str, reply_markup=None, parse_mode="HTML", **kwargs):
+    """Mengedit pesan dengan fallback sanitasi HTML jika Telegram menolak."""
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
+    except Exception as err:
+        err_str = str(err).lower()
+        if "document_invalid" in err_str or "can't parse entities" in err_str:
+            clean_text = re.sub(r'<tg-emoji[^>]*>(.*?)</tg-emoji>', r'\1', text)
+            clean_text = clean_text.replace("<blockquote expandable>", "\n---\n").replace("<blockquote>", "\n---\n").replace("</blockquote>", "\n---\n")
+            await query.edit_message_text(clean_text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
+        else:
+            raise
+
+
 
 def get_campaign_main_keyboard() -> InlineKeyboardMarkup:
     """Keyboard menu utama pusat campaign, giveaway, dan loyalty."""
@@ -130,18 +144,18 @@ def build_campaign_main_view(db=None) -> str:
             db.close()
 
     return (
-        f"{tg_emoji('GIFT', '🎁')} <b>PUSAT CAMPAIGN & GIVEAWAY BOT (LOYALTY HUB)</b>\n\n"
-        f"{tg_emoji('BANK', '🏦')} <b>Saldo Kas Dompet Bot:</b> <code>{format_idr(treasury_bal)}</code>\n\n"
+        "🎁 <b>PUSAT CAMPAIGN & GIVEAWAY BOT (LOYALTY HUB)</b>\n\n"
+        f"🏦 <b>Saldo Kas Dompet Bot:</b> <code>{format_idr(treasury_bal)}</code>\n\n"
         "Pusat pengelolaan event giveaway saldo bot, ranking Top Spender, "
         "undian acak, dan program loyalty otomatis dengan <b>proteksi batas anggaran (Hard Budget Cap)</b>.\n\n"
-        f"{tg_emoji('SPARKLES', '✨')} <b>Menu & Template Event Siap Pakai:</b>\n"
+        "✨ <b>Menu & Template Event Siap Pakai:</b>\n"
         "1. <b>🎁 Bagi Rata Buyer Aktif</b> — Total budget dibagi sama rata ke user pembeli aktif.\n"
         "2. <b>🛒 Loyalty Buyer Reward</b> — Reward untuk pelanggan setia yang mencapai target transaksi dalam rentang waktu tertentu.\n"
         "3. <b>🏆 Top Spender Leaderboard</b> — Reward leaderboard untuk Top Trader dengan volume terbesar.\n"
         "4. <b>🎲 Undi Pemenang Acak</b> — Undi pemenang instan per kategori target user.\n"
         "5. <b>⏳ Pengaturan Loyalty Reward</b> — Reward otomatis per X transaksi dalam window waktu.\n"
         "6. <b>⚡ Flash Giveaway Acak</b> — Bagi-bagi saldo kilat untuk sejumlah user acak.\n\n"
-        f"{tg_emoji('CHECK', '🛡️')} <i>Sistem menjamin total saldo keluar tidak akan pernah melebihi budget yang Anda tetapkan.</i>"
+        "🛡️ <i>Sistem menjamin total saldo keluar tidak akan pernah melebihi budget yang Anda tetapkan.</i>"
     )
 
 
@@ -155,7 +169,7 @@ async def campaign_command_handler(update: Update, context: ContextTypes.DEFAULT
     keyboard = get_campaign_main_keyboard()
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await _safe_edit(update.callback_query, text, reply_markup=keyboard, parse_mode="HTML")
     else:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -180,7 +194,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
         # Menu utama campaign
         if data in ("admin_panel_campaign", "camp_main"):
             text = build_campaign_main_view()
-            await query.edit_message_text(text, reply_markup=get_campaign_main_keyboard(), parse_mode="HTML")
+            await _safe_edit(query, text, reply_markup=get_campaign_main_keyboard(), parse_mode="HTML")
             return
 
         # Dompet & Kas Bot
@@ -190,7 +204,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 db, admin_id=user_id, chat_id=query.message.chat_id,
                 message_id=query.message.message_id,
             )
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await _safe_edit(query, text=text, reply_markup=markup, parse_mode="HTML")
             return
 
         # Top Spender Leaderboard
@@ -208,7 +222,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 db=db, admin_id=user_id, chat_id=query.message.chat_id,
                 message_id=query.message.message_id,
             )
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await _safe_edit(query, text=text, reply_markup=markup, parse_mode="HTML")
             return
 
         # Routing ke handler admin_panel untuk Undi Pemenang, Loyalty Setting, atau Dashboard Utama
@@ -236,7 +250,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 f"💰 <b>Pilih Total Anggaran Hadiah (Pool):</b>\n"
                 f"<i>Silakan klik salah satu nominal cepat di bawah:</i>"
             )
-            await query.edit_message_text(text, reply_markup=get_budget_selection_keyboard(tpl_key), parse_mode="HTML")
+            await _safe_edit(query, text, reply_markup=get_budget_selection_keyboard(tpl_key), parse_mode="HTML")
             return
 
         # Pemilihan budget -> Jalankan simulasi & buat DRAFT
@@ -273,7 +287,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     [InlineKeyboardButton("🔙 Pilih Template Lain", callback_data="admin_panel_campaign")],
                     [InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main")],
                 ])
-                await query.edit_message_text(text_err, reply_markup=keyboard_err, parse_mode="HTML")
+                await _safe_edit(query, text_err, reply_markup=keyboard_err, parse_mode="HTML")
                 return
 
             # Buat record Campaign status DRAFT
@@ -298,7 +312,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             # Tampilkan Preview Simulasi
             text = _build_preview_text(camp, sim)
             try:
-                await query.edit_message_text(
+                await _safe_edit(query, 
                     text,
                     reply_markup=get_preview_action_keyboard(camp.id),
                     parse_mode="HTML",
@@ -306,7 +320,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             except Exception as edit_err:
                 logger.warning("Gagal edit_message_text preview HTML: %s, fallback tanpa blockquote", edit_err)
                 clean_text = text.replace("<blockquote>", "\n---\n").replace("</blockquote>", "\n---\n")
-                await query.edit_message_text(
+                await _safe_edit(query, 
                     clean_text,
                     reply_markup=get_preview_action_keyboard(camp.id),
                     parse_mode="HTML",
@@ -320,7 +334,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             keyboard_cancel = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Batal & Pilih Budget Cepat", callback_data=f"camp_tpl_{tpl_key}")]
             ])
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 "⌨️ <b>Ketik Nominal Anggaran:</b>\n\n"
                 "Kirim pesan angka nominal total hadiah yang ingin dibagikan.\n"
                 "Contoh: <code>750000</code> atau <code>1500000</code>\n\n"
@@ -344,7 +358,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 [InlineKeyboardButton("🔙 Batal (Tetap Pakai Pesan Lama)", callback_data=f"camp_back_preview_{camp_id}")],
             ])
             edit_prompt_text = (
-                f"{tg_emoji('HISTORY', '✏️')} <b>KUSTOMISASI PESAN NOTIFIKASI PEMENANG</b>\n\n"
+                "✏️ <b>KUSTOMISASI PESAN NOTIFIKASI PEMENANG</b>\n\n"
                 "Pesan ini akan otomatis dikirimkan bot langsung ke DM Telegram setiap pemenang saat tombol <b>Eksekusi</b> ditekan.\n\n"
                 "📌 <b>Daftar Tag / Placeholder Otomatis:</b>\n"
                 "• <code>{name}</code> ➔ Nama / username pemenang (contoh: <i>@budi</i>)\n"
@@ -361,7 +375,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 "Saldo sudah aktif dan siap langsung digunakan untuk transaksi di @{bot_username} 🚀</code>\n\n"
                 "👇 <i>Ketik pesan notifikasi kustom Anda sekarang di chat ini...</i>"
             )
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 edit_prompt_text,
                 reply_markup=keyboard_cancel_msg,
                 parse_mode="HTML",
@@ -389,7 +403,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     days_lookback=tpl.get("days_lookback") if tpl else None,
                 )
                 text = _build_preview_text(camp, sim)
-                await query.edit_message_text(
+                await _safe_edit(query, 
                     text,
                     reply_markup=get_preview_action_keyboard(camp.id),
                     parse_mode="HTML",
@@ -416,7 +430,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 days_lookback=tpl.get("days_lookback") if tpl else None,
             )
             text = _build_preview_text(camp, sim)
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 text,
                 reply_markup=get_preview_action_keyboard(camp.id),
                 parse_mode="HTML",
@@ -431,7 +445,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 if camp.status == "DRAFT":
                     camp.status = "CANCELLED"
                     db.commit()
-                await query.edit_message_text(
+                await _safe_edit(query, 
                     "💰 <b>Pilih Ulang Anggaran Hadiah:</b>",
                     reply_markup=get_budget_selection_keyboard(camp.template_type),
                     parse_mode="HTML",
@@ -445,7 +459,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
             if camp and camp.status == "DRAFT":
                 camp.status = "CANCELLED"
                 db.commit()
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 "❌ Campaign telah dibatalkan.",
                 reply_markup=get_campaign_main_keyboard(),
                 parse_mode="HTML",
@@ -460,7 +474,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await query.answer("Campaign tidak ditemukan.", show_alert=True)
                 return
 
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 f"⏳ <b>SEDANG MEMPROSES CAMPAIGN...</b>\n\n"
                 f"Event: <b>{camp.title}</b>\n"
                 f"Mengalokasikan saldo ke masing-masing akun user dan mengirim notifikasi...\n"
@@ -486,7 +500,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 )
             except TreasuryInsufficient as short:
                 # Draft tetap utuh; admin isi Kas Bot lalu kembali ke preview yang sama.
-                await query.edit_message_text(
+                await _safe_edit(query, 
                     f"⚠️ <b>KAS BOT KURANG</b>\n\n"
                     f"Event: <b>{_esc(camp.title)}</b>\n"
                     f"💰 Dana dibutuhkan: <code>{format_idr(short.needed)}</code>\n"
@@ -514,7 +528,7 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 [InlineKeyboardButton("🎁 Buat Campaign Lagi", callback_data="admin_panel_campaign")],
                 [InlineKeyboardButton("🔙 Panel Utama Admin", callback_data="admin_panel_main")],
             ])
-            await query.edit_message_text(text_done, reply_markup=keyboard_done, parse_mode="HTML")
+            await _safe_edit(query, text_done, reply_markup=keyboard_done, parse_mode="HTML")
             return
 
         # Riwayat Campaign
@@ -538,13 +552,13 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 [InlineKeyboardButton("➕ Buat Campaign Baru", callback_data="admin_panel_campaign")],
                 [InlineKeyboardButton("🔙 Panel Utama", callback_data="admin_panel_main")],
             ])
-            await query.edit_message_text(text_hist, reply_markup=keyboard_hist, parse_mode="HTML")
+            await _safe_edit(query, text_hist, reply_markup=keyboard_hist, parse_mode="HTML")
             return
 
     except Exception as exc:
         logger.error(f"Error campaign_callback_handler: {exc}", exc_info=True)
         try:
-            await query.edit_message_text(
+            await _safe_edit(query, 
                 f"⚠️ <b>Terjadi kendala pada sistem campaign:</b>\n\n"
                 f"<code>{_esc(str(exc))}</code>\n\n"
                 f"<i>Silakan pilih menu di bawah untuk melanjutkan:</i>",

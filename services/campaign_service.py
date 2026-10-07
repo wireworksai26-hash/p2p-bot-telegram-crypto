@@ -32,12 +32,12 @@ CAMPAIGN_TEMPLATES: dict[str, dict[str, Any]] = {
         "default_pool": 500_000,
         "preset_pools": [100_000, 250_000, 500_000, 1_000_000],
         "default_notif": (
-            f"{tg_emoji('GIFT', '🎁')} <b>KABAR GEMBIRA! BAGI-BAGI SALDO DARI BOT</b>\n\n"
+            "🎁 <b>KABAR GEMBIRA! BAGI-BAGI SALDO DARI BOT</b>\n\n"
             "Halo <b>{name}</b>, Anda mendapatkan hadiah saldo gratis dari event <b>{campaign_name}</b>!\n"
-            f"{tg_emoji('MONEY_BAG', '💰')} <b>Reward:</b> <code>+{{reward}}</code>\n"
-            f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{{new_balance}}</code>\n\n"
-            f"{tg_emoji('ROCKET', '🚀')} Yuk langsung gunakan saldo ini untuk transaksi Beli/Swap crypto di bot tanpa perlu top-up!"
-        ).replace("{name}", "{name}").replace("{campaign_name}", "{campaign_name}"),
+            "💰 <b>Reward:</b> <code>+{reward}</code>\n"
+            "💳 <b>Saldo Baru Anda:</b> <code>{new_balance}</code>\n\n"
+            "🚀 Yuk langsung gunakan saldo ini untuk transaksi Beli/Swap crypto di bot tanpa perlu top-up!"
+        ),
     },
     "tpl_loyalty_buyers": {
         "key": "tpl_loyalty_buyers",
@@ -52,12 +52,12 @@ CAMPAIGN_TEMPLATES: dict[str, dict[str, Any]] = {
         "default_pool": 500_000,
         "preset_pools": [100_000, 250_000, 500_000, 1_000_000],
         "default_notif": (
-            f"{tg_emoji('PARTY', '🎉')} <b>SELAMAT! REWARD LOYALITAS ANDA CAIR!</b>\n\n"
+            "🎉 <b>SELAMAT! REWARD LOYALITAS ANDA CAIR!</b>\n\n"
             "Halo <b>{name}</b>, sebagai apresiasi atas keaktifan dan loyalitas transaksi Anda, Anda berhasil mendapatkan reward program Loyalty Buyer!\n"
-            f"{tg_emoji('MONEY_BAG', '💰')} <b>Reward:</b> <code>+{{reward}}</code>\n"
-            f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{{new_balance}}</code>\n\n"
-            f"{tg_emoji('SPARKLES', '✨')} Terima kasih telah setia bertransaksi bersama kami. Saldo ini siap langsung digunakan untuk transaksi berikutnya!"
-        ).replace("{name}", "{name}"),
+            "💰 <b>Reward:</b> <code>+{reward}</code>\n"
+            "💳 <b>Saldo Baru Anda:</b> <code>{new_balance}</code>\n\n"
+            "✨ Terima kasih telah setia bertransaksi bersama kami. Saldo ini siap langsung digunakan untuk transaksi berikutnya!"
+        ),
     },
     "tpl_top_spenders": {
         "key": "tpl_top_spenders",
@@ -71,13 +71,13 @@ CAMPAIGN_TEMPLATES: dict[str, dict[str, Any]] = {
         "default_pool": 1_000_000,
         "preset_pools": [250_000, 500_000, 1_000_000, 2_000_000],
         "default_notif": (
-            f"{tg_emoji('TROPHY', '🏆')} <b>SELAMAT! ANDA MASUK TOP TRADER!</b>\n\n"
+            "🏆 <b>SELAMAT! ANDA MASUK TOP TRADER!</b>\n\n"
             "Halo <b>{name}</b>, Anda berhasil masuk jajaran peringkat pemenang <b>{campaign_name}</b>!\n"
-            "🥇 <b>Peringkat Anda:</b> <code>#{{rank}}</code>\n"
-            f"{tg_emoji('MONEY_BAG', '💰')} <b>Reward:</b> <code>+{{reward}}</code>\n"
-            f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{{new_balance}}</code>\n\n"
-            f"{tg_emoji('FIRE', '🔥')} Pertahankan peringkat Anda dan nikmati kemudahan transaksi crypto di bot!"
-        ).replace("{name}", "{name}").replace("{campaign_name}", "{campaign_name}"),
+            "🥇 <b>Peringkat Anda:</b> <code>#{rank}</code>\n"
+            "💰 <b>Reward:</b> <code>+{reward}</code>\n"
+            "💳 <b>Saldo Baru Anda:</b> <code>{new_balance}</code>\n\n"
+            "🔥 Pertahankan peringkat Anda dan nikmati kemudahan transaksi crypto di bot!"
+        ),
     },
     "tpl_flash_random": {
         "key": "tpl_flash_random",
@@ -90,12 +90,12 @@ CAMPAIGN_TEMPLATES: dict[str, dict[str, Any]] = {
         "default_pool": 250_000,
         "preset_pools": [100_000, 250_000, 500_000, 1_000_000],
         "default_notif": (
-            f"{tg_emoji('FIRE', '⚡')} <b>FLASH GIVEAWAY DARI BOT!</b>\n\n"
+            "⚡ <b>FLASH GIVEAWAY DARI BOT!</b>\n\n"
             "Halo <b>{name}</b>, nomor akun Anda beruntung terpilih dalam undian Flash Giveaway!\n"
-            f"{tg_emoji('MONEY_BAG', '💰')} <b>Reward:</b> <code>+{{reward}}</code>\n"
-            f"{tg_emoji('DIAMOND', '💳')} <b>Saldo Baru Anda:</b> <code>{{new_balance}}</code>\n\n"
-            f"{tg_emoji('ROCKET', '🚀')} Saldo langsung aktif dan dapat Anda gunakan untuk transaksi sekarang juga!"
-        ).replace("{name}", "{name}"),
+            "💰 <b>Reward:</b> <code>+{reward}</code>\n"
+            "💳 <b>Saldo Baru Anda:</b> <code>{new_balance}</code>\n\n"
+            "🚀 Saldo langsung aktif dan dapat Anda gunakan untuk transaksi sekarang juga!"
+        ),
     },
 }
 
