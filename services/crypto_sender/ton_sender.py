@@ -95,9 +95,14 @@ class TonSender(BaseCryptoSender):
         return None
 
     # ---------------- Helper tonapi (tanpa API key) ----------------
+    @staticmethod
+    def _tonapi_headers() -> dict:
+        return {"Authorization": f"Bearer {settings.TONAPI_KEY}"} if settings.TONAPI_KEY else {}
+
     async def _tonapi_get(self, path: str, params: dict | None = None):
         async with httpx.AsyncClient(timeout=12.0) as client:
-            res = await client.get(f"{self.api_base}/{path.lstrip('/')}", params=params)
+            res = await client.get(f"{self.api_base}/{path.lstrip('/')}", params=params,
+                                   headers=self._tonapi_headers())
             if res.status_code == 404:
                 raise FileNotFoundError(f"tonapi 404: {path}")
             res.raise_for_status()
@@ -105,7 +110,8 @@ class TonSender(BaseCryptoSender):
 
     async def _tonapi_post(self, path: str, payload: dict) -> httpx.Response:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            return await client.post(f"{self.api_base}/{path.lstrip('/')}", json=payload)
+            return await client.post(f"{self.api_base}/{path.lstrip('/')}", json=payload,
+                                     headers=self._tonapi_headers())
 
     async def _account_status(self) -> str:
         """Status akun wallet (active/uninit/nonexist); 'unknown' bila tidak terbaca."""
@@ -549,23 +555,40 @@ class TonSender(BaseCryptoSender):
             logger.warning("Pengiriman TON v5r1 gagal (%s): %s", type(exc).__name__, str(exc)[:200])
             return SendResult(False, "", f"MANUAL_REVIEW: Pengiriman TON gagal ({type(exc).__name__}).")
 
+    async def _own_jetton_wallet(self) -> str:
+        """Alamat jetton wallet USDT milik kita: toncenter v3, cadangan tonapi (kuota terpisah)."""
+        from services.tx_verifier import _ton_get, ton_address
+
+        try:
+            data = await _ton_get("jetton/wallets", {
+                "owner_address": self.wallet_address,
+                "jetton_address": USDT_JETTON_MASTER,
+                "limit": 10,
+            })
+            matching = [row for row in (data.get("jetton_wallets") or [])
+                        if ton_address(row.get("owner", "")) == ton_address(self.wallet_address)
+                        and ton_address(row.get("jetton", "")) == ton_address(USDT_JETTON_MASTER)]
+            if len(matching) == 1:
+                return matching[0]["address"]
+        except Exception as exc:
+            logger.warning("Jetton wallet via toncenter gagal (%s); beralih ke tonapi.", type(exc).__name__)
+
+        try:
+            data = await self._tonapi_get(f"accounts/{self.wallet_address}/jettons/{USDT_JETTON_MASTER}")
+            address = (data.get("wallet_address") or {}).get("address")
+            if address:
+                return address
+        except FileNotFoundError:
+            pass
+        raise RuntimeError("Wallet Jetton USDT belum terverifikasi.")
+
     async def _jetton_transfer_target(self, to_address: str, quantity: Decimal):
         """Kembalikan (alamat jetton wallet, nilai GRAM pesan, body transfer jetton)."""
         from pytoniq_core.boc import Cell as PyCell
         from tonsdk.contract.token.ft import JettonWallet
         from tonsdk.utils import Address as TonAddress
-        from services.tx_verifier import _ton_get, ton_address
 
-        data = await _ton_get("jetton/wallets", {
-            "owner_address": self.wallet_address,
-            "jetton_address": USDT_JETTON_MASTER,
-            "limit": 10,
-        })
-        matching = [row for row in (data.get("jetton_wallets") or [])
-                    if ton_address(row.get("owner", "")) == ton_address(self.wallet_address)
-                    and ton_address(row.get("jetton", "")) == ton_address(USDT_JETTON_MASTER)]
-        if len(matching) != 1:
-            raise RuntimeError("Wallet Jetton USDT belum terverifikasi.")
+        jetton_wallet = await self._own_jetton_wallet()
 
         body = JettonWallet().create_transfer_body(
             to_address=TonAddress(to_address),
@@ -573,7 +596,7 @@ class TonSender(BaseCryptoSender):
             forward_amount=10_000_000,
             response_address=TonAddress(self.wallet_address),
         )
-        return matching[0]["address"], JETTON_MESSAGE_NANO, PyCell.one_from_boc(bytes(body.to_boc()))
+        return jetton_wallet, JETTON_MESSAGE_NANO, PyCell.one_from_boc(bytes(body.to_boc()))
 
     async def _broadcast_transfer(self, transfer, to_address, amount, symbol, jetton_wallet=""):
         """Broadcast transfer tonsdk (v4r2) lalu tunggu bukti on-chain."""
@@ -608,21 +631,14 @@ class TonSender(BaseCryptoSender):
     async def _send_jetton(self, to_address: str, amount: float) -> SendResult:
         from tonsdk.contract.token.ft import JettonWallet
         from tonsdk.utils import Address as TonAddress
-        from services.tx_verifier import _ton_get, ton_address
         wallet = self._load_wallet()
-        data = await _ton_get("jetton/wallets", {
-            "owner_address": self.wallet_address, "jetton_address": USDT_JETTON_MASTER, "limit": 10})
-        matching = [row for row in data.get("jetton_wallets", [])
-                    if ton_address(row["owner"]) == ton_address(self.wallet_address)
-                    and ton_address(row["jetton"]) == ton_address(USDT_JETTON_MASTER)]
-        if len(matching) != 1:
-            raise RuntimeError("Wallet Jetton USDT belum terverifikasi.")
+        jetton_wallet = await self._own_jetton_wallet()
         seqno = await self._get_seqno(self.wallet_address)
         body = JettonWallet().create_transfer_body(
             to_address=TonAddress(to_address), jetton_amount=int(Decimal(str(amount)) * 10**6),
             forward_amount=10_000_000, response_address=TonAddress(self.wallet_address))
         transfer = wallet.create_transfer_message(
-            to_addr=matching[0]["address"], amount=JETTON_MESSAGE_NANO, seqno=seqno, payload=body)
+            to_addr=jetton_wallet, amount=JETTON_MESSAGE_NANO, seqno=seqno, payload=body)
         return await self._broadcast_transfer(
-            transfer, to_address, float(amount), "USDT", jetton_wallet=matching[0]["address"]
+            transfer, to_address, float(amount), "USDT", jetton_wallet=jetton_wallet
         )

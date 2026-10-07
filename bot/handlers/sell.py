@@ -27,7 +27,7 @@ from telegram.ext import (
 from database.connection import SessionLocal
 from database.crud import create_order, get_order_by_id
 from services.price_service import price_service
-from services.fee_service import calculate_fee_idr, get_fee_category
+from services.fee_service import calculate_fee_idr, get_fee_category, gross_for_net_idr
 from bot.keyboards.crypto_select import (
     get_sell_symbol_keyboard,
     get_sell_network_keyboard
@@ -146,10 +146,10 @@ def _amount_prompt(symbol: str, network: str, mode: str = None):
         text = (
             f"📈 Anda memilih menjual: <b>{symbol} ({network})</b>\n\n"
             f"💵 <b>Mode Nominal Rupiah</b>\n"
-            f"Berapa <b>nilai jual</b> yang Anda inginkan?\n"
+            f"Berapa <b>Rupiah yang ingin Anda terima</b> di rekening?\n"
             f"<i>Ketik nominal Rupiah, contoh: <code>5000</code>, <code>Rp 50.000</code>, atau <code>50k</code>. "
-            f"Jumlah {symbol} dihitung otomatis dari kurs jual saat ini (dibulatkan ke atas ke presisi koin). "
-            f"Nominal ini adalah nilai sebelum fee layanan.</i>"
+            f"Nominal ini yang masuk ke rekening Anda; fee layanan ditambahkan ke jumlah {symbol} yang "
+            f"dikirim (dihitung otomatis dari kurs jual saat ini, dibulatkan ke atas ke presisi koin).</i>"
         )
     elif mode == "COIN":
         text = (
@@ -274,29 +274,47 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         sell_price_idr = price_data["sell_price_idr"]
 
+        fee_category = get_fee_category(symbol)
+
         if rupiah_target is not None:
-            # Mode Rupiah: koin = nilai / kurs jual, dibulatkan KE ATAS ke presisi deposit
-            # agar nilai jual tidak di bawah yang diminta (dan tetap memenuhi minimum order).
+            # Mode Rupiah: nominal yang diketik = yang MASUK rekening (bersih). Fee ditambahkan
+            # di atasnya, jadi koin yang disetor mencakup nominal + fee. Koin dibulatkan KE ATAS
+            # ke presisi deposit agar bersih tidak di bawah nominal yang diminta.
             if not sell_price_idr or sell_price_idr <= 0:
                 raise ValueError(f"Harga {symbol} belum tersedia, coba lagi sebentar")
-            crypto_amount = float(
-                (Decimal(rupiah_target) / Decimal(str(sell_price_idr))).quantize(quantum(symbol), rounding=ROUND_UP))
-            if crypto_amount <= 0:
-                raise ValueError("Nominal Rupiah terlalu kecil. Silakan masukkan nominal yang lebih besar.")
+            min_gross = 0
+            for _ in range(20):
+                target_gross = gross_for_net_idr(
+                    rupiah_target, category=fee_category, symbol=symbol, network=network,
+                    is_outgoing=False, min_gross=min_gross)
+                crypto_amount = float(
+                    (Decimal(target_gross) / Decimal(str(sell_price_idr))).quantize(quantum(symbol), rounding=ROUND_UP))
+                if crypto_amount <= 0:
+                    raise ValueError("Nominal Rupiah terlalu kecil. Silakan masukkan nominal yang lebih besar.")
+                gross_nominal_idr = int(Decimal(str(crypto_amount)) * Decimal(str(sell_price_idr)))
+                fee_idr = calculate_fee_idr(
+                    gross_nominal_idr, category=fee_category, symbol=symbol, network=network,
+                    is_outgoing=False)
+                # Fee dihitung ulang dari gross hasil pembulatan koin; bila tier fee bergeser
+                # sehingga bersih < nominal, naikkan gross dan hitung lagi.
+                if gross_nominal_idr - fee_idr >= rupiah_target:
+                    break
+                min_gross = target_gross + (rupiah_target - (gross_nominal_idr - fee_idr))
+            else:
+                raise ValueError("Nominal tidak dapat dihitung. Silakan coba nominal lain.")
+        else:
+            # Hitung kotor nominal IDR dari koin yang benar-benar disetor
+            gross_nominal_idr = int(Decimal(str(crypto_amount)) * Decimal(str(sell_price_idr)))
 
-        # Hitung kotor nominal IDR dari koin yang benar-benar disetor
-        gross_nominal_idr = int(Decimal(str(crypto_amount)) * Decimal(str(sell_price_idr)))
-        
-        # Hitung fee transaksi (is_outgoing=False -> tanpa surcharge +2k untuk Jual)
-        fee_category = get_fee_category(symbol)
-        fee_idr = calculate_fee_idr(
-            gross_nominal_idr,
-            category=fee_category,
-            symbol=symbol,
-            network=network,
-            is_outgoing=False
-        )
-        
+            # Hitung fee transaksi (is_outgoing=False -> tanpa surcharge +2k untuk Jual)
+            fee_idr = calculate_fee_idr(
+                gross_nominal_idr,
+                category=fee_category,
+                symbol=symbol,
+                network=network,
+                is_outgoing=False
+            )
+
         # Bersih nominal IDR yang diterima customer (Gross - Fee)
         net_nominal_idr = gross_nominal_idr - fee_idr
         if net_nominal_idr <= 0:
@@ -356,7 +374,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     from services.deposit_amount import format_deposit_amount
     rupiah_note = (
         f"• Nominal Diminta: <code>{format_idr(rupiah_target)}</code> "
-        f"<i>(koin dibulatkan ke atas)</i>\n" if rupiah_target is not None else ""
+        f"<i>(fee ditambahkan ke jumlah koin, koin dibulatkan ke atas)</i>\n" if rupiah_target is not None else ""
     )
     await update.message.reply_text(
         text=(

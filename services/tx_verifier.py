@@ -230,6 +230,146 @@ async def _ton_get(path, params):
             _ton_last_request = loop.time()
 
 
+# Cadangan TON: tonapi.io punya kuota terpisah dari toncenter. Satu panggilan /traces
+# menggantikan rangkaian adjacentTransactions toncenter, jadi jauh lebih hemat kuota.
+TONAPI_BASE = "https://tonapi.io/v2"
+_tonapi_lock = asyncio.Lock()
+_tonapi_last_request = 0.0
+
+
+async def _tonapi_get(path, params=None):
+    """GET tonapi.io (serial, 1 req/detik tanpa key). 404 -> FileNotFoundError."""
+    global _tonapi_last_request
+    async with _tonapi_lock:
+        loop = asyncio.get_running_loop()
+        if not settings.TONAPI_KEY:
+            await asyncio.sleep(max(0, 1.05 - (loop.time() - _tonapi_last_request)))
+        headers = {"Authorization": f"Bearer {settings.TONAPI_KEY}"} if settings.TONAPI_KEY else {}
+        last_exc = None
+        try:
+            for attempt in range(3):
+                try:
+                    return await _json("GET", f"{TONAPI_BASE}/{path.lstrip('/')}", params=params, headers=headers)
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 404:
+                        raise FileNotFoundError(f"tonapi 404: {path}") from exc
+                    last_exc = exc
+                    if exc.response.status_code not in (429, 500, 502, 503, 504):
+                        raise
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    last_exc = exc
+                logger.warning("tonapi gagal (percobaan %d/3), coba lagi", attempt + 1)
+                await asyncio.sleep(1.2 * (attempt + 1))
+            raise last_exc
+        finally:
+            _tonapi_last_request = loop.time()
+
+
+def _tonapi_tx_as_indexer(tx):
+    """Ubah transaksi format tonapi ke bentuk toncenter v3 agar bukti on-chain dinilai
+    oleh logika yang sama (_ton_native_evidence + cek internal_transfer jetton)."""
+    def addr(value):
+        return (value or {}).get("address") if isinstance(value, dict) else None
+
+    def body_b64(raw):
+        try:
+            return base64.b64encode(bytes.fromhex(raw)).decode() if raw else ""
+        except ValueError:
+            return ""
+
+    compute = tx.get("compute_phase") or {}
+    skip_reason = str(compute.get("skip_reason") or "")
+    in_msg = tx.get("in_msg") or {}
+    return {
+        "hash": tx.get("hash", ""),
+        "account": addr(tx.get("account")) or "",
+        "now": tx.get("utime", 0),
+        "emulated": False,
+        "in_msg": {
+            "source": addr(in_msg.get("source")),
+            "destination": addr(in_msg.get("destination")),
+            "value": str(in_msg.get("value") or 0),
+            "opcode": in_msg.get("op_code"),
+            "bounced": bool(in_msg.get("bounced")),
+            "hash": in_msg.get("hash"),
+            "message_content": {"body": body_b64(in_msg.get("raw_body"))},
+        },
+        "out_msgs": [{"hash": m.get("hash"), "bounced": bool(m.get("bounced")),
+                      "opcode": m.get("op_code"), "decoded_opcode": m.get("decoded_op_name")}
+                     for m in tx.get("out_msgs") or []],
+        "description": {
+            "aborted": bool(tx.get("aborted")),
+            "compute_ph": {
+                "skipped": bool(compute.get("skipped")),
+                "reason": "no_state" if skip_reason.endswith("no_state") else (skip_reason or None),
+                "success": bool(compute.get("success")),
+            },
+        },
+    }
+
+
+def _tonapi_trace_txs(trace, limit=40):
+    """Semua transaksi dalam pohon trace tonapi (BFS), format toncenter v3."""
+    queue, found = [trace], []
+    while queue and len(found) < limit:
+        node = queue.pop(0)
+        if node.get("transaction"):
+            found.append(_tonapi_tx_as_indexer(node["transaction"]))
+        queue.extend(node.get("children") or [])
+    return found
+
+
+async def _verify_ton_tonapi(symbol, tx_hash, wallet):
+    try:
+        trace = await _tonapi_get(f"traces/{tx_hash}")
+    except FileNotFoundError:
+        return _fail("Transfer TON masuk belum ditemukan.")
+    if trace.get("emulated") is True:
+        return _fail("Transaksi TON belum berhasil atau bounced.")
+    txs = _tonapi_trace_txs(trace)
+    if symbol == "TON":
+        for tx in txs:
+            evidence = _ton_native_evidence(tx, wallet)
+            if evidence["verified"]:
+                return evidence
+        return _fail("Transfer TON masuk belum ditemukan.")
+
+    try:
+        info = await _tonapi_get(f"accounts/{wallet}/jettons/{NON_EVM_TOKENS['TON']['USDT']}")
+    except FileNotFoundError:
+        return _fail("Wallet Jetton penerima belum terverifikasi.")
+    jetton_wallet = ((info.get("wallet_address") or {}).get("address")) or ""
+    if not jetton_wallet:
+        return _fail("Wallet Jetton penerima belum terverifikasi.")
+    for tx in txs:
+        amount = _jetton_receipt_amount(tx, {ton_address(jetton_wallet)}, wallet)
+        if amount is not None:
+            return _ok(amount[0], tx["now"], normalize_tx_hash("TON", tx["hash"]), amount[1])
+    return _fail("Penerimaan USDT TON belum confirmed; jangan klaim dari request pengiriman saja.")
+
+
+def _jetton_receipt_amount(tx, jetton_wallets, wallet):
+    """(jumlah USDT, alamat pengirim) bila `tx` adalah internal_transfer sukses di jetton
+    wallet milik kita; None bila bukan."""
+    msg = tx.get("in_msg") or {}
+    if not (ton_address(tx["account"]) in jetton_wallets
+            and ton_address(msg.get("destination", tx["account"])) == ton_address(tx["account"])
+            and (tx.get("description") or {}).get("aborted") is False
+            and msg.get("bounced") is False and tx.get("emulated") is not True
+            and str(msg.get("opcode")).lower() in ("0x178d4519", str(0x178d4519))):
+        return None
+    from tonsdk.boc import Cell
+    body = Cell.one_from_boc(base64.b64decode(msg["message_content"]["body"])).begin_parse()
+    if body.read_uint(32) != 0x178d4519:
+        return None
+    body.read_uint(64)  # query id
+    units = body.read_coins()
+    source = body.read_msg_addr().to_string(False)
+    if ton_address(source) == ton_address(wallet):
+        return None
+    return Decimal(units) / 10**6, source
+
+
 EXPLORER_V2_API = "https://api.etherscan.io/v2/api"
 EXPLORER_CHAIN_IDS = {
     "ETH": 1, "BSC": 56, "POLYGON": 137, "BASE": 8453,
@@ -460,7 +600,38 @@ def _ton_native_evidence(tx, wallet):
     return _ok(Decimal(msg["value"]) / 10**9, tx["now"], normalize_tx_hash("TON", tx["hash"]), msg["source"])
 
 
+# Hasil "belum ketemu" dari toncenter bisa karena indeks telat / kuota; layak dicoba di tonapi.
+_TON_RETRY_REASONS = (
+    "Transfer TON masuk belum ditemukan.",
+    "Wallet Jetton penerima belum terverifikasi.",
+    "Penerimaan USDT TON belum confirmed",
+)
+
+
 async def _verify_ton(symbol, tx_hash, wallet):
+    """Toncenter dulu; bila error/kuota habis atau belum ketemu, coba tonapi (kuota terpisah).
+    Penolakan pasti (bounce, gagal, penerima salah) tidak pernah dilonggarkan oleh cadangan."""
+    result, primary_error = None, None
+    try:
+        result = await _verify_ton_indexer(symbol, tx_hash, wallet)
+    except Exception as exc:
+        primary_error = exc
+        logger.warning("Verifikasi TON via toncenter gagal (%s), coba tonapi", type(exc).__name__)
+    if result is not None and (result["verified"] or not result["reason"].startswith(_TON_RETRY_REASONS)):
+        return result
+    try:
+        fallback = await _verify_ton_tonapi(symbol, tx_hash, wallet)
+    except Exception as exc:
+        logger.warning("Verifikasi TON via tonapi gagal (%s)", type(exc).__name__)
+        if result is not None:
+            return result
+        raise primary_error
+    if fallback["verified"] or result is None:
+        return fallback
+    return result
+
+
+async def _verify_ton_indexer(symbol, tx_hash, wallet):
     if symbol == "TON":
         data = await _ton_get("transactions", {"hash": tx_hash, "limit": 1})
         for tx in data.get("transactions", []):
@@ -496,20 +667,9 @@ async def _verify_ton(symbol, tx_hash, wallet):
         if canonical in seen:
             continue
         seen.add(canonical)
-        msg = tx.get("in_msg") or {}
-        if (ton_address(tx["account"]) in addresses
-                and ton_address(msg.get("destination", tx["account"])) == ton_address(tx["account"])
-                and (tx.get("description") or {}).get("aborted") is False
-                and msg.get("bounced") is False and tx.get("emulated") is not True
-                and str(msg.get("opcode")).lower() in ("0x178d4519", str(0x178d4519))):
-            from tonsdk.boc import Cell
-            body = Cell.one_from_boc(base64.b64decode(msg["message_content"]["body"])).begin_parse()
-            if body.read_uint(32) == 0x178d4519:
-                body.read_uint(64)  # query id
-                units = body.read_coins()
-                source = body.read_msg_addr().to_string(False)
-                if ton_address(source) != ton_address(wallet):
-                    return _ok(Decimal(units) / 10**6, tx["now"], canonical, source)
+        receipt = _jetton_receipt_amount(tx, addresses, wallet)
+        if receipt is not None:
+            return _ok(receipt[0], tx["now"], canonical, receipt[1])
         if depth < 2:
             outgoing = {msg["hash"] for msg in tx.get("out_msgs", []) if msg.get("hash")}
             if outgoing:
@@ -608,6 +768,41 @@ async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amo
         return _fail(f"Data blockchain belum dapat diverifikasi ({type(exc).__name__}).")
 
 
+async def _ton_indexer_hashes(symbol, wallet, since):
+    hashes = []
+    if symbol == "TON":
+        data = await _ton_get("transactions", {"account": wallet, "start_utime": since, "limit": 100})
+        for row in data.get("transactions", []):
+            if _ton_native_evidence(row, wallet)["verified"]:
+                hashes.append(normalize_tx_hash("TON", row["hash"]))
+    elif symbol == "USDT":
+        data = await _ton_get("jetton/transfers", {"owner_address": wallet, "direction": "in",
+                              "jetton_master": NON_EVM_TOKENS["TON"]["USDT"], "start_utime": since, "limit": 100})
+        for row in data.get("jetton_transfers", []):
+            hashes.append(normalize_tx_hash("TON", row["transaction_hash"]))
+    return hashes
+
+
+async def _ton_tonapi_hashes(symbol, wallet, since):
+    """Cadangan scan deposit TON lewat tonapi (hash tetap diverifikasi ulang oleh verify_deposit)."""
+    hashes = []
+    if symbol == "TON":
+        data = await _tonapi_get(f"blockchain/accounts/{wallet}/transactions",
+                                 {"limit": 100, "start_date": since})
+        for row in data.get("transactions", []):
+            if _ton_native_evidence(_tonapi_tx_as_indexer(row), wallet)["verified"]:
+                hashes.append(normalize_tx_hash("TON", row["hash"]))
+    elif symbol == "USDT":
+        data = await _tonapi_get(f"accounts/{wallet}/jettons/{NON_EVM_TOKENS['TON']['USDT']}/history",
+                                 {"limit": 100, "start_date": since})
+        for event in data.get("events", []):
+            if any(a.get("status") == "ok" and ton_address(((a.get("JettonTransfer") or {}).get("recipient") or {})
+                                                            .get("address") or "0:" + "0" * 64) == ton_address(wallet)
+                   for a in event.get("actions") or [] if a.get("type") == "JettonTransfer"):
+                hashes.append(normalize_tx_hash("TON", event["event_id"]))
+    return hashes
+
+
 async def _scan_hashes(network, symbol, wallet, limit, not_before):
     since = max(0, int(_timestamp(not_before)) - 120) if not_before is not None else 0
     if network == "SOLANA":
@@ -631,16 +826,13 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
         for row in data.get("data", []):
             yield row.get("txID") or row.get("transaction_id")
     elif network == "TON":
-        if symbol == "TON":
-            data = await _ton_get("transactions", {"account": wallet, "start_utime": since, "limit": 100})
-            for row in data.get("transactions", []):
-                if _ton_native_evidence(row, wallet)["verified"]:
-                    yield normalize_tx_hash("TON", row["hash"])
-        elif symbol == "USDT":
-            data = await _ton_get("jetton/transfers", {"owner_address": wallet, "direction": "in",
-                                  "jetton_master": NON_EVM_TOKENS["TON"]["USDT"], "start_utime": since, "limit": 100})
-            for row in data.get("jetton_transfers", []):
-                yield normalize_tx_hash("TON", row["transaction_hash"])
+        try:
+            hashes = await _ton_indexer_hashes(symbol, wallet, since)
+        except Exception as exc:
+            logger.warning("Scan TON via toncenter gagal (%s), coba tonapi", type(exc).__name__)
+            hashes = await _ton_tonapi_hashes(symbol, wallet, since)
+        for tx_hash in hashes:
+            yield tx_hash
     elif network == "SUI":
         data = await _sui_rpc("suix_queryTransactionBlocks", [
             {"filter": {"ToAddress": wallet}}, None, 100, True])

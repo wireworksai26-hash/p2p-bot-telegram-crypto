@@ -247,6 +247,34 @@ def calculate_fee_idr(
     return base_fee
 
 
+def gross_for_net_idr(
+    net_idr: int,
+    category: str = "ALTCOIN",
+    symbol: str = None,
+    network: str = None,
+    is_outgoing: bool = False,
+    min_gross: int = 0,
+) -> int:
+    """
+    Nominal kotor terkecil (>= min_gross) yang setelah dipotong fee tetap menyisakan
+    minimal `net_idr`. Dipakai Jual mode Rupiah: user ketik 50.000 = yang masuk rekening
+    50.000, fee ditambahkan di atasnya (bukan dipotong dari 50.000).
+
+    Fee berupa tangga (bisa naik/turun di batas tier), jadi dicari iteratif dari bawah:
+    selisih kekurangan ditambahkan ke gross sampai net tercapai.
+    Raise ValueError (dari calculate_fee_idr) bila gross di bawah minimum / di atas batas.
+    """
+    gross = max(int(net_idr) + 3000, int(min_gross))  # 3000 = fee fixed terkecil
+    for _ in range(200):
+        fee = calculate_fee_idr(gross, category=category, symbol=symbol, network=network,
+                                is_outgoing=is_outgoing)
+        shortfall = int(net_idr) - (gross - fee)
+        if shortfall <= 0:
+            return gross
+        gross += shortfall
+    raise ValueError("Nominal tidak dapat dihitung. Silakan coba nominal lain.")
+
+
 def get_fee_category(symbol: str) -> str:
     """
     Menentukan kategori fee berdasarkan simbol koin.

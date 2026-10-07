@@ -69,7 +69,7 @@ GUIDE_TOPICS = {
         "Menu utama → <b>Jual Crypto</b> → pilih koin → pilih <b>jaringan</b> (samakan dengan wallet-mu).\n\n"
         "<b>Langkah 2 — Isi jumlah</b>\n"
         "🪙 <b>Jumlah Koin</b>: contoh <code>0.5</code> atau <code>10</code>.\n"
-        "💵 <b>Nominal Rupiah</b>: contoh <code>Rp 50.000</code>. Bot menghitung koin yang harus dikirim.\n"
+        "💵 <b>Nominal Rupiah</b>: contoh <code>Rp 50.000</code>. Nominal ini yang masuk ke rekeningmu; fee ditambahkan ke koin yang harus dikirim.\n"
         "Minimal nilai jual <b>Rp 5.000</b>.\n\n"
         "<b>Langkah 3 — Isi rekening penerima Rupiah</b>\n"
         "Ketik dengan format: <code>Nama Bank, No Rekening, Atas Nama</code>\n"

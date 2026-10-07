@@ -68,6 +68,7 @@ class Settings:
 
     TON_RPC = (os.getenv("TON_RPC", "https://toncenter.com/api/v2/jsonRPC") or "").strip()
     TON_API_KEY = (os.getenv("TON_API_KEY") or "").strip()
+    TONAPI_KEY = (os.getenv("TONAPI_KEY") or "").strip()
     TON_INDEXER_URL = os.getenv("TON_INDEXER_URL", "https://toncenter.com/api/v3").rstrip("/")
     TRONGRID_API_KEY = (os.getenv("TRONGRID_API_KEY") or "").strip()
     APTOS_INDEXER_URL = os.getenv("APTOS_INDEXER_URL", "https://api.mainnet.aptoslabs.com/v1/graphql")
