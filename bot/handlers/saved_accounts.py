@@ -48,6 +48,7 @@ CHAIN_EMOJIS = {
     "SOLANA": "🟣",
     "TRON": "🔴",
     "SUI": "🔵",
+    "APTOS": "⚫",
     "TON": "💎",
     "BITCOIN": "🟠",
     "OTHER": "🌐",
@@ -58,6 +59,7 @@ CHAIN_TITLES = {
     "SOLANA": "Solana (SOL)",
     "TRON": "Tron (TRC20 / TRX)",
     "SUI": "SUI Network",
+    "APTOS": "Aptos (APT)",
     "TON": "The Open Network (TON)",
     "BITCOIN": "Bitcoin (BTC)",
     "OTHER": "Lainnya",
@@ -89,6 +91,10 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
             [
                 InlineKeyboardButton("➕ TRON (TRC20)", callback_data="act_add_wallet_TRON"),
                 InlineKeyboardButton("➕ TON", callback_data="act_add_wallet_TON"),
+            ],
+            [
+                InlineKeyboardButton("➕ SUI", callback_data="act_add_wallet_SUI"),
+                InlineKeyboardButton("➕ Aptos", callback_data="act_add_wallet_APTOS"),
             ],
             [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
@@ -130,8 +136,9 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
             [
                 InlineKeyboardButton("➕ TON", callback_data="act_add_wallet_TON"),
                 InlineKeyboardButton("➕ SUI", callback_data="act_add_wallet_SUI"),
-                InlineKeyboardButton("⭐ Set Default", callback_data="act_set_default_wallet_menu"),
+                InlineKeyboardButton("➕ Aptos", callback_data="act_add_wallet_APTOS"),
             ],
+            [InlineKeyboardButton("⭐ Set Default", callback_data="act_set_default_wallet_menu")],
             [InlineKeyboardButton("🗑 Hapus Alamat", callback_data="act_del_saved_wallet_menu")],
             [InlineKeyboardButton("🔙 Kembali", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
@@ -582,6 +589,13 @@ async def handle_saved_account_text_input(update: Update, context: ContextTypes.
         # Deteksi format jaringan
         detected = detect_wallet_network(raw_text)
 
+        # Aptos & SUI berformat sama (0x + 64 hex): pilihan tombol user yang menentukan
+        if target_chain == "APTOS" and not detected:
+            if validate_wallet_address(raw_text, "APTOS"):
+                detected = {**NETWORK_PATTERNS["APTOS"]}
+        elif target_chain == "APTOS" and detected and detected["chain_type"] == "SUI":
+            detected = {**NETWORK_PATTERNS["APTOS"]}
+
         # Jika user memilih tombol spesifik (misal Solana), validasi formatnya
         if target_chain and detected and detected["chain_type"] != target_chain:
             keyboard = [[InlineKeyboardButton("Coba Lagi", callback_data=f"act_add_wallet_{target_chain}")]]
@@ -615,6 +629,7 @@ async def handle_saved_account_text_input(update: Update, context: ContextTypes.
             "SOLANA": "SOLANA",
             "TRON": "TRC20",
             "SUI": "SUI",
+            "APTOS": "APTOS",
             "TON": "TON",
             "BITCOIN": "BTC",
         }

@@ -43,7 +43,7 @@ from database.crud import (
     reserve_order_inventory,
     release_order_inventory,
 )
-from services.price_service import price_service, quote_source_text
+from services.price_service import price_service
 from services.fee_service import (
     calculate_fee_idr, get_fee_category, gas_surcharge_note, calculate_qris_mdr, qris_mdr_note,
     is_gas_pair, GAS_PAIR_MIN_IDR,
@@ -444,11 +444,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return INPUT_AMOUNT
 
-        quote_info = ""
-        try:
-            quote_info = f"\nℹ️ <i>{quote_source_text(price_data)}</i>"
-        except Exception:
-            pass
 
         # Ambil daftar alamat wallet tersimpan milik user untuk network ini
         user_id = update.effective_user.id
@@ -477,7 +472,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"• Nominal Bayar: <code>{format_idr(nominal_idr)}</code>\n"
                 f"• Fee Layanan (dipotong): {fee_display}"
                 f"{discount_note}"
-                f"{quote_info}"
                 f"{gas_surcharge_note(symbol, network)}"
                 f"{qris_mdr_note(nominal_idr)}\n\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"

@@ -44,6 +44,15 @@ NETWORK_PATTERNS: dict[str, dict] = {
         "emoji": "🔵",
         "label": "SUI",
     },
+    # Format sama dengan SUI (0x + 64 hex) sehingga TIDAK ikut auto-detect;
+    # hanya dipakai bila user memilih tombol Aptos secara eksplisit.
+    "APTOS": {
+        "chain_type": "APTOS",
+        "chains": ["APTOS"],
+        "pattern": re.compile(r"^0x[a-fA-F0-9]{60,64}$"),
+        "emoji": "⚫",
+        "label": "Aptos (APT)",
+    },
     "TON": {
         "chain_type": "TON",
         "chains": ["TON"],
@@ -76,6 +85,7 @@ NETWORK_DISPLAY = {
     "SOLANA":   "Solana",
     "TRC20":    "Tron (TRC20)",
     "SUI":      "SUI",
+    "APTOS":    "Aptos",
     "TON":      "TON",
     "BTC":      "Bitcoin",
 }
@@ -140,6 +150,7 @@ def validate_wallet_address(address: str, network: str) -> bool:
         "SOLANA": "SOLANA",
         "TRC20": "TRON", "TRON": "TRON",
         "SUI": "SUI",
+        "APTOS": "APTOS", "APT": "APTOS",
         "TON": "TON",
         "BTC": "BITCOIN", "BITCOIN": "BITCOIN",
     }
@@ -182,6 +193,7 @@ def get_chain_type_for_network(network: str) -> Optional[str]:
         "SOLANA": "SOLANA",
         "TRC20": "TRON", "TRON": "TRON",
         "SUI": "SUI",
+        "APTOS": "APTOS", "APT": "APTOS",
         "TON": "TON",
         "BTC": "BITCOIN", "BITCOIN": "BITCOIN",
     }

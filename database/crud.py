@@ -1946,6 +1946,9 @@ def get_user_saved_wallets(db: Session, telegram_id: int, network: str = None) -
     for w in wallets:
         if w.network and w.network.upper() == net_upper:
             matched.append(w)
+        elif {(w.network or "").upper(), net_upper} == {"SUI", "APTOS"}:
+            # Format alamat identik; pilihan jaringan user tidak boleh tertukar.
+            continue
         elif not w.network or w.network.upper() in ["ALL", "EVM"]:
             if validate_wallet_address(w.wallet_address, net_upper):
                 matched.append(w)

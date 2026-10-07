@@ -77,7 +77,7 @@ def validate_wallet_address(address: str, network: str) -> bool:
 
     # --- 6. APTOS ---
     elif net == "APTOS":
-        return bool(re.fullmatch(r"0x[0-9a-fA-F]{1,64}", address))
+        return bool(re.fullmatch(r"0x[0-9a-fA-F]{60,64}", address))
 
     return False
 
