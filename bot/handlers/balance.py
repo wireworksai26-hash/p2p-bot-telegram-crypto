@@ -37,6 +37,7 @@ from database.crud import (
 from services.gopay_service import gopay_service
 from services.fee_service import calculate_qris_mdr
 from bot.keyboards.main_menu import get_owner_button
+from bot.handlers.withdraw import withdraw_button_for
 from bot.utils.formatter import format_idr
 from bot.utils.flow_guard import block_if_busy
 from bot.utils.validator import validate_amount_idr
@@ -67,6 +68,8 @@ WAITING_CUSTOM_NOMINAL = 2
 async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menampilkan tampilan Cek Saldo & Profil User."""
     user = update.effective_user
+    for key in ("awaiting_withdraw_amount", "wd_bank_id", "wd_amount"):
+        context.user_data.pop(key, None)
     db = SessionLocal()
     try:
         balance = get_user_balance(db, user.id)
@@ -84,6 +87,7 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("Topup Saldo (QRIS)", callback_data="start_topup_qris", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("PLUS", "5204256218100547827"))],
+        [withdraw_button_for(balance)],
         [
             InlineKeyboardButton("👛 Alamat Wallet", callback_data="menu_saved_wallets"),
             InlineKeyboardButton("🏦 Rekening Pencairan", callback_data="menu_saved_banks"),

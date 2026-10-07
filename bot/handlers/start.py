@@ -352,6 +352,34 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.swap import start_swap
         await start_swap(update, context)
 
+    elif data == "wd_locked":
+        from bot.handlers.withdraw import withdraw_locked_handler
+        await withdraw_locked_handler(update, context)
+
+    elif data == "wd_start":
+        from bot.handlers.withdraw import withdraw_start_handler
+        await withdraw_start_handler(update, context)
+
+    elif data.startswith("wd_bank_"):
+        from bot.handlers.withdraw import withdraw_bank_selected_handler
+        await withdraw_bank_selected_handler(update, context)
+
+    elif data == "wd_all":
+        from bot.handlers.withdraw import withdraw_all_handler
+        await withdraw_all_handler(update, context)
+
+    elif data == "wd_custom":
+        from bot.handlers.withdraw import withdraw_custom_prompt_handler
+        await withdraw_custom_prompt_handler(update, context)
+
+    elif data == "wd_confirm":
+        from bot.handlers.withdraw import withdraw_confirm_handler
+        await withdraw_confirm_handler(update, context)
+
+    elif data.startswith(("admin_wd_ok_", "admin_wd_no_")):
+        from bot.handlers.withdraw import admin_withdraw_callback
+        await admin_withdraw_callback(update, context)
+
     elif data == "start_topup_qris":
         from bot.handlers.balance import start_topup_callback
         await start_topup_callback(update, context)

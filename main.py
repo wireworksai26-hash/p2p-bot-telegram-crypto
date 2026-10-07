@@ -607,6 +607,11 @@ async def _route_admin_text(update: Update, context) -> None:
         if handled:
             return
 
+    if context.user_data.get("awaiting_withdraw_amount"):
+        from bot.handlers.withdraw import handle_withdraw_amount_text
+        if await handle_withdraw_amount_text(update, context):
+            return
+
     user_id = update.effective_user.id
     from bot.handlers.admin import is_admin
     if not is_admin(user_id):

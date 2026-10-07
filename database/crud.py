@@ -1375,6 +1375,93 @@ def deduct_user_balance(db: Session, telegram_id: int, amount_idr: float) -> boo
         raise
 
 
+WITHDRAW_MIN_IDR = 10_000
+
+
+def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int):
+    """Potong saldo dan buat permintaan withdraw dalam SATU transaksi.
+
+    Return WithdrawRequest, atau None bila saldo tidak cukup / nominal di bawah minimum.
+    """
+    from database.models import WithdrawRequest
+
+    amount = int(amount_idr)
+    if amount < WITHDRAW_MIN_IDR:
+        return None
+    try:
+        changed = db.query(User).filter(
+            User.telegram_id == telegram_id,
+            func.coalesce(User.balance_idr, 0) >= amount,
+        ).update({User.balance_idr: func.coalesce(User.balance_idr, 0) - amount},
+                 synchronize_session=False)
+        if changed != 1:
+            db.rollback()
+            return None
+        req = WithdrawRequest(
+            telegram_id=telegram_id,
+            amount_idr=amount,
+            bank_name=bank.bank_name,
+            account_number=bank.account_number,
+            account_name=bank.account_name,
+        )
+        db.add(req)
+        db.add(AuditLog(
+            telegram_id=telegram_id,
+            action="WITHDRAW_REQUEST",
+            to_status="PENDING",
+            details=f"Withdraw Rp {amount:,} ke {bank.bank_name} {bank.account_number}.",
+        ))
+        db.commit()
+        db.refresh(req)
+        return req
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal membuat withdraw request user %s", telegram_id)
+        raise
+
+
+def get_withdraw_request(db: Session, request_id: int):
+    from database.models import WithdrawRequest
+
+    return db.query(WithdrawRequest).filter(WithdrawRequest.id == request_id).first()
+
+
+def settle_withdraw_request(db: Session, request_id: int, admin_id: int, approve: bool) -> bool:
+    """Tandai withdraw PAID, atau REJECTED + refund saldo. False bila sudah diproses (idempoten)."""
+    from database.models import WithdrawRequest
+
+    try:
+        changed = db.query(WithdrawRequest).filter(
+            WithdrawRequest.id == request_id,
+            WithdrawRequest.status == "PENDING",
+        ).update({
+            "status": "PAID" if approve else "REJECTED",
+            "handled_by": admin_id,
+            "handled_at": datetime.utcnow(),
+        }, synchronize_session=False)
+        if changed != 1:
+            db.rollback()
+            return False
+        req = db.query(WithdrawRequest).filter(WithdrawRequest.id == request_id).first()
+        if not approve:
+            db.query(User).filter(User.telegram_id == req.telegram_id).update(
+                {User.balance_idr: func.coalesce(User.balance_idr, 0) + int(req.amount_idr)},
+                synchronize_session=False)
+        db.add(AuditLog(
+            telegram_id=req.telegram_id,
+            action="WITHDRAW_PAID" if approve else "WITHDRAW_REJECTED_REFUND",
+            from_status="PENDING",
+            to_status="PAID" if approve else "REJECTED",
+            details=f"Admin {admin_id} {'mencairkan' if approve else 'menolak & refund'} withdraw #{request_id} Rp {int(req.amount_idr):,}.",
+        ))
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal settle withdraw #%s", request_id)
+        raise
+
+
 def create_topup_order(
     db: Session,
     topup_id: str,

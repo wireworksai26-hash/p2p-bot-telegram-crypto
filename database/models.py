@@ -393,6 +393,23 @@ class UserSavedBank(Base):
     user = relationship("User", backref="saved_banks")
 
 
+class WithdrawRequest(Base):
+    """Permintaan penarikan saldo IDR ke rekening/e-wallet. Saldo dipotong saat dibuat; refund bila ditolak."""
+    __tablename__ = 'withdraw_requests'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    amount_idr = Column(BigInteger, nullable=False)
+    # Snapshot tujuan: tetap benar walau rekening tersimpan kemudian dihapus user.
+    bank_name = Column(String(50), nullable=False)
+    account_number = Column(String(50), nullable=False)
+    account_name = Column(String(100), nullable=False)
+    status = Column(String(15), default='PENDING', nullable=False, index=True)  # PENDING, PAID, REJECTED
+    handled_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    handled_at = Column(DateTime, nullable=True)
+
+
 # ─────────────────────────────────────────────────────────
 #  Phase 7: Advanced Rewards, Loyalty & Enhanced Wallet
 # ─────────────────────────────────────────────────────────
