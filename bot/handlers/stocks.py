@@ -86,7 +86,7 @@ STOCK_CARDS = [
     ("ETH + CHAIN", "ETH"),
 ]
 OTHER_CARD_TITLE = "Token Lainnya"
-STOCK_FOOTER = "\n<i>⚠️ Data lama / gagal dibaca tidak dihitung sebagai stok terverifikasi.</i>"
+STOCK_FOOTER = ""
 
 
 def format_stock_qty(balance: float) -> str:
