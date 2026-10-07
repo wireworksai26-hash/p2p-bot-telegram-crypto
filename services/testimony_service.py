@@ -117,7 +117,10 @@ def format_testimony_message(
         tx_type_label = "Swap"
         t_sym = (target_symbol or "").upper()
         t_net = (target_network or "").upper()
-        coin_label = f"{crypto_symbol.upper()} -> {t_sym} ({t_net})".strip()
+        s_net = (network or "").upper()
+        src_label = f"{crypto_symbol.upper()} ({s_net})" if s_net else crypto_symbol.upper()
+        dst_label = f"{t_sym} ({t_net})" if t_net else t_sym
+        coin_label = f"{src_label} -> {dst_label}".strip()
     else:
         tx_type_label = order_type.capitalize()
         coin_label = f"{crypto_symbol.upper()} {network.upper()}".strip()

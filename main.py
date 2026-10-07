@@ -22,7 +22,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-from telegram import BotCommand, BotCommandScopeChat, Update
+from telegram import BotCommand, Update
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
@@ -443,44 +443,10 @@ BOT_COMMAND_MENU = [
     ("cancel", "Membatalkan transaksi"),
 ]
 
-# Menu tombol ☰ khusus admin (muncul saat mengetik "/"). Hanya dipasang untuk ADMIN_CHAT_IDS
-# dan grup admin; user biasa tetap melihat BOT_COMMAND_MENU. Urutan = urutan tampil.
-ADMIN_COMMAND_MENU = [
-    ("admin", "Dashboard admin (semua menu)"),
-    ("orders", "Antrean order"),
-    ("sellorders", "Dashboard order Jual crypto"),
-    ("confirm", "Konfirmasi order selesai: /confirm ORDER_ID"),
-    ("verifysell", "Cek ulang deposit Jual: /verifysell ORDER_ID"),
-    ("stats", "Statistik & volume transaksi"),
-    ("report", "Laporan mingguan"),
-    ("refreshwallet", "Sinkron saldo wallet stok"),
-    ("setspread", "Atur spread harga: /setspread KOIN PERSEN"),
-    ("credit", "Kirim saldo bot ke user"),
-    ("topupbot", "Top up kas bot"),
-    ("topupqris", "Top up kas bot via QRIS"),
-    ("campaign", "Campaign & giveaway"),
-    ("setreferral", "Atur program referral"),
-    ("broadcast", "Siaran pesan ke semua user"),
-    ("ban", "Blokir user: /ban USER_ID"),
-    ("unban", "Buka blokir user: /unban USER_ID"),
-    ("testtesti", "Tes koneksi channel testimoni"),
-    ("posttesti", "Posting testimoni order: /posttesti ORDER_ID"),
-    ("postlasttesti", "Posting testimoni order selesai terakhir"),
-    ("targets", "Daftar tujuan notifikasi admin"),
-    ("checkapi", "Cek status API & RPC"),
-    ("chatid", "Lihat chat ID ini"),
-    ("txhash", "Kirim TX Hash deposit Jual/Convert"),
-    ("start", "Menu utama bot"),
-    ("cancel", "Membatalkan proses berjalan"),
-]
-
-
-def admin_menu_chat_ids() -> list:
-    """Chat yang mendapat menu admin: tiap admin + grup admin (bila diatur), tanpa duplikat."""
-    ids = list(settings.ADMIN_CHAT_IDS)
-    if settings.ADMIN_GROUP_ID:
-        ids.append(settings.ADMIN_GROUP_ID)
-    return list(dict.fromkeys(ids))
+# Menu ☰ khusus admin: daftar & pemasangannya ada di bot/utils/command_menu.py
+from bot.utils.command_menu import (  # noqa: E402
+    ADMIN_COMMAND_MENU, admin_menu_chat_ids, apply_admin_command_menu,
+)
 
 
 async def set_bot_commands(application: Application) -> None:
@@ -513,11 +479,10 @@ async def set_bot_commands(application: Application) -> None:
 
     # Menu admin per chat. Gagal di satu chat (mis. admin belum pernah /start ke bot) tidak
     # menghentikan chat lain.
-    admin_commands = [BotCommand(cmd, desc) for cmd, desc in ADMIN_COMMAND_MENU]
     for chat_id in admin_menu_chat_ids():
         try:
-            await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id))
-            logger.info("Menu admin (%d perintah) terpasang untuk chat %s", len(admin_commands), chat_id)
+            count = await apply_admin_command_menu(application.bot, chat_id)
+            logger.info("Menu admin (%d perintah) terpasang untuk chat %s", count, chat_id)
         except Exception as exc:
             logger.warning("Menu admin gagal dipasang untuk chat %s: %s (admin perlu /start ke bot dulu)",
                            chat_id, exc)
@@ -552,6 +517,8 @@ def build_bot_application() -> Application:
     from telegram.ext import TypeHandler
     from bot.utils.ban_guard import ban_gate
     from bot.utils.maintenance_guard import maintenance_gate
+    from bot.utils.edit_guard import edited_command_gate
+    application.add_handler(TypeHandler(Update, edited_command_gate), group=-3)
     application.add_handler(TypeHandler(Update, maintenance_gate), group=-2)
     application.add_handler(TypeHandler(Update, ban_gate), group=-1)
 
@@ -561,6 +528,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("harga", show_prices))
     application.add_handler(CommandHandler("balance", show_balance_menu))
     application.add_handler(CommandHandler("admin", admin_handler))
+    from bot.handlers.admin import refresh_menu_command_handler
+    application.add_handler(CommandHandler("refreshmenu", refresh_menu_command_handler))
     application.add_handler(CommandHandler("setspread", setspread_handler))
     application.add_handler(CommandHandler("orders", orders_handler))
     from bot.handlers.admin import sellorders_handler
