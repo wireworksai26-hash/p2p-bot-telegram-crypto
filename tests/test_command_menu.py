@@ -37,7 +37,8 @@ class TestCommandMenu(unittest.IsolatedAsyncioTestCase):
     async def test_post_init_mendaftarkan_menu(self):
         app = SimpleNamespace(bot=SimpleNamespace(set_my_commands=AsyncMock()))
         await set_bot_commands(app)
-        cmds = app.bot.set_my_commands.await_args.args[0]
+        # Panggilan pertama = menu default semua user; panggilan berikutnya = menu admin per chat.
+        cmds = app.bot.set_my_commands.await_args_list[0].args[0]
         self.assertEqual(
             [(c.command, c.description) for c in cmds],
             BOT_COMMAND_MENU,
