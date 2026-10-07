@@ -260,7 +260,17 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.admin import _clear_reward_flags
         _clear_reward_flags(context)
 
-    if data == "menu_snk":
+    if data == "menu_guide" or (data and data.startswith("guide_")):
+        # Panduan transaksi user (Beli / Jual / Convert, cara dapat TX Hash, kendala umum)
+        from bot.utils.user_guide import guide_index, guide_topic
+        page = guide_index() if data == "menu_guide" else guide_topic(data[len("guide_"):])
+        if page is None:
+            await query.answer("Topik panduan tidak ditemukan.", show_alert=True)
+        else:
+            guide_text, guide_markup = page
+            await query.edit_message_text(text=guide_text, reply_markup=guide_markup, parse_mode="HTML")
+
+    elif data == "menu_snk":
         # Tampilkan Syarat & Ketentuan
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         keyboard = [

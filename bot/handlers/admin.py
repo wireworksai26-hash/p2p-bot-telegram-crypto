@@ -81,6 +81,9 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
             InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
         ],
         [
+            InlineKeyboardButton("📖 Panduan Admin", callback_data="admin_panel_guide"),
+        ],
+        [
             InlineKeyboardButton("❌ Tutup Panel", callback_data="admin_panel_close"),
         ],
     ]
@@ -1346,6 +1349,23 @@ async def topup_qris_command_handler(update: Update, context: ContextTypes.DEFAU
 
 
 
+async def guide_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/panduan: admin -> panduan fitur admin; user biasa -> panduan cara transaksi."""
+    if is_admin(update.effective_user.id):
+        from bot.utils.admin_guide import guide_index
+    else:
+        from bot.utils.user_guide import guide_index
+    text, markup = guide_index()
+    await update.effective_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+
+async def user_guide_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bantuan: panduan cara transaksi (Beli / Jual / Convert) untuk siapa saja, termasuk admin."""
+    from bot.utils.user_guide import guide_index
+    text, markup = guide_index()
+    await update.effective_message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+
 async def refresh_menu_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/refreshmenu: pasang ulang menu ☰ admin (chat ini + semua admin) dan laporkan hasilnya."""
     if not is_admin(update.effective_user.id):
@@ -2497,6 +2517,16 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML",
             )
             await query.answer("✅ File laporan .CSV berhasil dikirim!", show_alert=True)
+
+        elif data == "admin_panel_guide" or data.startswith("admin_panel_guide_"):
+            from bot.utils.admin_guide import guide_index, guide_topic
+            page = guide_index() if data == "admin_panel_guide" else guide_topic(data[len("admin_panel_guide_"):])
+            if page is None:
+                await query.answer("Topik panduan tidak ditemukan.", show_alert=True)
+            else:
+                text, markup = page
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+                await query.answer()
 
         elif data == "admin_panel_close":
             await query.answer("Panel ditutup.")
