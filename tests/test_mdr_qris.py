@@ -114,6 +114,17 @@ class TestMdrBuyQris(unittest.IsolatedAsyncioTestCase):
         caption = context.bot.send_photo.call_args.kwargs.get("caption", "")
         self.assertIn("Pajak QRIS 0,3%", caption)
 
+    async def test_instruksi_qris_menjelaskan_kode_unik_di_langkah_2(self):
+        """User tidak boleh bingung dengan angka kode unik di belakang nominal QRIS."""
+        context, _ = await self._async_confirm(50_000, "GOPAY_QRIS")
+        caption = context.bot.send_photo.call_args.kwargs.get("caption", "")
+        kalimat = "Kode Unik pembayaran digunakan untuk biaya pengecekan transaksi QRIS otomatis."
+        self.assertIn(kalimat, caption)
+        # Penjelasan berada tepat di bawah langkah 2 dan sebelum langkah 3.
+        self.assertLess(caption.index("2. Nominal"), caption.index(kalimat))
+        self.assertLess(caption.index(kalimat), caption.index("3. Selesaikan"))
+        self.assertEqual(caption.count(kalimat), 1)
+
     async def _async_confirm(self, nominal, method):
         query = AsyncMock()
         query.data = "buy_confirm"

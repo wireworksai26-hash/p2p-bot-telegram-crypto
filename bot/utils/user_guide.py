@@ -8,6 +8,7 @@ dicek tes terhadap handler yang benar-benar terdaftar. Gunakan &lt; &gt; untuk k
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.keyboards.main_menu import get_owner_button
+from config.settings import settings
 
 GUIDE_INDEX_TEXT = (
     "📖 <b>PANDUAN TRANSAKSI</b>\n\n"
@@ -56,7 +57,9 @@ GUIDE_TOPICS = {
         "<b>Langkah 6 — Konfirmasi &amp; bayar</b>\n"
         "Cek ringkasan lalu tekan <b>Konfirmasi &amp; Bayar</b>. Untuk QRIS, bayar "
         "<b>persis sesuai total yang tampil</b> (sudah termasuk pajak QRIS dan angka kode unik di belakang, jangan dibulatkan) "
-        "sebelum waktunya habis (15 menit).\n\n"
+        f"sebelum waktunya habis ({settings.ORDER_EXPIRE_MINUTES} menit).\n"
+        "Kode unik di belakang nominal dipakai untuk pengecekan pembayaran QRIS otomatis, "
+        "jadi tetap bayar persis sesuai total.\n\n"
         "<b>Selesai!</b> Bot mengirim koin otomatis ke wallet-mu dan menampilkan TX Hash serta link explorer. "
         "Jika belum ada kabar setelah membayar, tekan <b>Cek Ulang</b>."
     )),
@@ -156,7 +159,7 @@ GUIDE_TOPICS = {
         "☑️ Simpan <b>Order ID</b> pesananmu (cek di <b>Riwayat Transaksi</b>).\n"
         "☑️ Jangan buat pesanan ganda untuk transaksi yang sama.\n\n"
         "<b>Waktu penting</b>\n"
-        "• QRIS Beli: bayar dalam <b>15 menit</b>.\n"
+        f"• QRIS Beli: bayar dalam <b>{settings.ORDER_EXPIRE_MINUTES} menit</b>.\n"
         "• Simulasi Jual/Convert berlaku <b>30 menit</b>. Koin yang sudah dikirim tetap bisa "
         "diverifikasi sampai <b>24 jam</b>.\n"
         "• Rupiah Jual dicairkan pada jam layanan <b>08.00 – 22.00 WIB</b>.\n\n"
