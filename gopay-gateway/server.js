@@ -189,7 +189,7 @@ function generateDynamicQRIS(staticTemplate, amount) {
 }
 
 // Middleware Proteksi API Key (header saja, constant-time; key lemah = gateway tidak start)
-const apiKeyAuth = makeApiKeyAuth(assertStrongApiKey(process.env.API_KEY));
+const apiKeyAuth = makeApiKeyAuth(assertStrongApiKey(process.env.API_KEY || process.env.GOPAY_API_KEY));
 
 const app = express();
 // Tanpa CORS global: hanya bot (server-side) yang memanggil API; halaman /qr same-origin.

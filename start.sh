@@ -20,11 +20,11 @@ except Exception as e:
     print('ℹ️ [GOPAY] Info sync DB startup:', e)
 " 2>/dev/null || true
 
-# 2. API key gateway: tanpa nilai default yang bisa ditebak. Bila env kosong, buat key
-#    acak per boot — bot & gateway sama-sama berjalan di container ini (PM2 mewarisi env).
-if [ -z "$GOPAY_API_KEY" ]; then
+# 2. API key gateway: tanpa nilai default yang bisa ditebak. Bila env kosong atau terlalu pendek (<24 char),
+#    buat key acak per boot — bot & gateway sama-sama berjalan di container ini (PM2 mewarisi env).
+if [ -z "$GOPAY_API_KEY" ] || [ ${#GOPAY_API_KEY} -lt 24 ]; then
     GOPAY_API_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
-    echo "🔐 [GOPAY] GOPAY_API_KEY kosong — key acak dibuat untuk sesi ini."
+    echo "🔐 [GOPAY] GOPAY_API_KEY kosong/terlalu pendek (<24 karakter) — key acak kuat dibuat untuk sesi ini."
 fi
 export GOPAY_API_KEY
 
