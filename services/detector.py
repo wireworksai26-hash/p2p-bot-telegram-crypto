@@ -32,6 +32,7 @@ from services import tx_verifier
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto, format_idr
 from bot.utils.telegram_utils import safe_send_message, notify_admins
+from bot.utils.manual_payout import manual_payout_button
 
 # Alasan verifikasi yang permanen: hash tidak akan pernah jadi deposit sah.
 # Hash seperti ini dilepas dari order (sekali) agar tidak diverifikasi ulang
@@ -553,9 +554,15 @@ class DepositDetector:
                             f"Error: {order.failure_reason}\n\n"
                             f"TX payout: <code>{order.payout_tx_hash or '-'}</code>\n"
                             "Periksa receipt dan riwayat wallet terlebih dahulu. "
-                            "Jangan kirim ulang jika status broadcast belum pasti."
+                            "Jangan kirim ulang jika status broadcast belum pasti.\n"
+                            "Jika koin dikirim manual, tekan tombol di bawah dan kirim SS transfer "
+                            "agar diteruskan ke user."
                         )
-                        await notify_admins(bot_app, admin_msg, kind="convert")
+                        await notify_admins(
+                            bot_app, admin_msg,
+                            reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
+                            kind="convert", butuh_tindakan=True,
+                        )
                         await safe_send_message(
                             bot_app,
                             order.telegram_id,

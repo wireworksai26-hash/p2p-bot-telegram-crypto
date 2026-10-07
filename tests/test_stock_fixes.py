@@ -342,7 +342,7 @@ class Presentation(unittest.TestCase):
             self.assertEqual(page.count("<i>"), page.count("</i>"))
             self.assertEqual(page.count("<blockquote expandable>"), page.count("</blockquote>"))
         text = "\n".join(pages)
-        # Satu ⚠️ per baris non-manual (footer sudah dihapus); MORPH tampil "Manual" tanpa error.
+        # Satu ⚠️ per baris non-manual (footer sudah dihapus).
         non_manual = [net for _, net in STOCK_ASSETS if net not in stocks.MANUAL_PAYOUT_NETWORKS]
         self.assertEqual(text.count("⚠️"), len(non_manual))
         self.assertNotIn("Data lama / gagal dibaca tidak dihitung", text)

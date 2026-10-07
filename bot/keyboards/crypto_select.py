@@ -14,8 +14,8 @@ from bot.utils.emojis import (
 # Mapping simbol ke daftar network yang tersedia untuk Beli/Jual Crypto
 BUY_NETWORKS_BY_SYMBOL = {
     "USDT": ["BSC", "POLYGON", "ARB", "TON", "SOLANA", "ETH"],
-    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON", "MORPH"],
-    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH", "MORPH"],
+    "USDC": ["BASE", "ETH", "BSC", "ARB", "SOLANA", "POLYGON"],
+    "ETH": ["BASE", "ARB", "OPTIMISM", "ROBINHOOD", "ETH"],
     "SOL": ["SOLANA"],
     "TRX": ["TRON"],
     "BNB": ["BSC"],
@@ -102,7 +102,7 @@ def get_sell_network_keyboard(symbol: str) -> InlineKeyboardMarkup:
 
 
 def sell_networks(symbol: str) -> list:
-    """Jaringan Jual = jaringan Beli yang depositnya bisa diverifikasi on-chain (tanpa MORPH dll)."""
+    """Jaringan Jual = jaringan Beli yang depositnya bisa diverifikasi on-chain."""
     from services.tx_verifier import deposit_verifiable
     symbol = (symbol or "").upper()
     return [net for net in BUY_NETWORKS_BY_SYMBOL.get(symbol, ["BSC"]) if deposit_verifiable(net, symbol)]

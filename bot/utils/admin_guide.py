@@ -115,7 +115,7 @@ GUIDE_TOPICS = {
         "• Teks: <code>/broadcast Halo member...</code>\n"
         "• Segmen: tambahkan <code>--all</code>, <code>--active</code>, <code>--buyers</code>, atau "
         "<code>--balance</code> di depan teks.\n"
-        "• Koin ready: <code>/broadcast --ready Morph</code> (format otomatis).\n"
+        "• Koin ready: <code>/broadcast --ready Base</code> (format otomatis).\n"
         "• Foto: kirim poster dengan caption diawali <code>/broadcast ...</code>, atau balas foto dengan "
         "<code>/broadcast ...</code>.\n\n"
         "💡 Kirim perintah sebagai pesan <b>baru</b>. Mengedit pesan perintah tidak menjalankan ulang "

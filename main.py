@@ -680,6 +680,13 @@ async def _route_transfer_proof(update: Update, context) -> None:
             await handle_admin_upload_proof(update, context)
             return
 
+    # Admin mengirim SS transfer manual untuk payout buy/convert yang gagal
+    if context.user_data.get("admin_awaiting_payout_proof_order_id"):
+        from bot.handlers.admin import handle_admin_payout_proof, is_admin
+        if is_admin(user_id):
+            await handle_admin_payout_proof(update, context)
+            return
+
     db = SessionLocal()
     try:
         if get_pending_gopay_order_for_user(db, user_id):

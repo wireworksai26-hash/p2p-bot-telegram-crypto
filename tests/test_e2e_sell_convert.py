@@ -16,7 +16,7 @@ Covers:
 
 2. Convert (Swap) Flow:
    - Currency & network selection (including bridge mode)
-   - Guard against target network in MANUAL_PAYOUT_NETWORKS (e.g. MORPH)
+   - Guard against target network in MANUAL_PAYOUT_NETWORKS
    - Server-side guard against exact same coin & network
    - Amount parser: Crypto amounts, IDR (dot, k, rb, jt, Rp), USD ($10, 10 usd, 25 usdt)
    - Convert fee tier, gas surcharge (+Rp 2.500 for gas pairs), target crypto amount
@@ -439,16 +439,17 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
         }
 
     async def test_convert_selection_guards(self):
-        """Uji guard pemilihan convert: jaringan manual MORPH ditolak, bridge beda jaringan diizinkan."""
+        """Uji guard pemilihan convert: jaringan manual ditolak, bridge beda jaringan diizinkan."""
         query = AsyncMock()
-        query.data = "swap_tgt_net_MORPH"
+        query.data = "swap_tgt_net_ROBINHOOD"
         query.edit_message_text = AsyncMock()
         update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=self.user_id))
         context = SimpleNamespace(
             user_data={"swap_src_symbol": "ETH", "swap_src_network": "ETH", "swap_tgt_symbol": "ETH"}
         )
 
-        res = await swap_select_tgt_net(update, context)
+        with patch("bot.handlers.swap.MANUAL_PAYOUT_NETWORKS", {"ROBINHOOD"}):
+            res = await swap_select_tgt_net(update, context)
         self.assertEqual(res, -1)  # ConversationHandler.END
         call_msg = query.edit_message_text.call_args.args[0]
         self.assertIn("belum tersedia", call_msg)

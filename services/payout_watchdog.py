@@ -11,11 +11,14 @@ import logging
 import re
 from datetime import datetime, timedelta
 
+from telegram import InlineKeyboardMarkup
+
 from database.connection import SessionLocal
 from database.models import Order
 from database import crud
 from bot.utils.telegram_utils import notify_admins, safe_send_message
 from bot.utils.formatter import format_crypto
+from bot.utils.manual_payout import manual_payout_button
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +256,10 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                     f"🚨 <b>PAYOUT REVERT ON-CHAIN</b>\n\n"
                                     f"Order: <code>{order.order_id}</code>\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
-                                    f"Kirim ulang secara manual setelah verifikasi."
+                                    f"Kirim ulang secara manual setelah verifikasi, lalu tekan tombol "
+                                    f"di bawah dan kirim SS transfer agar diteruskan ke user."
                                 ),
+                                reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                                 kind="error",
                                 butuh_tindakan=True,
                             )
@@ -277,8 +282,10 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                     f"⚠️ <b>PAYOUT BELUM TERKONFIRMASI > {MAX_AGE_HOURS} JAM</b>\n\n"
                                     f"Order: <code>{order.order_id}</code>\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
-                                    f"Cek manual sebelum mengambil tindakan."
+                                    f"Cek manual sebelum mengambil tindakan. Jika koin dikirim manual, "
+                                    f"tekan tombol di bawah dan kirim SS transfer."
                                 ),
+                                reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                                 kind="error",
                                 butuh_tindakan=True,
                             )

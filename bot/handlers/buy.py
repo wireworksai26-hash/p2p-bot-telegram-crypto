@@ -59,6 +59,7 @@ from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
 from bot.utils.flow_guard import block_if_busy
+from bot.utils.manual_payout import manual_payout_button
 from bot.utils.emojis import (
     E_CARD,
     E_DOLLAR,
@@ -1278,9 +1279,14 @@ async def finalize_gopay_buy_payment(
                 f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
                 f"Wallet: <code>{order.buyer_wallet}</code>\n"
                 f"Error: {result['error_message']}{jejak}\n\n"
-                f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual."
+                f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual, lalu "
+                f"tekan tombol di bawah dan kirim SS transfer agar diteruskan ke user."
             )
-            await notify_admins(bot or bot_app, admin_msg, kind="error", butuh_tindakan=True)
+            await notify_admins(
+                bot or bot_app, admin_msg,
+                reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
+                kind="error", butuh_tindakan=True,
+            )
 
             user_msg = (
                 f"⏳ <b>Pembayaran Diterima</b>\n\n"
@@ -1309,9 +1315,10 @@ async def _escalate_interrupted_payout(db, order, bot) -> None:
         f"Cek riwayat masuk wallet tujuan di explorer. Jika belum ada, tekan "
         f"<b>Approve &amp; Kirim Crypto</b>; jika sudah ada, selesaikan manual."
     )
-    admin_keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Approve & Kirim Crypto", callback_data=f"admin_approve_buy_{order.order_id}"),
-    ]])
+    admin_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Approve & Kirim Crypto", callback_data=f"admin_approve_buy_{order.order_id}")],
+        [manual_payout_button(order.order_id)],
+    ])
     await notify_admins(bot, admin_msg, reply_markup=admin_keyboard, kind="error", butuh_tindakan=True)
 
 

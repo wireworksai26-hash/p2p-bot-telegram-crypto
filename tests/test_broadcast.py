@@ -389,26 +389,26 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         report = update.message.reply_text.call_args_list[-1].args[0]
         self.assertIn("Terkirim        : <code>2 user</code>", report)
 
-    async def test_broadcast_ready_morph(self):
-        """/broadcast --ready Morph automatically generates the formatted coin announcement without owner header."""
+    async def test_broadcast_ready_base(self):
+        """/broadcast --ready Base automatically generates the formatted coin announcement without owner header."""
         bot = AsyncMock()
-        msg = self._msg(text="/broadcast --ready Morph")
+        msg = self._msg(text="/broadcast --ready Base")
         update, ctx = self._run(msg, bot=bot)
         await broadcast_handler(update, ctx)
 
         self.assertEqual(bot.send_message.await_count, 2)
         sent_text = bot.send_message.call_args_list[0].kwargs["text"]
         self.assertNotIn("PENGUMUMAN DARI OWNER", sent_text)
-        self.assertIn("Morph Ready For Now🪙", sent_text)
+        self.assertIn("Base Ready For Now🪙", sent_text)
         self.assertIn("USDC", sent_text)
         self.assertIn("ETH", sent_text)
         self.assertIn("Silakan /start bot untuk Beli/Jual/Swap token.", sent_text)
 
     async def test_broadcast_ready_with_photo(self):
-        """Photo with caption /broadcast --ready Morph sets the auto-generated text as caption."""
+        """Photo with caption /broadcast --ready Base sets the auto-generated text as caption."""
         bot = AsyncMock()
-        photo_obj = SimpleNamespace(file_id="photo_morph_123")
-        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --ready Morph")
+        photo_obj = SimpleNamespace(file_id="photo_base_123")
+        msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --ready Base")
         msg.document = None
         update, ctx = self._run(msg, bot=bot)
         await broadcast_handler(update, ctx)
@@ -416,7 +416,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.send_photo.await_count, 2)
         caption = bot.send_photo.call_args_list[0].kwargs["caption"]
         self.assertNotIn("PENGUMUMAN DARI OWNER", caption)
-        self.assertIn("Morph Ready For Now🪙", caption)
+        self.assertIn("Base Ready For Now🪙", caption)
         self.assertIn("USDC", caption)
         self.assertIn("ETH", caption)
 
@@ -442,7 +442,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         bot.send_message.assert_not_awaited()
         guide = update.message.reply_text.call_args.args[0]
         self.assertIn("Format Siaran Koin Ready", guide)
-        self.assertIn("Morph", guide)
+        self.assertNotIn("Morph", guide)
         self.assertIn("Base", guide)
 
 

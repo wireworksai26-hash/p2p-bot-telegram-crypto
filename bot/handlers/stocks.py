@@ -34,7 +34,7 @@ NETWORK_LABELS = {
     "TRON": "TRON (TRC20)", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
     "ROBINHOOD": "Robinhood", "SUI": "Sui Mainnet", "APTOS": "Aptos Mainnet",
     "AVAX": "Avalanche C-Chain", "KAIA": "Kaia Network", "BERA": "Berachain",
-    "HYPEREVM": "HyperEVM", "MORPH": "Morph Network",
+    "HYPEREVM": "HyperEVM",
 }
 
 
@@ -77,7 +77,7 @@ CHAIN_SHORT_LABELS = {
     "BSC": "BEP20", "ETH": "ERC20", "POLYGON": "Poly", "ARB": "Arb", "BASE": "Base",
     "SOLANA": "Solana", "TRON": "TRC20", "TON": "TON", "OPTIMISM": "OP",
     "ROBINHOOD": "Robinhood", "SUI": "Sui", "APTOS": "Aptos", "AVAX": "Avax",
-    "KAIA": "Kaia", "BERA": "Bera", "HYPEREVM": "HyperEVM", "MORPH": "Morph",
+    "KAIA": "Kaia", "BERA": "Bera", "HYPEREVM": "HyperEVM",
 }
 # Kartu stok: (judul, simbol). Simbol di luar daftar masuk "Token Lainnya".
 STOCK_CARDS = [

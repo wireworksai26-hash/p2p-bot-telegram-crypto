@@ -10,8 +10,8 @@ import os
 
 STOCK_MAX_AGE_SECONDS = 15 * 60
 # Emergency brake: jaringan di sini ditolak di alur beli/convert dan payout-nya
-# manual. SUI dan APTOS sudah auto-payout (sender-nya aktif dan teruji). MORPH belum punya RPC/sender.
-MANUAL_PAYOUT_NETWORKS: set[str] = {"MORPH"}
+# manual. Saat ini kosong: SUI dan APTOS sudah auto-payout (sender-nya aktif dan teruji).
+MANUAL_PAYOUT_NETWORKS: set[str] = set()
 
 
 def get_wallet_address(network: str) -> str:
@@ -51,8 +51,6 @@ STOCK_ASSETS = [
     ("BERA", "BERA"),
     ("HYPE", "HYPEREVM"),
     ("USDG", "ROBINHOOD"),
-    ("USDC", "MORPH"),
-    ("ETH", "MORPH"),
     # --- Non-EVM: native + token ---
     ("SOL", "SOLANA"),
     ("USDT", "SOLANA"),
