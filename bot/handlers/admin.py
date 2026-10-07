@@ -1346,6 +1346,29 @@ async def topup_qris_command_handler(update: Update, context: ContextTypes.DEFAU
 
 
 
+async def refresh_menu_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/refreshmenu: pasang ulang menu ☰ admin (chat ini + semua admin) dan laporkan hasilnya."""
+    if not is_admin(update.effective_user.id):
+        return
+    from bot.utils.command_menu import admin_menu_chat_ids, apply_admin_command_menu
+
+    chats = list(dict.fromkeys([update.effective_chat.id] + admin_menu_chat_ids()))
+    lines = []
+    for chat_id in chats:
+        try:
+            count = await apply_admin_command_menu(context.bot, chat_id)
+            lines.append(f"✅ <code>{chat_id}</code>: {count} perintah terpasang")
+        except Exception as exc:
+            lines.append(f"❌ <code>{chat_id}</code>: {html.escape(str(exc))}")
+    await update.effective_message.reply_text(
+        "🔄 <b>Menu ☰ admin dipasang ulang</b>\n\n" + "\n".join(lines) + "\n\n"
+        "<i>Telegram menyimpan daftar perintah di aplikasi. Tutup lalu buka lagi chat ini "
+        "(atau ketik / ) agar daftar baru muncul. Chat berstatus ❌ biasanya karena admin belum "
+        "pernah /start ke bot.</i>",
+        parse_mode="HTML",
+    )
+
+
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Tampilkan Executive Admin Dashboard Control Center."""
     user_id = update.effective_user.id
@@ -1353,6 +1376,9 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ Anda tidak memiliki akses ke menu administrator.")
         return
     _clear_reward_flags(context)
+    # Pastikan menu ☰ admin terpasang di chat ini (sekali per proses; tidak pernah melempar).
+    from bot.utils.command_menu import ensure_admin_menu
+    await ensure_admin_menu(context.bot, update.effective_chat.id)
 
     db = SessionLocal()
     try:

@@ -115,5 +115,91 @@ class TestPemasanganMenuAdmin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.bot.set_my_commands.await_count, 3, "3 percobaan default, lalu berhenti")
 
 
+class TestPemasanganOtomatisDanRefresh(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from bot.utils import command_menu
+        command_menu._applied_chats.clear()
+        self.cm = command_menu
+
+    def _bot(self, stored=None, fail_chats=()):
+        async def fake_set(commands, scope=None):
+            if scope is not None and scope.chat_id in fail_chats:
+                raise RuntimeError("Bad Request: chat not found")
+
+        bot = SimpleNamespace(
+            set_my_commands=AsyncMock(side_effect=fake_set),
+            get_my_commands=AsyncMock(return_value=stored if stored is not None else list(range(len(ADMIN_COMMAND_MENU)))),
+        )
+        return bot
+
+    async def test_apply_mengembalikan_jumlah_terbaca_balik(self):
+        bot = self._bot(stored=[1, 2, 3])
+        self.assertEqual(await self.cm.apply_admin_command_menu(bot, 11), 3)
+
+    async def test_apply_tetap_sukses_bila_pembacaan_balik_tidak_ada(self):
+        bot = SimpleNamespace(set_my_commands=AsyncMock())
+        self.assertEqual(await self.cm.apply_admin_command_menu(bot, 11), len(ADMIN_COMMAND_MENU))
+
+    async def test_ensure_hanya_sekali_per_chat(self):
+        bot = self._bot()
+        await self.cm.ensure_admin_menu(bot, 11)
+        await self.cm.ensure_admin_menu(bot, 11)
+        await self.cm.ensure_admin_menu(bot, 22)
+        self.assertEqual(bot.set_my_commands.await_count, 2)
+
+    async def test_ensure_tidak_melempar_dan_boleh_dicoba_lagi(self):
+        bot = self._bot(fail_chats=(11,))
+        await self.cm.ensure_admin_menu(bot, 11)  # tidak raise
+        await self.cm.ensure_admin_menu(bot, 11)
+        self.assertEqual(bot.set_my_commands.await_count, 2, "gagal tidak dianggap sudah terpasang")
+
+    async def test_refreshmenu_melaporkan_hasil_per_chat(self):
+        from bot.handlers.admin import refresh_menu_command_handler
+        bot = self._bot(fail_chats=(22,))
+        message = AsyncMock()
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_chat=SimpleNamespace(id=11),
+                                 effective_message=message)
+        context = SimpleNamespace(bot=bot)
+        with patch.object(main.settings, "ADMIN_CHAT_IDS", [11, 22]),              patch.object(main.settings, "ADMIN_GROUP_ID", None):
+            await refresh_menu_command_handler(update, context)
+        teks = message.reply_text.await_args.args[0]
+        self.assertIn(f"<code>11</code>: {len(ADMIN_COMMAND_MENU)} perintah terpasang", teks)
+        self.assertIn("❌ <code>22</code>", teks)
+        self.assertIn("chat not found", teks)
+
+    async def test_refreshmenu_hanya_untuk_admin(self):
+        from bot.handlers.admin import refresh_menu_command_handler
+        bot = self._bot()
+        message = AsyncMock()
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=999999), effective_chat=SimpleNamespace(id=999999),
+                                 effective_message=message)
+        with patch.object(main.settings, "ADMIN_CHAT_IDS", [11]):
+            await refresh_menu_command_handler(update, SimpleNamespace(bot=bot))
+        message.reply_text.assert_not_called()
+        bot.set_my_commands.assert_not_called()
+
+    async def test_admin_command_memasang_menu_otomatis_sekali(self):
+        from bot.handlers import admin as admin_mod
+        bot = self._bot()
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_chat=SimpleNamespace(id=11),
+                                 message=AsyncMock())
+        context = SimpleNamespace(bot=bot, user_data={})
+        with patch.object(main.settings, "ADMIN_CHAT_IDS", [11]),              patch.object(admin_mod, "SessionLocal", return_value=SimpleNamespace(close=lambda: None)),              patch.object(admin_mod.crud, "get_pending_orders_count", return_value=0),              patch.object(admin_mod, "build_admin_dashboard_text", return_value="dash"),              patch.object(admin_mod, "get_admin_dashboard_keyboard", return_value=None):
+            await admin_mod.admin_handler(update, context)
+            await admin_mod.admin_handler(update, context)
+        self.assertEqual(bot.set_my_commands.await_count, 1, "menu dipasang sekali, bukan tiap /admin")
+        self.assertEqual(update.message.reply_text.await_count, 2, "dashboard tetap tampil")
+
+    async def test_admin_command_tetap_tampil_walau_pemasangan_menu_gagal(self):
+        from bot.handlers import admin as admin_mod
+        bot = self._bot(fail_chats=(11,))
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=11), effective_chat=SimpleNamespace(id=11),
+                                 message=AsyncMock())
+        context = SimpleNamespace(bot=bot, user_data={})
+        with patch.object(main.settings, "ADMIN_CHAT_IDS", [11]),              patch.object(admin_mod, "SessionLocal", return_value=SimpleNamespace(close=lambda: None)),              patch.object(admin_mod.crud, "get_pending_orders_count", return_value=0),              patch.object(admin_mod, "build_admin_dashboard_text", return_value="dash"),              patch.object(admin_mod, "get_admin_dashboard_keyboard", return_value=None):
+            await admin_mod.admin_handler(update, context)
+        update.message.reply_text.assert_awaited_once()
+
+
 if __name__ == "__main__":
     unittest.main()

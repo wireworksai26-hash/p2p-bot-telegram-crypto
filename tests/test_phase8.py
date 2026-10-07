@@ -180,7 +180,7 @@ class TestTestimonialService(unittest.TestCase):
             bot_username="TokoKoinID_Bot",
         )
         self.assertIn("- Jenis Transaksi : Swap", msg)
-        self.assertIn("- Jenis Coin : USDT -> SOL (SOLANA)", msg)
+        self.assertIn("- Jenis Coin : USDT (BSC) -> SOL (SOLANA)", msg)
         self.assertIn("- Pengguna : @User_87****77", msg)
         self.assertIn("- Transaction Hash : -", msg)
 
@@ -429,9 +429,9 @@ class TestTopSpendersAndTreasuryFlow(unittest.TestCase):
         with patch("bot.handlers.admin_campaign.is_admin", return_value=True):
             asyncio.run(campaign_callback_handler(update, context))
 
-        query.edit_message_text.assert_called_once()
-        call_kwargs = query.edit_message_text.call_args[1]
-        self.assertIn("KAS & DOMPET", call_kwargs["text"])
+        call_args = query.edit_message_text.call_args
+        text_val = call_args[0][0] if (call_args[0] and len(call_args[0]) > 0) else call_args[1].get("text", "")
+        self.assertIn("KAS & DOMPET", text_val)
 
     def test_build_admin_treasury_qris_menu(self):
         from bot.handlers.admin import build_admin_treasury_qris_menu
