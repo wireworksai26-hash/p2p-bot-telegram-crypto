@@ -22,7 +22,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-from telegram import BotCommand, Update
+from telegram import BotCommand, BotCommandScopeChat, Update
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
@@ -443,6 +443,45 @@ BOT_COMMAND_MENU = [
     ("cancel", "Membatalkan transaksi"),
 ]
 
+# Menu tombol ☰ khusus admin (muncul saat mengetik "/"). Hanya dipasang untuk ADMIN_CHAT_IDS
+# dan grup admin; user biasa tetap melihat BOT_COMMAND_MENU. Urutan = urutan tampil.
+ADMIN_COMMAND_MENU = [
+    ("admin", "Dashboard admin (semua menu)"),
+    ("orders", "Antrean order"),
+    ("sellorders", "Dashboard order Jual crypto"),
+    ("confirm", "Konfirmasi order selesai: /confirm ORDER_ID"),
+    ("verifysell", "Cek ulang deposit Jual: /verifysell ORDER_ID"),
+    ("stats", "Statistik & volume transaksi"),
+    ("report", "Laporan mingguan"),
+    ("refreshwallet", "Sinkron saldo wallet stok"),
+    ("setspread", "Atur spread harga: /setspread KOIN PERSEN"),
+    ("credit", "Kirim saldo bot ke user"),
+    ("topupbot", "Top up kas bot"),
+    ("topupqris", "Top up kas bot via QRIS"),
+    ("campaign", "Campaign & giveaway"),
+    ("setreferral", "Atur program referral"),
+    ("broadcast", "Siaran pesan ke semua user"),
+    ("ban", "Blokir user: /ban USER_ID"),
+    ("unban", "Buka blokir user: /unban USER_ID"),
+    ("testtesti", "Tes koneksi channel testimoni"),
+    ("posttesti", "Posting testimoni order: /posttesti ORDER_ID"),
+    ("postlasttesti", "Posting testimoni order selesai terakhir"),
+    ("targets", "Daftar tujuan notifikasi admin"),
+    ("checkapi", "Cek status API & RPC"),
+    ("chatid", "Lihat chat ID ini"),
+    ("txhash", "Kirim TX Hash deposit Jual/Convert"),
+    ("start", "Menu utama bot"),
+    ("cancel", "Membatalkan proses berjalan"),
+]
+
+
+def admin_menu_chat_ids() -> list:
+    """Chat yang mendapat menu admin: tiap admin + grup admin (bila diatur), tanpa duplikat."""
+    ids = list(settings.ADMIN_CHAT_IDS)
+    if settings.ADMIN_GROUP_ID:
+        ids.append(settings.ADMIN_GROUP_ID)
+    return list(dict.fromkeys(ids))
+
 
 async def set_bot_commands(application: Application) -> None:
     """Daftarkan menu command (tombol Menu di Telegram) — idempotent tiap startup."""
@@ -465,10 +504,23 @@ async def set_bot_commands(application: Application) -> None:
                 [BotCommand(cmd, desc) for cmd, desc in BOT_COMMAND_MENU]
             )
             logger.info("Menu command Telegram terdaftar: %s", [c for c, _ in BOT_COMMAND_MENU])
-            return
+            break
         except Exception as exc:
             logger.warning("Gagal mendaftarkan menu command (percobaan %d): %s", attempt, exc)
             await asyncio.sleep(5)
+    else:
+        return
+
+    # Menu admin per chat. Gagal di satu chat (mis. admin belum pernah /start ke bot) tidak
+    # menghentikan chat lain.
+    admin_commands = [BotCommand(cmd, desc) for cmd, desc in ADMIN_COMMAND_MENU]
+    for chat_id in admin_menu_chat_ids():
+        try:
+            await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id))
+            logger.info("Menu admin (%d perintah) terpasang untuk chat %s", len(admin_commands), chat_id)
+        except Exception as exc:
+            logger.warning("Menu admin gagal dipasang untuk chat %s: %s (admin perlu /start ke bot dulu)",
+                           chat_id, exc)
 
 
 def build_bot_application() -> Application:

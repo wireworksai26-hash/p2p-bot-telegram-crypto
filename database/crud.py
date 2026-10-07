@@ -1194,7 +1194,7 @@ def get_user_count(db: Session) -> int:
 def get_completed_order_count(db: Session) -> int:
     """Jumlah total order yang berhasil (status completed) seumur hidup bot."""
     try:
-        return db.query(func.count(Order.id)).filter(Order.status == "completed").scalar() or 0
+        return db.query(func.count(Order.id)).filter(func.lower(Order.status) == "completed").scalar() or 0
     except Exception as e:
         logger.error(f"Gagal get completed order count: {e}")
         raise
@@ -1221,7 +1221,7 @@ def build_monthly_report(db: Session, year: int, month: int) -> MonthlyReport:
     orders = (
         db.query(Order)
         .filter(
-            Order.status == "completed",
+            func.lower(Order.status) == "completed",
             Order.created_at >= start_utc,
             Order.created_at < end_utc,
         )
@@ -1275,7 +1275,7 @@ def get_daily_stats(db: Session) -> dict:
             db.query(func.coalesce(func.sum(Order.total_idr), 0))
             .filter(
                 Order.created_at >= today_start,
-                Order.status == "completed"
+                func.lower(Order.status) == "completed"
             )
             .scalar() or 0
         )
@@ -1285,7 +1285,7 @@ def get_daily_stats(db: Session) -> dict:
             db.query(func.count(Order.id))
             .filter(
                 Order.created_at >= today_start,
-                Order.status == "completed"
+                func.lower(Order.status) == "completed"
             )
             .scalar() or 0
         )

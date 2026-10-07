@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from telegram.error import RetryAfter, BadRequest
 from telegram.ext import ContextTypes
+from sqlalchemy import func
 
 from config.settings import settings
 from database.connection import SessionLocal
@@ -166,17 +167,16 @@ def build_admin_stats_text(db) -> str:
     completed_all = crud.get_completed_order_count(db)
     
     # Hitung breakdown tipe order
-    buy_count = db.query(Order).filter(Order.order_type == "buy", Order.status == "completed").count()
-    sell_count = db.query(Order).filter(Order.order_type == "sell", Order.status == "completed").count()
-    swap_count = db.query(Order).filter(Order.order_type == "swap", Order.status == "completed").count()
+    buy_count = db.query(Order).filter(Order.order_type == "buy", func.lower(Order.status) == "completed").count()
+    sell_count = db.query(Order).filter(Order.order_type == "sell", func.lower(Order.status) == "completed").count()
+    swap_count = db.query(Order).filter(Order.order_type == "swap", func.lower(Order.status) == "completed").count()
     
     # Hitung total volume all-time
-    from sqlalchemy import func
-    total_vol_row = db.query(func.sum(Order.total_idr)).filter(Order.status == "completed").scalar()
+    total_vol_row = db.query(func.sum(Order.total_idr)).filter(func.lower(Order.status) == "completed").scalar()
     total_vol_all = int(total_vol_row or 0)
 
     # Hitung total profit fee all-time
-    total_fee_row = db.query(func.sum(Order.fee_idr)).filter(Order.status == "completed").scalar()
+    total_fee_row = db.query(func.sum(Order.fee_idr)).filter(func.lower(Order.status) == "completed").scalar()
     total_fee_all = int(total_fee_row or 0)
 
     text = (
@@ -2642,7 +2642,7 @@ async def resend_recent_testimonies_command_handler(update: Update, context: Con
 
         orders = (
             db.query(Order)
-            .filter(Order.status == "completed")
+            .filter(func.lower(Order.status) == "completed")
             .order_by(Order.id.desc())
             .limit(limit)
             .all()
