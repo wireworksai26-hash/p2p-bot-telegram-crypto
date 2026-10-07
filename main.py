@@ -528,8 +528,12 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("harga", show_prices))
     application.add_handler(CommandHandler("balance", show_balance_menu))
     application.add_handler(CommandHandler("admin", admin_handler))
-    from bot.handlers.admin import refresh_menu_command_handler
+    from bot.handlers.admin import (
+        refresh_menu_command_handler, guide_command_handler, user_guide_command_handler,
+    )
     application.add_handler(CommandHandler("refreshmenu", refresh_menu_command_handler))
+    application.add_handler(CommandHandler("panduan", guide_command_handler))
+    application.add_handler(CommandHandler(["bantuan", "help"], user_guide_command_handler))
     application.add_handler(CommandHandler("setspread", setspread_handler))
     application.add_handler(CommandHandler("orders", orders_handler))
     from bot.handlers.admin import sellorders_handler

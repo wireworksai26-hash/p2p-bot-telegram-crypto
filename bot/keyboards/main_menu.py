@@ -29,7 +29,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
       [ 🛒 Beli Crypto ]   [ 📈 Jual Crypto ]
       [ 💰 Saldo & Profil ] [ 🔄 Convert Crypto ]
       [ 💵 Cek Harga  ]   [ 📦 Cek Stok    ]
-      [ 📜 Riwayat Transaksi ] [ ⚠️ Syarat & Ketentuan ]
+      [ 📖 Panduan Transaksi ] [ ⚠️ Syarat & Ketentuan ]
       [ 💬 Hubungi Owner (Chat Admin)      ]
     """
     keyboard = [
@@ -50,6 +50,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Program Referral", callback_data="menu_referral", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("LINK", "5350305691942788490")),
         ],
         [
+            InlineKeyboardButton("📖 Panduan Transaksi", callback_data="menu_guide"),
             InlineKeyboardButton("Syarat & Ketentuan", callback_data="menu_snk", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("WARNING", "5447644880824181073")),
         ],
         [
