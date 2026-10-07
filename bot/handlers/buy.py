@@ -232,8 +232,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_valid:
         if nominal_idr > 0 and nominal_idr < 5000:
             err_msg = "Nominal kurang dari batas minimal <b>Rp 5.000</b>."
-        elif nominal_idr > 10_000_000:
-            err_msg = "Nominal melebihi batas maksimal <b>Rp 10.000.000</b> (limit transaksi QRIS BI)."
+        elif nominal_idr > 5_000_000:
+            err_msg = "Nominal melebihi batas maksimal <b>Rp 5.000.000</b>. Untuk transaksi di atas Rp 5.000.000, silakan hubungi admin."
         else:
             err_msg = "Format input salah atau mengandung karakter yang tidak valid."
 

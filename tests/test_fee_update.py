@@ -1,11 +1,11 @@
-"""Uji update fee client 1 Okt 2026:
-- Tier persen di atas 1.010k/1.015k (3% / 2,5% / 2% / 1,5%) — tanpa max-cap.
-- Tambahan flat Rp 500 untuk JUAL altcoin nominal < Rp 1.010.000.
-- Surcharge gas Rp 3.000 (beli/convert, update 6 Okt) + minimum Rp 7.500 untuk 4 pasangan:
+"""Uji update fee client (update Price List & Fee):
+- Tier persen di atas 1.030k / 1.035k (3% / 2,5% untuk Altcoin & Convert, 2,3% / 2% untuk USD)
+  hingga maksimal Rp 5.000.000.
+- Transaksi di atas Rp 5.000.000 ditolak (ValueError diarahkan chat admin).
+- Penghapusan flat surcharge Rp 500 untuk JUAL altcoin (sudah tidak ada).
+- Surcharge gas Rp 2.500 (beli/convert target) + minimum Rp 7.500 untuk 4 pasangan:
   ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH.
-- Price list 6 Okt 2026: tier fixed Altcoin/USD/Convert digeser, tier persen USD sampai 4,6jt.
-- Contoh: jual 105k altcoin -> fee 5.500 (5.000 + 500) -> net 99.500.
-- Kode unik QRIS 001-400 + default spread 0.5%.
+- Minimum convert sekarang Rp 5.000 (sama dengan altcoin & USD).
 """
 import os
 import sys
@@ -30,6 +30,7 @@ os.environ.update({
 from services.fee_service import (
     GAS_SURCHARGE_IDR,
     GAS_SURCHARGE_PAIRS,
+    MAX_TRANSACTION_IDR,
     calculate_fee_idr,
     gas_surcharge_note,
     get_fee_category,
@@ -41,65 +42,60 @@ from database import crud
 
 
 class TestTierPersen(unittest.TestCase):
-    """Fee persen di atas tier fixed — batas sambung, pembulatan ke bawah."""
+    """Fee persen di atas tier fixed — batas sambung, pembulatan ke bawah, max 5M."""
 
     def test_altcoin_persen(self):
-        self.assertEqual(calculate_fee_idr(1_010_001, "ALTCOIN"), 30_300)   # 3%
-        self.assertEqual(calculate_fee_idr(2_000_000, "ALTCOIN"), 60_000)   # 3%
-        self.assertEqual(calculate_fee_idr(2_000_001, "ALTCOIN"), 50_000)   # 2,5%
-        self.assertEqual(calculate_fee_idr(3_500_000, "ALTCOIN"), 87_500)
-        self.assertEqual(calculate_fee_idr(3_500_001, "ALTCOIN"), 70_000)   # 2%
-        self.assertEqual(calculate_fee_idr(8_500_000, "ALTCOIN"), 170_000)
-        self.assertEqual(calculate_fee_idr(8_500_001, "ALTCOIN"), 127_500)  # 1,5% floor
+        self.assertEqual(calculate_fee_idr(1_030_001, "ALTCOIN"), 30_900)   # 3%
+        self.assertEqual(calculate_fee_idr(3_100_000, "ALTCOIN"), 93_000)   # 3%
+        self.assertEqual(calculate_fee_idr(3_100_001, "ALTCOIN"), 77_500)   # 2,5%
+        self.assertEqual(calculate_fee_idr(5_000_000, "ALTCOIN"), 125_000)  # 2,5%
 
     def test_usd_persen(self):
-        self.assertEqual(calculate_fee_idr(1_015_001, "USD"), 20_300)   # 2%
-        self.assertEqual(calculate_fee_idr(3_600_001, "USD"), 72_000)   # masih 2% (batas 4,6jt)
-        self.assertEqual(calculate_fee_idr(4_600_000, "USD"), 92_000)
-        self.assertEqual(calculate_fee_idr(4_600_001, "USD"), 69_000)   # 1,5%
+        self.assertEqual(calculate_fee_idr(1_035_001, "USD"), 23_805)   # 2,3%
+        self.assertEqual(calculate_fee_idr(3_800_000, "USD"), 87_400)   # 2,3%
+        self.assertEqual(calculate_fee_idr(3_800_001, "USD"), 76_000)   # 2%
+        self.assertEqual(calculate_fee_idr(5_000_000, "USD"), 100_000)  # 2%
 
     def test_convert_persen(self):
-        self.assertEqual(calculate_fee_idr(1_010_001, "CONVERT"), 30_300)
-        self.assertEqual(calculate_fee_idr(8_500_001, "CONVERT"), 127_500)
+        self.assertEqual(calculate_fee_idr(1_030_001, "CONVERT"), 30_900)   # 3%
+        self.assertEqual(calculate_fee_idr(3_100_000, "CONVERT"), 93_000)   # 3%
+        self.assertEqual(calculate_fee_idr(3_100_001, "CONVERT"), 77_500)   # 2,5%
+        self.assertEqual(calculate_fee_idr(5_000_000, "CONVERT"), 125_000)  # 2,5%
 
-    def test_tanpa_batas_atas(self):
-        # Nominal sangat besar tetap terlayani (tanpa raise "tanya admin").
-        self.assertEqual(calculate_fee_idr(50_000_000, "ALTCOIN"), 750_000)  # 1,5%
+    def test_maksimal_5_juta(self):
+        # Transaksi di atas Rp 5.000.000 ditolak dan diarahkan chat admin
+        with self.assertRaises(ValueError) as ctx:
+            calculate_fee_idr(5_000_001, "ALTCOIN")
+        self.assertIn("5.000.000", str(ctx.exception))
+        self.assertIn("admin", str(ctx.exception).lower())
+
+        with self.assertRaises(ValueError):
+            calculate_fee_idr(10_000_000, "USD")
 
 
-class TestSellAltcoinSurcharge(unittest.TestCase):
-    """Tambahan flat Rp 500 khusus JUAL altcoin, nominal < Rp 1.010.000."""
+class TestNoSellAltcoinSurcharge(unittest.TestCase):
+    """Surcharge flat Rp 500 untuk JUAL altcoin telah dihapus."""
 
-    def test_contoh_client_105k(self):
+    def test_jual_altcoin_tanpa_tambahan_500(self):
+        # Tier 55.001 - 105.000 fee adalah 5.000 (tidak ada +500)
         fee = calculate_fee_idr(105_000, "ALTCOIN", "SOL", "SOLANA", is_outgoing=False)
-        self.assertEqual(fee, 5_500)  # 5.000 tier (55k-105k) + 500
-        self.assertEqual(105_000 - fee, 99_500)
-        # 105.001 sudah masuk tier 5,5k
+        self.assertEqual(fee, 5_000)
+        self.assertEqual(105_000 - fee, 100_000)
+
+        # 105.001 masuk tier 105.001 - 110.000 fee 5.500
         self.assertEqual(
-            calculate_fee_idr(105_001, "ALTCOIN", "SOL", "SOLANA", is_outgoing=False), 6_000)
+            calculate_fee_idr(105_001, "ALTCOIN", "SOL", "SOLANA", is_outgoing=False), 5_500)
 
-    def test_jual_altcoin_kena_500(self):
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "BASE", is_outgoing=False), 4_900)
-        self.assertEqual(calculate_fee_idr(1_009_999, "ALTCOIN", "ETH", "BASE", is_outgoing=False), 19_500)
-
-    def test_batas_1010k_tidak_kena(self):
-        self.assertEqual(calculate_fee_idr(1_010_000, "ALTCOIN", "ETH", "BASE", is_outgoing=False), 19_000)
-        self.assertEqual(calculate_fee_idr(1_010_001, "ALTCOIN", "ETH", "BASE", is_outgoing=False), 30_300)
-
-    def test_bukan_jual_altcoin_tidak_kena(self):
-        # Beli altcoin
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "BASE", is_outgoing=True), 4_400)
-        # Jual USD (USDT) — tidak kena 500
-        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "BSC", is_outgoing=False), 3_500)
-        # Convert — tidak kena 500
-        self.assertEqual(calculate_fee_idr(50_000, "CONVERT", "ETH", "BASE", is_outgoing=True), 5_000)
+        # Nominal 50.000 (tier 47.001-55k fee 4.500)
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "BASE", is_outgoing=False), 4_500)
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "BASE", is_outgoing=True), 4_500)
 
 
 class TestGasPair(unittest.TestCase):
-    """Surcharge gas 3.000 (beli/convert) + minimum 7.500 untuk 4 pasangan."""
+    """Surcharge gas 2.500 (beli/convert) + minimum 7.500 untuk 4 pasangan."""
 
     def test_daftar_pasangan(self):
-        self.assertEqual(GAS_SURCHARGE_IDR, 3000)
+        self.assertEqual(GAS_SURCHARGE_IDR, 2500)
         self.assertEqual(GAS_SURCHARGE_PAIRS, {
             ("ETH", "ETH"), ("TRX", "TRON"), ("USDT", "ETH"),
             ("USDC", "ETH"),
@@ -108,19 +104,24 @@ class TestGasPair(unittest.TestCase):
         self.assertFalse(is_gas_pair("USDT", "BSC"))
 
     def test_surcharge_beli_convert(self):
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ETH"), 7_400)        # 4400 + 3000
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "TRX", "TRON"), 7_400)
-        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "ETH"), 6_500)          # 3500 + 3000
-        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDC", "ETH"), 6_500)
+        # 50.000 ALTCOIN (47.001-55k) fee dasar 4.500 + gas 2.500 = 7.000
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ETH"), 7_000)
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "TRX", "TRON"), 7_000)
+
+        # 50.000 USD (34.001-50k) fee dasar 3.500 + gas 2.500 = 6.000
+        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "ETH"), 6_000)
+        self.assertEqual(calculate_fee_idr(50_000, "USD", "USDC", "ETH"), 6_000)
         self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "TRON"), 3_500)  # bukan pasangan gas
-        self.assertEqual(calculate_fee_idr(50_000, "CONVERT", "ETH", "ETH"), 8_000)       # 5000 + 3000
+
+        # 50.000 CONVERT (47.001-55k) fee dasar 4.500 + gas 2.500 = 7.000
+        self.assertEqual(calculate_fee_idr(50_000, "CONVERT", "ETH", "ETH"), 7_000)
 
     def test_jual_tidak_kena_surcharge_gas(self):
-        # Jual ETH di jaringan ETH: kategori ALTCOIN + 500 jual, TANPA surcharge gas.
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ETH", is_outgoing=False), 4_900)
+        # Jual ETH di jaringan ETH: TANPA surcharge gas kirim (is_outgoing=False)
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ETH", is_outgoing=False), 4_500)
 
     def test_pasangan_lain_tidak_kena(self):
-        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ARB"), 4_400)
+        self.assertEqual(calculate_fee_idr(50_000, "ALTCOIN", "ETH", "ARB"), 4_500)
         self.assertEqual(calculate_fee_idr(50_000, "USD", "USDT", "BSC"), 3_500)
         self.assertEqual(calculate_fee_idr(50_000, "USD", "USDC", "BASE"), 3_500)
 
@@ -141,24 +142,26 @@ class TestGasPair(unittest.TestCase):
         with self.assertRaises(ValueError):
             calculate_fee_idr(4_999, "USD", "USDT", "BSC")
         with self.assertRaises(ValueError):
-            calculate_fee_idr(5_999, "CONVERT", "ETH", "BASE")
+            calculate_fee_idr(4_999, "CONVERT", "ETH", "BASE")
+        # 5000 kini valid untuk convert juga
+        calculate_fee_idr(5_000, "CONVERT", "ETH", "BASE")
 
     def test_note_hanya_untuk_pasangan_gas(self):
-        self.assertIn("3.000", gas_surcharge_note("TRX", "TRON"))
+        self.assertIn("2.500", gas_surcharge_note("TRX", "TRON"))
         self.assertEqual(gas_surcharge_note("USDT", "TRON"), "")
         self.assertEqual(gas_surcharge_note("USDT", "BSC"), "")
         self.assertEqual(gas_surcharge_note("SOL", "SOLANA"), "")
 
 
 class TestHandlerKategoriDanSpread(unittest.TestCase):
-    """Kategori USD lebih murah + default spread 0.5%."""
+    """Kategori USD lebih murah + default spread 0.0%."""
 
     def test_kategori(self):
         self.assertEqual(get_fee_category("USDT"), "USD")
         self.assertEqual(get_fee_category("USDC"), "USD")
         self.assertEqual(get_fee_category("USDG"), "USD")
         self.assertEqual(get_fee_category("ETH"), "ALTCOIN")
-        # USDT jauh lebih murah dari altcoin di nominal sama
+        # USDT lebih murah dari altcoin di nominal sama
         self.assertLess(calculate_fee_idr(100_000, "USD"), calculate_fee_idr(100_000, "ALTCOIN"))
 
     def test_default_spread_0(self):

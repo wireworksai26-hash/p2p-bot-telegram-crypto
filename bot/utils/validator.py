@@ -82,7 +82,7 @@ def validate_wallet_address(address: str, network: str) -> bool:
     return False
 
 
-def validate_amount_idr(amount_str: str, min_amount: int = 5000, max_amount: int = 10_000_000) -> tuple[bool, int]:
+def validate_amount_idr(amount_str: str, min_amount: int = 5000, max_amount: int = 5_000_000) -> tuple[bool, int]:
     """
     Memvalidasi dan memparse string nominal rupiah.
     Mendukung format:
@@ -96,7 +96,7 @@ def validate_amount_idr(amount_str: str, min_amount: int = 5000, max_amount: int
       - Terdeteksi sebagai alamat wallet (0x..., T..., Base58 panjang, dll.)
       - Mengandung huruf acak atau teks non-nominal
       - Kurang dari min_amount (default Rp 5.000)
-      - Lebih dari max_amount (default Rp 10.000.000 / limit QRIS BI)
+      - Lebih dari max_amount (default Rp 5.000.000)
     
     Returns:
         tuple: (is_valid: bool, parsed_amount: int)

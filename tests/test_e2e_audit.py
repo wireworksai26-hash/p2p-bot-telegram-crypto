@@ -64,24 +64,23 @@ class TestE2EAudit(unittest.IsolatedAsyncioTestCase):
         # USD Fee tests
         self.assertEqual(calculate_fee_idr(5000, "USD"), 3000)
         self.assertEqual(calculate_fee_idr(100000, "USD"), 4500)
-        self.assertEqual(calculate_fee_idr(1015000, "USD"), 15000)
-        # Di atas tier fixed -> tier persen (2%), bukan lagi ValueError
-        self.assertEqual(calculate_fee_idr(1015001, "USD"), 20300)
-        self.assertEqual(calculate_fee_idr(3600001, "USD"), 72000)
-        self.assertEqual(calculate_fee_idr(4600001, "USD"), 69000)  # 1,5%
+        self.assertEqual(calculate_fee_idr(1015000, "USD"), 18000)
+        # Di atas tier fixed -> tier persen (2,3% / 2%), max 5M
+        self.assertEqual(calculate_fee_idr(1035001, "USD"), 23805)
+        self.assertEqual(calculate_fee_idr(3800001, "USD"), 76000)  # 2%
 
         # Altcoin Fee tests
         self.assertEqual(calculate_fee_idr(5000, "ALTCOIN"), 3000)
         self.assertEqual(calculate_fee_idr(500000, "ALTCOIN"), 11000)
-        self.assertEqual(calculate_fee_idr(1010000, "ALTCOIN"), 19000)
-        # Di atas tier fixed -> tier persen (3%), bukan lagi ValueError
-        self.assertEqual(calculate_fee_idr(1010001, "ALTCOIN"), 30300)
-        self.assertEqual(calculate_fee_idr(2000001, "ALTCOIN"), 50000)
+        self.assertEqual(calculate_fee_idr(1010000, "ALTCOIN"), 20500)
+        # Di atas tier fixed -> tier persen (3% / 2,5%)
+        self.assertEqual(calculate_fee_idr(1030001, "ALTCOIN"), 30900)
+        self.assertEqual(calculate_fee_idr(3100001, "ALTCOIN"), 77500)
 
         # Convert Fee tests
-        self.assertEqual(calculate_fee_idr(6000, "CONVERT"), 3000)
-        self.assertEqual(calculate_fee_idr(1010000, "CONVERT"), 18000)
-        self.assertEqual(calculate_fee_idr(1010001, "CONVERT"), 30300)
+        self.assertEqual(calculate_fee_idr(5000, "CONVERT"), 3000)
+        self.assertEqual(calculate_fee_idr(1010000, "CONVERT"), 22000)
+        self.assertEqual(calculate_fee_idr(1030001, "CONVERT"), 30900)
 
     def test_inventory_reservation_e2e(self):
         """Audit wallet balance inventory tracking, oversell prevention, and release."""

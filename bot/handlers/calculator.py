@@ -57,7 +57,7 @@ async def start_calculator_callback(update: Update, context: ContextTypes.DEFAUL
             f"{E_CHART()} <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
             "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
-            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b>."
+            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b> (Maksimal <b>Rp 5.000.000</b>)."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -81,7 +81,7 @@ async def start_calculator_command(update: Update, context: ContextTypes.DEFAULT
             f"{E_CHART()} <b>KALKULATOR SIMULASI FEE</b>\n\n"
             "Silakan masukkan nominal Rupiah (IDR) yang ingin Anda simulasikan.\n"
             "<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
-            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b>."
+            f"{E_WARN()} Minimal nominal simulasi adalah <b>Rp 5.000</b> (Maksimal <b>Rp 5.000.000</b>)."
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -103,12 +103,21 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             [InlineKeyboardButton("Batal & Kembali", callback_data="calc_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
-        await update.message.reply_text(
-            text=(
+        if nominal_idr > 5_000_000:
+            err_msg = (
+                f"{E_CROSS()} <b>Nominal Melebihi Batas!</b>\n\n"
+                "Batas maksimal transaksi di bot adalah <b>Rp 5.000.000</b>.\n"
+                "Untuk transaksi di atas Rp 5.000.000, silakan hubungi admin langsung.\n\n"
+                "Silakan masukkan nominal kembali (contoh: <code>50000</code>):"
+            )
+        else:
+            err_msg = (
                 f"{E_CROSS()} <b>Nominal Tidak Valid!</b>\n\n"
                 "Format input salah atau nominal kurang dari batas minimal Rp 5.000.\n"
                 "Silakan masukkan nominal kembali (contoh: <code>50000</code>):"
-            ),
+            )
+        await update.message.reply_text(
+            text=err_msg,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )

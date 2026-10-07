@@ -236,7 +236,7 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 USD_COINS = {"USDT", "USDC", "USDG"}
-MIN_CONVERT_IDR = 6000  # tier fee CONVERT terendah (fee_service.CONVERT_FEE_TIERS)
+MIN_CONVERT_IDR = 5000  # tier fee CONVERT terendah (fee_service.CONVERT_FEE_TIERS)
 
 
 def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float, src_sym: str = "") -> tuple[float, int, str]:

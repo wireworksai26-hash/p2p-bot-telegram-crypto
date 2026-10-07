@@ -95,14 +95,15 @@ def _fee_card(title: str, subtitle: str, fixed_tiers, percent_tiers, footer: str
 
 PRICE_LIST_NOTE = (
     "<blockquote expandable><b>📝 Note :</b>\n"
-    "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 3.000 untuk Gas Fee Kirim &amp; "
-    "min transaksi Rp 7.500 untuk List Coin tersebut, Selain itu minimal transaksi Rp. 5.000\n\n"
+    "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 2.500 untuk Gas Fee Kirim &amp; "
+    "min transaksi Rp 7.500 untuk List Coin tersebut, Selain itu minimal transaksi Rp 5.000\n\n"
     "• 🧾 Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).\n\n"
     "• ➕ Adanya kode Unik pembayaran saat transaksi di Bot untuk biaya transaksi Qris otomatis\n\n"
-    "• 💱 Harga realtime pasar murni mengikuti bursa global tanpa spread tersembunyi.\n\n"
+    "• 💱 Harga realtime pasar murni mengikuti rata-rata harga bursa global.\n\n"
+    "• 📣 Untuk Transaksi di atas 5.000.000 dan apabila Stok Coin di Bot kosong, silakan chat admin.\n\n"
     "• 📣 Adanya fee transaksi yang berbeda-beda dikarenakan volatilitas harga coin crypto yang "
     "sangat berfluktuasi (naik-turunnya nilai) setiap detik dan Spread USD (selisih harga) yang "
-    "berubah ubah guna menghindari kerugian stok coin pihak admin.</blockquote>"
+    "berubah-ubah guna menghindari kerugian stok coin pihak admin.</blockquote>"
 )
 
 
@@ -115,7 +116,6 @@ def get_official_price_list_text() -> str:
             f"{E_COIN()} <b>Fee ALTCOIN</b> <i>(USDT beda &amp; lebih murah)</i>",
             "<i>Min. Jual/Beli 5k · fee dalam IDR</i>",
             ALTCOIN_FEE_TIERS, ALTCOIN_PERCENT_TIERS,
-            "📌 <i>Khusus JUAL altcoin: +Rp 500 utk nominal di bawah Rp 1.010k (jual USD tidak kena).</i>",
         ),
         _fee_card(
             f"{E_DOLLAR()} <b>Fee Khusus USD</b>",
@@ -124,7 +124,7 @@ def get_official_price_list_text() -> str:
         ),
         _fee_card(
             f"{E_SWAP()} <b>Fee Convert</b>",
-            "<i>Min. Convert 6k · fee dalam IDR</i>",
+            "<i>Min. Convert 5k · fee dalam IDR</i>",
             CONVERT_FEE_TIERS, CONVERT_PERCENT_TIERS,
         ),
         PRICE_LIST_NOTE,
