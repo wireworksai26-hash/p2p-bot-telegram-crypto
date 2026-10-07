@@ -1020,6 +1020,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"📌 <b>Cara Bayar:</b>\n"
                 f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
                 f"2. Nominal <b>{format_idr(final_total_idr)}</b> akan muncul otomatis (QRIS Dinamis).\n"
+                f"<i>Kode Unik pembayaran digunakan untuk biaya pengecekan transaksi QRIS otomatis.</i>\n"
                 f"3. Selesaikan pembayaran di aplikasi e-wallet / bank Anda.\n"
                 f"4. Koin crypto akan <b>otomatis terkirim</b> ke wallet Anda seketika setelah pembayaran terdeteksi!\n\n"
                 f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>"
