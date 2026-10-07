@@ -126,7 +126,10 @@ def format_testimony_message(
     nominal_formatted = format_idr(nominal_idr)
 
     # Link Txhash
-    explorer_url = get_explorer_url_for_tx(network or target_network, tx_hash)
+    # Convert: hash adalah transaksi payout di jaringan TUJUAN, bukan jaringan asal.
+    is_swap = ot_upper in ("SWAP", "CONVERT")
+    explorer_net = (target_network or network) if is_swap else (network or target_network)
+    explorer_url = get_explorer_url_for_tx(explorer_net, tx_hash)
     if explorer_url:
         tx_display = f'<a href="{explorer_url}">Link</a>'
     elif tx_hash and len(tx_hash) > 10:
@@ -161,6 +164,9 @@ async def post_transaction_testimony(
     """
     if not bot or not order:
         return False
+    # Detector/handler kadang meneruskan Application (bukan Bot); ambil bot di dalamnya.
+    if not hasattr(bot, "send_message") and hasattr(bot, "bot"):
+        bot = bot.bot
 
     target_channel = channel or os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
 
