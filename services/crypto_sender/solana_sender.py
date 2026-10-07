@@ -53,6 +53,7 @@ class SolanaSender(BaseCryptoSender):
             settings.SOL_RPC,
             "https://solana-rpc.publicnode.com",
             "https://api.mainnet-beta.solana.com",
+            "https://api.mainnet.solana.com",
         ]
         self.rpc_list = list(dict.fromkeys(r.strip() for r in raw_rpcs if r and r.strip()))
         self.rpc_url = self.rpc_list[0]

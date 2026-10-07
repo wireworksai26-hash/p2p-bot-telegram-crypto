@@ -51,7 +51,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             discount_status_text = (
                 f"🎁 <b>Status Diskon Transaksi:</b>\n"
                 f"├── Status : ⚪ <i>Belum Aktif</i>\n"
-                f"└── Info   : Undang teman & dapatkan diskon 10% untuk 10x transaksi!\n\n"
+                f"└── Info   : Undang teman & dapatkan diskon 7% untuk 10x transaksi!\n\n"
             )
 
         text = (
@@ -70,7 +70,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"🎉 <b>Untuk Teman yang Diundang</b>\n"
             f"• Diskon fee Rp 1.000 di transaksi pertama\n\n"
             f"💸 <b>Bonus dari Transaksi Teman</b>\n"
-            f"• 10% dari fee setiap transaksi temanmu masuk ke saldo bot kamu (maks. 10 transaksi teman)\n\n"
+            f"• 7% dari fee setiap transaksi temanmu masuk ke saldo bot kamu (maks. 10 transaksi teman)\n\n"
             f"💰 <b>Saldo Referral</b>\n"
             f"• Masuk ke saldo bot: bisa untuk transaksi atau ditarik ke rekening/e-wallet (min. Rp 10.000)\n"
             f"• Reward masuk setelah transaksi selesai dan melewati masa tahan 24 jam"

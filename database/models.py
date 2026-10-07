@@ -416,7 +416,7 @@ class WithdrawRequest(Base):
 
 class ReferralDiscount(Base):
     """
-    Pelacak sisa quota diskon 10% untuk referrer yang berhasil mengundang user baru.
+    Pelacak sisa quota diskon 7% untuk referrer yang berhasil mengundang user baru.
     Dibuat otomatis saat referee menyelesaikan transaksi pertama.
     """
     __tablename__ = 'referral_discounts'
@@ -424,7 +424,7 @@ class ReferralDiscount(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, unique=True, index=True)
     remaining_uses = Column(Integer, default=10, nullable=False)   # Sisa slot diskon (mulai dari 10)
-    discount_pct = Column(Numeric(5, 2), default=10.0, nullable=False)  # Default 10%
+    discount_pct = Column(Numeric(5, 2), default=7.0, nullable=False)  # Default 7%
     activated_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)    # Opsional: bisa dibatasi waktu oleh admin
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

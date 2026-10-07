@@ -28,6 +28,8 @@ FX_URLS = (
 CACHE_TTL_SECONDS = 15
 MAX_PRICE_AGE_SECONDS = 600
 MAX_CLOCK_SKEW_SECONDS = 60
+# Koin yang tidak ada di OKX diambil dari sumber lain paling cepat tiap 3 menit.
+FILL_REFRESH_SECONDS = 180
 COINGECKO_IDS = {
     "USDT": "tether", "USDC": "usd-coin", "ETH": "ethereum", "BNB": "binancecoin",
     "SOL": "solana", "AVAX": "avalanche-2", "TRX": "tron",
@@ -271,6 +273,21 @@ class PriceService:
             logger.debug("OKX tickers tidak tersedia (%s)", exc)
         return None
 
+    async def _fetch_missing(self, coin_ids, fx=None):
+        """Harga koin yang tidak ada di sumber utama. Urutan: CoinPaprika -> CoinMarketCap (USD x kurs,
+        tanpa/hemat kuota) -> CoinGecko. Return ({coin_id: baris}, nama sumber)."""
+        wanted = set(coin_ids)
+        fx = fx or await self._fetch_spot_fx() or await self._fetch_fx()
+        if fx:
+            for name, fetcher in (("CoinPaprika", self._fetch_paprika), ("CoinMarketCap", self._fetch_cmc)):
+                rows = await fetcher(fx) or {}
+                found = {cid: rows[cid] for cid in wanted if cid in rows}
+                if found:
+                    return found, name
+        rows = await self._fetch_coingecko() or {}
+        found = {cid: rows[cid] for cid in wanted if cid in rows}
+        return found, "CoinGecko"
+
     async def _refresh(self, force=False):
         async with self._lock:
             now = time.time()
@@ -308,7 +325,26 @@ class PriceService:
                         source = "CoinMarketCap+FX"
 
             if data is not None:
-                # Per-coin fill jika OKX tidak punya koin tertentu (seperti TON / USDG)
+                # Koin yang tidak ada di sumber utama (mis. TON / USDG di OKX): isi dari sumber lain,
+                # tapi hanya bila belum pernah terisi atau barisnya sudah lewat FILL_REFRESH_SECONDS
+                # (hemat kuota CoinGecko; baris yang masih segar dipertahankan dari cache).
+                wanted = set(COINGECKO_IDS.values())
+                stale = [
+                    cid for cid in wanted - set(data)
+                    if not self._cache.get(cid)
+                    or now - float((self._cache[cid] or {}).get("last_updated_at") or 0) > FILL_REFRESH_SECONDS
+                ]
+                if stale:
+                    fills, fill_source = await self._fetch_missing(stale, fx)
+                    if fills:
+                        data.update(fills)
+                        source = f"{source} + {fill_source}" if source else fill_source
+                    missing_now = [cid for cid in stale if cid not in fills]
+                    if missing_now:
+                        logger.warning("Harga %s tidak ditemukan di semua sumber (OKX/CoinPaprika/CMC/CoinGecko)",
+                                       ", ".join(sorted(missing_now)))
+
+                # Per-coin fill dari cache lama bila sumber saat ini tidak punya koin tertentu
                 for coin_id in set(COINGECKO_IDS.values()):
                     if coin_id not in data and self._cache.get(coin_id):
                         old_row = self._cache[coin_id]

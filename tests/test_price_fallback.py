@@ -162,7 +162,8 @@ class TestFallbackHarga(unittest.TestCase):
     def test_refresh_sukses_coingecko_tetap_sumber_coingecko(self):
         self._pakai(rute_sukses())
         asyncio.run(self.ps._refresh())
-        self.assertEqual(self.ps._cache["_source"], "CoinGecko IDR")
+        # Sumber utama tetap CoinGecko; koin yang tidak ada di fixture boleh diisi sumber lain.
+        self.assertTrue(self.ps._cache["_source"].startswith("CoinGecko IDR"))
         self.assertIn("tether", self.ps._cache)
 
     def test_semua_sumber_gagal_cache_kosong_tapi_tercap(self):

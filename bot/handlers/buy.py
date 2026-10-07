@@ -721,7 +721,7 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     # Tambahkan baris informasi diskon referral jika berlaku
     if context.user_data.get("buy_discount_applied"):
         disc_amt = context.user_data.get("buy_discount_amount", 0)
-        disc_pct = context.user_data.get("buy_discount_pct", 10.0)
+        disc_pct = context.user_data.get("buy_discount_pct", 7.0)
         summary_text += f"\n🎁 <b>Diskon Referral:</b> -{format_idr(disc_amt)} ({disc_pct:.0f}%)"
     
     # Tambahkan baris informasi metode pembayaran

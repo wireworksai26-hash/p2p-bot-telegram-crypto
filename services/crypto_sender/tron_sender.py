@@ -24,6 +24,29 @@ logger = logging.getLogger(__name__)
 # Alamat kontrak USDT TRC-20
 USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
+# Host full node kompatibel TronGrid: primer dari .env, lalu cadangan bila mati/limit.
+TRON_HOSTS = list(dict.fromkeys(
+    h.strip().rstrip("/") for h in (
+        settings.TRX_RPC, "https://api.trongrid.io", "https://api.tronstack.io",
+        "https://tron-rpc.publicnode.com",
+    ) if h and h.strip()
+))
+
+
+async def healthy_tron_host() -> str:
+    """Host TRON pertama yang menjawab /wallet/getnowblock; bila semua gagal, host primer."""
+    import httpx
+    for host in TRON_HOSTS:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                res = await client.post(f"{host}/wallet/getnowblock", json={})
+                if res.status_code == 200 and res.json().get("blockID"):
+                    return host
+        except Exception as exc:
+            logger.warning("Host TRON %s tidak sehat (%s), coba host berikut", host, type(exc).__name__)
+    logger.error("Semua host TRON gagal health-check; memakai host primer %s", TRON_HOSTS[0])
+    return TRON_HOSTS[0]
+
 class TronSender(BaseCryptoSender):
     def __init__(self):
         self.explorer_base = "https://tronscan.org"
@@ -77,7 +100,7 @@ class TronSender(BaseCryptoSender):
         if not TRONPY_AVAILABLE:
             raise RuntimeError("RPC TRON gagal membaca saldo dan SDK fallback tidak tersedia.")
         try:
-            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC, timeout=20.0))
+            client = Tron(provider=HTTPProvider(endpoint_uri=await healthy_tron_host(), timeout=20.0))
             balance_sun = await asyncio.to_thread(client.get_account_balance, self.wallet_address)
             return float(balance_sun)
         except Exception as e:
@@ -116,7 +139,7 @@ class TronSender(BaseCryptoSender):
         if not TRONPY_AVAILABLE:
             raise RuntimeError("RPC TRON gagal membaca saldo token dan SDK fallback tidak tersedia.")
         try:
-            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC, timeout=20.0))
+            client = Tron(provider=HTTPProvider(endpoint_uri=await healthy_tron_host(), timeout=20.0))
             contract = await asyncio.to_thread(client.get_contract, contract_address)
             raw_balance = await asyncio.to_thread(
                 contract.functions.balanceOf, self.wallet_address
@@ -156,8 +179,11 @@ class TronSender(BaseCryptoSender):
 
             if priv_key.public_key.to_base58check_address() != self.wallet_address:
                 return SendResult(False, error_message="MANUAL_REVIEW: Key TRON tidak cocok dengan alamat stok.")
-            client = Tron(provider=HTTPProvider(endpoint_uri=settings.TRX_RPC,
-                          api_key=settings.TRONGRID_API_KEY or None, timeout=20.0))
+            tron_host = await healthy_tron_host()
+            client = Tron(provider=HTTPProvider(
+                endpoint_uri=tron_host,
+                api_key=(settings.TRONGRID_API_KEY or None) if "trongrid" in tron_host else None,
+                timeout=20.0))
             symbol_upper = symbol.upper()
 
             if symbol_upper == "USDT":

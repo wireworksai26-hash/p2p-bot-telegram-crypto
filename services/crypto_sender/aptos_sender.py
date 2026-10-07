@@ -23,7 +23,8 @@ OCTAS_PER_APT = 10**8
 class AptosSender(BaseCryptoSender):
     def __init__(self):
         self.network = "APTOS"
-        raw_rpcs = [settings.APTOS_RPC, "https://fullnode.mainnet.aptoslabs.com/v1"]
+        raw_rpcs = [settings.APTOS_RPC, "https://fullnode.mainnet.aptoslabs.com/v1",
+                    "https://api.mainnet.aptoslabs.com/v1"]
         self.rpc_list = list(dict.fromkeys(r.rstrip("/") for r in raw_rpcs if r and r.strip()))
         self.wallet_address = settings.APTOS_WALLET_ADDRESS
         self.explorer_base = "https://explorer.aptoslabs.com"

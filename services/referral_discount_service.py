@@ -1,7 +1,7 @@
 """
 services/referral_discount_service.py — Referral Discount (Phase 7)
 =====================================================================
-Menghitung dan menerapkan diskon 10% pada fee transaksi untuk referrer
+Menghitung dan menerapkan diskon 7% pada fee transaksi untuk referrer
 yang berhasil mengundang user. Setiap referrer mendapat 10 slot diskon.
 """
 
@@ -11,7 +11,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-REFERRAL_DISCOUNT_PCT: float = 10.0   # Persen diskon default
+REFERRAL_DISCOUNT_PCT: float = 7.0   # Persen diskon default
 REFERRAL_DISCOUNT_USES: int = 10       # Jumlah transaksi yang mendapat diskon
 
 
@@ -21,7 +21,7 @@ def calculate_discounted_fee(base_fee_idr: int, discount_pct: float) -> tuple[in
 
     Args:
         base_fee_idr: Fee asli sebelum diskon (IDR)
-        discount_pct: Persen diskon (contoh: 10.0 untuk 10%)
+        discount_pct: Persen diskon (contoh: 7.0 untuk 7%)
 
     Returns:
         Tuple: (discounted_fee_idr, discount_amount_idr)
@@ -155,7 +155,7 @@ async def notify_discount_exhausted(bot, telegram_id: int) -> None:
     """
     msg = (
         "🎁 <b>Kuota Diskon Referral Habis!</b>\n\n"
-        "Anda telah menggunakan semua 10 slot diskon 10% dari program referral.\n\n"
+        "Anda telah menggunakan semua 10 slot diskon 7% dari program referral.\n\n"
         "Undang lebih banyak teman dan pastikan mereka bertransaksi untuk mendapatkan kuota diskon baru! 🚀"
     )
     try:
@@ -186,7 +186,7 @@ async def activate_discount_for_referrer(
         msg = (
             f"🎉 <b>Selamat! Anda Mendapat Diskon Referral!</b>\n\n"
             f"Teman yang Anda undang baru saja menyelesaikan transaksi pertama.\n\n"
-            f"🎁 <b>Hadiah:</b> Diskon <b>10%</b> dari biaya transaksi\n"
+            f"🎁 <b>Hadiah:</b> Diskon <b>7%</b> dari biaya transaksi\n"
             f"📊 <b>Kuota:</b> {REFERRAL_DISCOUNT_USES} transaksi berikutnya\n\n"
             f"Diskon akan otomatis diterapkan setiap kali Anda bertransaksi. Nikmati! ✨"
         )

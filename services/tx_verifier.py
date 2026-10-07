@@ -20,9 +20,21 @@ logger = logging.getLogger(__name__)
 EVM_NETWORKS = {"BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM",
                 "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"}
 TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-SOLANA_RPCS = list(dict.fromkeys([settings.SOL_RPC, "https://solana-rpc.publicnode.com",
-                                 "https://api.mainnet-beta.solana.com"]))
+def _hosts(*urls):
+    """Daftar host unik berurutan (primer dari .env dulu), tanpa slash akhir."""
+    return list(dict.fromkeys(u.strip().rstrip("/") for u in urls if u and u.strip()))
+
+
+# Tiap jaringan non-EVM punya beberapa RPC: bila satu mati/limit, verifikasi pindah ke berikutnya.
+SOLANA_RPCS = _hosts(settings.SOL_RPC, "https://solana-rpc.publicnode.com",
+                     "https://api.mainnet-beta.solana.com", "https://api.mainnet.solana.com")
 TRONGRID_URL = settings.TRX_RPC.rstrip("/")
+TRON_HOSTS = _hosts(settings.TRX_RPC, "https://api.trongrid.io", "https://api.tronstack.io",
+                    "https://tron-rpc.publicnode.com")
+SUI_RPCS = _hosts(settings.SUI_RPC, "https://sui-rpc.publicnode.com",
+                  "https://sui-mainnet-endpoint.blockvision.org")
+APTOS_RPCS = _hosts(settings.APTOS_RPC, "https://fullnode.mainnet.aptoslabs.com/v1",
+                    "https://api.mainnet.aptoslabs.com/v1")
 # Serialise unauthenticated TON requests to respect the public 1 RPS limit.
 _ton_lock = asyncio.Lock()
 _ton_last_request = 0.0
@@ -171,9 +183,17 @@ async def _sol_rpc(method, params):
 
 
 async def _tron(method, tx_hash):
-    return await _json("POST", f"{TRONGRID_URL}/walletsolidity/{method}",
-                       json={"value": tx_hash},
-                       headers={"TRON-PRO-API-KEY": settings.TRONGRID_API_KEY} if settings.TRONGRID_API_KEY else {})
+    last_exc = None
+    for host in TRON_HOSTS:
+        # API key TronGrid hanya dikirim ke host trongrid.
+        headers = {"TRON-PRO-API-KEY": settings.TRONGRID_API_KEY} if (
+            settings.TRONGRID_API_KEY and "trongrid" in host) else {}
+        try:
+            return await _json("POST", f"{host}/walletsolidity/{method}", json={"value": tx_hash}, headers=headers)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("RPC TRON %s gagal (%s), coba host berikut", host, type(exc).__name__)
+    raise RuntimeError("Semua RPC TRON gagal.") from last_exc
 
 
 def _tron_address(value):
@@ -191,9 +211,21 @@ async def _ton_get(path, params):
         loop = asyncio.get_running_loop()
         if not settings.TON_API_KEY:
             await asyncio.sleep(max(0, 1.05 - (loop.time() - _ton_last_request)))
+        last_exc = None
         try:
-            return await _json("GET", f"{settings.TON_INDEXER_URL}/{path}", params=params,
-                               headers={"X-API-Key": settings.TON_API_KEY} if settings.TON_API_KEY else {})
+            for attempt in range(3):
+                try:
+                    return await _json("GET", f"{settings.TON_INDEXER_URL}/{path}", params=params,
+                                       headers={"X-API-Key": settings.TON_API_KEY} if settings.TON_API_KEY else {})
+                except httpx.HTTPStatusError as exc:
+                    last_exc = exc
+                    if exc.response.status_code not in (429, 500, 502, 503, 504):
+                        raise
+                except (httpx.TransportError, httpx.TimeoutException) as exc:
+                    last_exc = exc
+                logger.warning("Indexer TON gagal (percobaan %d/3), coba lagi", attempt + 1)
+                await asyncio.sleep(1.2 * (attempt + 1))
+            raise last_exc
         finally:
             _ton_last_request = loop.time()
 
@@ -486,9 +518,20 @@ async def _verify_ton(symbol, tx_hash, wallet):
                              if (child.get("in_msg") or {}).get("hash") in outgoing)
     return _fail("Penerimaan USDT TON belum confirmed; jangan klaim dari request pengiriman saja.")
 
+async def _sui_rpc(method, params):
+    last_exc = None
+    for rpc in SUI_RPCS:
+        try:
+            return await _rpc(rpc, method, params)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("RPC SUI %s gagal (%s), coba host berikut", rpc, type(exc).__name__)
+    raise RuntimeError("Semua RPC SUI gagal.") from last_exc
+
+
 async def _verify_sui(tx_hash, wallet):
-    result = await _rpc(settings.SUI_RPC, "sui_getTransactionBlock", [tx_hash,
-                         {"showEffects": True, "showBalanceChanges": True}])
+    result = await _sui_rpc("sui_getTransactionBlock", [tx_hash,
+                            {"showEffects": True, "showBalanceChanges": True}])
     if result.get("effects", {}).get("status", {}).get("status") != "success" or not result.get("checkpoint"):
         return _fail("Transaksi SUI belum sukses/final.")
     amount = Decimal(0)
@@ -500,8 +543,19 @@ async def _verify_sui(tx_hash, wallet):
     return _ok(amount, int(result["timestampMs"]) / 1000, tx_hash)
 
 
+async def _aptos_get(path):
+    last_exc = None
+    for rpc in APTOS_RPCS:
+        try:
+            return await _json("GET", f"{rpc}/{path}")
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("RPC Aptos %s gagal (%s), coba host berikut", rpc, type(exc).__name__)
+    raise RuntimeError("Semua RPC Aptos gagal.") from last_exc
+
+
 async def _verify_aptos(tx_hash, wallet):
-    data = await _json("GET", f"{settings.APTOS_RPC.rstrip('/')}/transactions/by_hash/{tx_hash}")
+    data = await _aptos_get(f"transactions/by_hash/{tx_hash}")
     if data.get("success") is not True or data.get("type") != "user_transaction":
         return _fail("Transaksi APT belum sukses.")
     payload = data.get("payload") or {}
@@ -588,7 +642,7 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
             for row in data.get("jetton_transfers", []):
                 yield normalize_tx_hash("TON", row["transaction_hash"])
     elif network == "SUI":
-        data = await _rpc(settings.SUI_RPC, "suix_queryTransactionBlocks", [
+        data = await _sui_rpc("suix_queryTransactionBlocks", [
             {"filter": {"ToAddress": wallet}}, None, 100, True])
         for row in data.get("data", []):
             yield row["digest"]
@@ -602,7 +656,7 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
         data = await _json("POST", settings.APTOS_INDEXER_URL,
                            json={"query": query, "variables": {"owner": _move_address(wallet)}})
         for version in dict.fromkeys(row["transaction_version"] for row in data.get("data", {}).get("fungible_asset_activities", [])):
-            tx = await _json("GET", f"{settings.APTOS_RPC.rstrip('/')}/transactions/by_version/{version}")
+            tx = await _aptos_get(f"transactions/by_version/{version}")
             if int(tx["timestamp"]) / 1e6 >= since:
                 yield tx["hash"]
     elif network in EVM_NETWORKS:
