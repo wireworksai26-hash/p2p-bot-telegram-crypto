@@ -5,8 +5,9 @@ Memantau transaksi masuk ke hot wallet untuk order dengan status
 `WAITING_CRYPTO_DEPOSIT` (Sell maupun Convert/Swap).
 
 Alur (bypass verifikasi admin -> full otomatis):
-1. Verifikasi TX hash di blockchain (on-chain) via services.tx_verifier.
-2. Jika tidak ada hash, auto-scan riwayat transaksi masuk wallet.
+1. Verifikasi TX hash kiriman user di blockchain (on-chain) via services.tx_verifier.
+2. Tanpa hash order TIDAK dikonfirmasi: nominal koin tidak lagi berkode unik, jadi
+   auto-scan riwayat wallet hanya jalan bila DEPOSIT_AUTOSCAN_ENABLED=true.
 3. Terverifikasi -> status `CRYPTO_CONFIRMED` + notif user.
 4. Order Swap/Convert -> eksekusi payout otomatis koin tujuan ke wallet buyer
    -> sukses: `COMPLETED` + notif (TX hash + explorer).
@@ -236,8 +237,9 @@ class DepositDetector:
                 await self.escalate_user_hash(db, order, tx_hash, review, bot_app)
                 return
 
-        # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi)
-        if not verified or not verified.get("verified"):
+        # 2. Auto-scan riwayat transaksi masuk wallet (jika belum terverifikasi).
+        # Default mati: tanpa kode unik, deposit tidak bisa dipastikan milik order ini.
+        if (not verified or not verified.get("verified")) and settings.DEPOSIT_AUTOSCAN_ENABLED:
             if expected_wallet:
                 incoming = await tx_verifier.get_recent_incoming(
                     network=order.network,
@@ -389,6 +391,7 @@ class DepositDetector:
                         f"Order: <code>{order.order_id}</code>\n"
                         f"User ID: <code>{order.telegram_id}</code>\n"
                         f"Deposit: {format_crypto(verified.get('amount'), order.crypto_symbol)} ({order.network})\n"
+                        f"Pengirim: <code>{_esc(str(verified.get('from_address') or '-'))}</code>\n"
                         f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
                         f"‼️ <b>TRANSFER RUPIAH SEGERA:</b> "
                         f"<b>{format_idr(order.total_idr)}</b> ke rekening:\n"
@@ -478,6 +481,10 @@ class DepositDetector:
                 release_order_inventory(db, order.order_id, consumed=True)
                 from database.crud import auto_save_order_accounts
                 auto_save_order_accounts(db, order)
+
+                if bot_app:
+                    from services.testimony_service import schedule_transaction_testimony
+                    schedule_transaction_testimony(bot_app, order, db=db)
 
                 if bot_app:
                     try:
@@ -584,6 +591,10 @@ class DepositDetector:
         orang lain. Hash hanya auto-konfirmasi bila nominalnya pas untuk order ini
         DAN tidak juga pas untuk order lain yang sedang menunggu deposit.
         """
+        sender = str(verified.get("from_address") or "").strip().lower()
+        if sender and sender in settings.OWNER_WALLET_ADDRESSES:
+            return ("Pengirim deposit adalah wallet owner (isi ulang stok), bukan wallet user — "
+                    "tidak boleh dikonfirmasi otomatis.")
         received = verified.get("amount", 0)
         if not self._deposit_fits(received, order.crypto_amount):
             return (f"Nominal deposit {received} {order.crypto_symbol} tidak sesuai order "

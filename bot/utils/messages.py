@@ -71,7 +71,7 @@ ORDER_SUMMARY_SELL = (
     "• No Rekening: <code>{bank_acc}</code>\n"
     "• Atas Nama: {bank_holder}\n\n"
     "⏰ <b>Jam Layanan:</b> 08.00 - 22.00 WIB\n"
-    "<i>(Cek koin otomatis 24 jam. Pencairan rupiah diproses manual pada jam layanan atau saat admin online).</i>\n\n"
+    "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan rupiah diproses manual pada jam layanan atau saat admin online).</i>\n\n"
     "Silakan klik konfirmasi di bawah untuk memproses penjualan."
 )
 

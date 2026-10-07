@@ -7,7 +7,7 @@ Alur Transaksi Convert/Swap (FULL OTOMATIS — tanpa verifikasi admin):
 3. Buyer memasukkan nominal koin asal dan alamat wallet tujuan (ETH Base buyer).
 4. Bot membuat Quote (Expiry 30 Menit) dengan Fee Convert Tier (Min Rp 6.000, Max Rp 600.000).
 5. Bot memberikan alamat deposit hot wallet seller (Solana seller).
-6. Buyer menukar koin & memasukkan TX Hash deposit (atau auto-scan riwayat wallet).
+6. Buyer menukar koin & memasukkan TX Hash deposit (wajib; auto-scan riwayat wallet dimatikan).
 7. Bot memverifikasi deposit ON-CHAIN secara otomatis (services.tx_verifier)
    -> Status `CRYPTO_CONFIRMED` & notif user.
 8. Bot mengeksekusi payout otomatis koin tujuan ke wallet buyer
@@ -239,12 +239,16 @@ USD_COINS = {"USDT", "USDC", "USDG"}
 MIN_CONVERT_IDR = 5000  # tier fee CONVERT terendah (fee_service.CONVERT_FEE_TIERS)
 
 
-def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float, src_sym: str = "") -> tuple[float, int, str]:
+def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float, src_sym: str = "",
+                         force: str = None) -> tuple[float, int, str]:
     """
     Parse input nominal convert dari user:
     - USD ($10, 10$, 10 usd, 10 usdt, usd 25)
     - IDR (50000, 50.000, Rp 50.000, 50k, 50rb, 1.5jt)
     - Crypto Amount (0.05, 1.5, 4.2, 10)
+
+    force="COIN"/"IDR": user sudah memilih tombol mode, jadi angka polos TIDAK ditebak lagi
+    (COIN = jumlah koin, IDR = Rupiah). Penanda eksplisit ($10, Rp, 50k) tetap dikenali.
     """
     text = raw_text.strip()
     src_sym_upper = src_sym.upper() if src_sym else ""
@@ -263,6 +267,22 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         else:
             src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "USD"
+
+    # 1b. Mode dipilih lewat tombol: angka polos mengikuti mode, bukan tebakan.
+    if force == "COIN" and re.fullmatch(r'[0-9]+(?:[.,][0-9]+)?', text):
+        val = float(text.replace(',', '.'))
+        if val <= 0:
+            raise ValueError("Jumlah koin harus lebih besar dari 0")
+        if src_sym_upper in USD_COINS:
+            nominal_idr = int(val * usdt_idr_rate)
+        else:
+            nominal_idr = int(val * src_idr_price)
+        return val, nominal_idr, "CRYPTO"
+    if force == "IDR" and not re.match(r'^(?:rp|idr)\.?\s*[0-9]', text, re.IGNORECASE):
+        from bot.utils.validator import parse_idr_amount
+        nominal_idr = parse_idr_amount(text)  # ValueError bila bukan Rupiah yang valid
+        src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
+        return src_amount, nominal_idr, "IDR"
 
     # 2. IDR suffixes: 50k, 50rb, 1jt, 1m, 1.5jt
     clean = re.sub(r'^(?:rp|idr)\.?\s*', '', text, flags=re.IGNORECASE).strip()
@@ -319,6 +339,57 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         return src_amount, nominal_idr, "CRYPTO"
 
 
+def _amount_prompt(src_sym, src_net, tgt_sym, tgt_net, rate_info, mode=None):
+    """Teks + keyboard permintaan jumlah convert. mode None = layar pilih cara input;
+    COIN = jumlah koin asal; IDR = nominal Rupiah (format $10 / 10 USD tetap dikenali)."""
+    from bot.utils.amount_mode import mode_row
+    back_icon = CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850")
+    head = (
+        f"🔄 <b>Konfigurasi Convert:</b>\n"
+        f"• <b>Dari:</b> <code>{src_sym} ({src_net})</code>\n"
+        f"• <b>Ke:</b> <code>{tgt_sym} ({tgt_net})</code>\n"
+        f"{rate_info}\n"
+    )
+    if mode == "COIN":
+        body = (
+            f"🪙 <b>Mode Jumlah Koin</b>\n"
+            f"Ketik jumlah <b>{src_sym}</b> yang ingin ditukar (contoh: <code>0.5</code>, <code>2.5</code>, <code>10</code>):"
+        )
+    elif mode == "IDR":
+        body = (
+            f"💵 <b>Mode Nominal Rupiah</b>\n"
+            f"Ketik nominal Rupiah yang ingin dikonversi (contoh: <code>50000</code>, <code>100.000</code>, <code>50k</code>).\n"
+            f"<i>Nominal dalam dollar juga bisa: <code>$10</code> atau <code>25 USD</code>.</i>"
+        )
+    else:
+        body = (
+            f"Pilih cara memasukkan jumlah yang ingin di-convert:\n"
+            f"🪙 <b>Jumlah Koin</b> — contoh <code>0.5</code> {src_sym}\n"
+            f"💵 <b>Nominal Rupiah</b> — contoh <code>Rp 50.000</code> (atau <code>$10</code>)"
+        )
+    keyboard = InlineKeyboardMarkup([
+        mode_row("swap", mode),
+        [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=back_icon)],
+        [get_owner_button()],
+    ])
+    return head + body, keyboard
+
+
+async def handle_input_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ganti cara input jumlah convert: koin <-> Rupiah."""
+    from bot.utils.amount_mode import mode_from_callback
+    query = update.callback_query
+    await query.answer()
+    mode = mode_from_callback(query.data)
+    context.user_data["swap_input_mode"] = mode
+    ud = context.user_data
+    text, keyboard = _amount_prompt(
+        ud["swap_src_symbol"], ud["swap_src_network"], ud["swap_tgt_symbol"], ud["swap_tgt_network"],
+        ud.get("swap_rate_info", ""), mode)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+    return INPUT_AMOUNT
+
+
 async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -362,27 +433,10 @@ async def select_tgt_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         logger.warning(f"Error format rate info di swap: {exc}")
 
-    keyboard = [
-        [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-        [get_owner_button()]
-    ]
-
-    await query.edit_message_text(
-        f"🔄 <b>Konfigurasi Convert:</b>\n"
-        f"• <b>Dari:</b> <code>{src_sym} ({src_net})</code>\n"
-        f"• <b>Ke:</b> <code>{tgt_sym} ({tgt_net})</code>\n"
-        f"{rate_info}\n"
-        f"💡 <b>Pilihan Format Input:</b>\n"
-        f"1️⃣ <b>Jumlah Koin / Altcoin:</b>\n"
-        f"   Ketik jumlah koin asal yang ingin ditukar (misal: <code>0.5</code>, <code>2.5</code>, <code>10</code>)\n"
-        f"2️⃣ <b>Nominal Rupiah (IDR):</b>\n"
-        f"   Ketik nominal rupiah yang ingin dikonversi (misal: <code>50000</code>, <code>100.000</code>, <code>50k</code>)\n"
-        f"3️⃣ <b>Nominal USD ($ / USDT):</b>\n"
-        f"   Ketik nominal dalam dollar (misal: <code>$10</code>, <code>25 USD</code>, <code>10.5$</code>)\n\n"
-        f"Silakan ketikkan nominal yang ingin Anda convert ke chat:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    context.user_data["swap_input_mode"] = None
+    context.user_data["swap_rate_info"] = rate_info
+    text, keyboard = _amount_prompt(src_sym, src_net, tgt_sym, tgt_net, rate_info, None)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
     return INPUT_AMOUNT
 
 
@@ -406,7 +460,9 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usdt_idr_rate = src_price_info.get("usdt_idr_rate") or src_market_price
 
     try:
-        src_amount, nominal_idr, mode = parse_convert_amount(text_input, src_market_price, usdt_idr_rate, src_sym)
+        src_amount, nominal_idr, mode = parse_convert_amount(
+            text_input, src_market_price, usdt_idr_rate, src_sym,
+            force=context.user_data.get("swap_input_mode"))
     except (ValueError, Exception):
         keyboard = [
             [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
@@ -423,8 +479,8 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_AMOUNT
 
-    # Dasar = presisi deposit dikurangi 2 digit; 2 digit terakhir diisi kode unik saat order
-    # dibuat. Rupiah dihitung ulang dari jumlah yang benar-benar disetor (bukan input mentah).
+    # Nominal koin = presisi deposit (tanpa kode unik). Rupiah dihitung ulang dari jumlah
+    # yang benar-benar disetor (bukan input mentah).
     from services.deposit_amount import base_amount
     src_amount = float(base_amount(src_sym, src_amount))
     if src_amount > 0 and src_market_price:
@@ -561,7 +617,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📑 <b>[RINGKASAN QUOTE CONVERT]</b>\n"
         f"<i>Masa berlaku quote: 30 Menit</i>\n\n"
-        f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net}) + kode unik (2 digit terakhir, ditetapkan saat konfirmasi)\n"
+        f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net})\n"
         f"<b>Nilai IDR:</b> Rp {nominal_idr:,}\n"
         f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
@@ -706,9 +762,8 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<b>Batas Waktu Quote:</b> 30 Menit\n\n"
         f"📌 <b>INSTRUKSI SETORAN DANA:</b>\n"
         f"Silakan kirim <b>TEPAT</b> <code>{format_deposit_amount(src_amount, src_sym)}</code> <b>{src_sym} ({src_net})</b> ke alamat wallet seller berikut:\n"
-        f"<i>2 digit terakhir adalah kode unik order Anda — wajib dikirim persis agar convert diproses otomatis.</i>\n\n"
         f"<code>{seller_deposit_wallet}</code>\n\n"
-        f"Setelah mengirim, tekan tombol di bawah ini untuk memasukkan TX Hash atau foto bukti pengirimanmu:",
+        f"Setelah mengirim, tekan tombol di bawah ini untuk mengirim <b>TX Hash</b> (wajib). Convert hanya diproses setelah TX Hash terverifikasi di blockchain. Lupa? Kirim /txhash kapan saja:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -729,7 +784,7 @@ async def prompt_input_tx_hash(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         f"🔗 <b>INPUT TX HASH / BUKTI SETOR CONVERT</b>\n\n"
         f"ID Order: <code>{order_id}</code>\n\n"
-        f"Silakan kirimkan <b>TX Hash (Hash Transaksi)</b> atau <b>Foto Screenshot Bukti Pengiriman</b> ke chat bot ini:",
+        f"Silakan kirimkan <b>TX Hash (Hash Transaksi)</b> dari pengiriman koinmu ke chat bot ini (wajib, foto tidak dapat diverifikasi):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -752,8 +807,13 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
         photo_file_id = None
 
         if update.message and update.message.photo:
-            photo_file_id = update.message.photo[-1].file_id
-            deposit_proof = f"PHOTO:{photo_file_id}"
+            # Foto tidak bisa diverifikasi on-chain dan nominal koin tidak berkode unik,
+            # jadi tanpa TX Hash order tidak bisa diproses.
+            await update.message.reply_text(
+                "⚠️ Foto bukti tidak dapat diverifikasi. Silakan kirimkan <b>TX Hash</b> (teks) "
+                "transaksi pengirimanmu agar convert bisa diproses.",
+                parse_mode="HTML")
+            return WAITING_DEPOSIT_HASH
         elif update.message and update.message.text:
             try:
                 deposit_proof = tx_verifier.normalize_tx_hash(order.network, update.message.text)
@@ -761,7 +821,7 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text("⚠️ Hash/link explorer tidak valid untuk jaringan ini.")
                 return WAITING_DEPOSIT_HASH
         else:
-            await update.message.reply_text("⚠️ Silakan kirimkan teks TX Hash atau unggah foto screenshot bukti transfer.")
+            await update.message.reply_text("⚠️ Foto bukti tidak dapat diverifikasi. Silakan kirimkan teks TX Hash transaksi pengirimanmu.")
             return WAITING_DEPOSIT_HASH
 
         # Simpan bukti. Status tetap WAITING_CRYPTO_DEPOSIT hingga
@@ -976,6 +1036,7 @@ swap_conv_handler = ConversationHandler(
         ],
         INPUT_AMOUNT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, input_amount),
+            CallbackQueryHandler(handle_input_mode, pattern="^swap_mode_(coin|idr)$"),
             CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
             CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
         ],

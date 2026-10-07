@@ -13,7 +13,7 @@ import logging
 import re
 from html import escape as _esc
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_UP
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 from telegram.ext import (
     ContextTypes,
@@ -33,7 +33,7 @@ from bot.keyboards.crypto_select import (
     get_sell_network_keyboard
 )
 from bot.keyboards.main_menu import get_owner_button
-from bot.utils.validator import validate_crypto_amount
+from bot.utils.validator import validate_crypto_amount, parse_idr_amount, looks_like_idr
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id, display_symbol
 from bot.utils.messages import ORDER_SUMMARY_SELL, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
@@ -85,7 +85,7 @@ async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
             "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
-            "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
+            "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
         parse_mode="HTML"
@@ -102,7 +102,7 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
             "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
-            "<i>(Cek koin otomatis 24 jam. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
+            "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
         parse_mode="HTML"
@@ -137,6 +137,54 @@ async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_
     return SELECT_NETWORK
 
 
+def _amount_prompt(symbol: str, network: str, mode: str = None):
+    """Teks + keyboard permintaan jumlah jual. mode None = layar pilih cara input;
+    COIN = ketik jumlah koin; IDR = ketik nominal Rupiah."""
+    from bot.utils.amount_mode import mode_row
+    back_icon = CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850")
+    if mode == "IDR":
+        text = (
+            f"📈 Anda memilih menjual: <b>{symbol} ({network})</b>\n\n"
+            f"💵 <b>Mode Nominal Rupiah</b>\n"
+            f"Berapa <b>nilai jual</b> yang Anda inginkan?\n"
+            f"<i>Ketik nominal Rupiah, contoh: <code>5000</code>, <code>Rp 50.000</code>, atau <code>50k</code>. "
+            f"Jumlah {symbol} dihitung otomatis dari kurs jual saat ini (dibulatkan ke atas ke presisi koin). "
+            f"Nominal ini adalah nilai sebelum fee layanan.</i>"
+        )
+    elif mode == "COIN":
+        text = (
+            f"📈 Anda memilih menjual: <b>{symbol} ({network})</b>\n\n"
+            f"🪙 <b>Mode Jumlah Koin</b>\n"
+            f"Berapa jumlah koin <b>{symbol}</b> yang ingin Anda jual?\n"
+            f"<i>Ketik jumlah desimal di chat (contoh: 0.5 atau 10).</i>"
+        )
+    else:
+        text = (
+            f"📈 Anda memilih menjual: <b>{symbol} ({network})</b>\n\n"
+            f"Pilih cara memasukkan jumlah yang ingin dijual:\n"
+            f"🪙 <b>Jumlah Koin</b> — contoh <code>0.5</code> {symbol}\n"
+            f"💵 <b>Nominal Rupiah</b> — contoh <code>Rp 50.000</code>"
+        )
+    keyboard = InlineKeyboardMarkup([
+        mode_row("sell", mode),
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=back_icon)],
+        [get_owner_button()],
+    ])
+    return text, keyboard
+
+
+async def handle_input_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ganti mode input jumlah jual: koin <-> Rupiah."""
+    query = update.callback_query
+    await query.answer()
+    from bot.utils.amount_mode import mode_from_callback
+    mode = mode_from_callback(query.data)
+    context.user_data["sell_input_mode"] = mode
+    text, keyboard = _amount_prompt(context.user_data["sell_symbol"], context.user_data["sell_network"], mode)
+    await safe_edit_message(query, text=text, reply_markup=keyboard, parse_mode="HTML")
+    return INPUT_AMOUNT
+
+
 async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Tahap 2 Jual: Menyimpan jaringan, lalu meminta input jumlah koin crypto."""
     query = update.callback_query
@@ -159,57 +207,63 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
 
     context.user_data["sell_symbol"] = symbol
     context.user_data["sell_network"] = network
-    
-    keyboard = [
-        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-        [get_owner_button()]
-    ]
-    
-    await safe_edit_message(
-        query,
-        text=(
-            f"📈 Anda memilih menjual: <b>{symbol} ({network})</b>\n\n"
-            f"Berapa jumlah koin <b>{symbol}</b> yang ingin Anda jual?\n"
-            f"<i>Ketik jumlah desimal di chat (contoh: 0.5 atau 10).</i>"
-        ),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    context.user_data["sell_input_mode"] = None
+
+    text, keyboard = _amount_prompt(symbol, network, None)
+    await safe_edit_message(query, text=text, reply_markup=keyboard, parse_mode="HTML")
     return INPUT_AMOUNT
 
 
 async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Memproses nominal crypto, mengecek batas minimum order, lalu meminta info bank."""
     text_input = update.message.text
-    
-    is_valid, crypto_amount = validate_crypto_amount(text_input)
-    if not is_valid:
-        keyboard = [
-            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-            [get_owner_button()]
-        ]
-        await update.message.reply_text(
-            text=(
-                "❌ <b>Jumlah Tidak Valid!</b>\n\n"
-                "Format angka salah. Harap kirimkan angka desimal positif (contoh: <code>1.5</code> atau <code>50</code>):"
-            ),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        return INPUT_AMOUNT
+    mode = context.user_data.get("sell_input_mode") or "COIN"
+    rupiah_target = None
+    crypto_amount = None
+
+    cancel_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+        [get_owner_button()]
+    ])
+    if mode == "IDR" or looks_like_idr(text_input):
+        try:
+            rupiah_target = parse_idr_amount(text_input)
+        except ValueError:
+            await update.message.reply_text(
+                text=(
+                    "❌ <b>Nominal Rupiah Tidak Valid!</b>\n\n"
+                    "Ketik angka Rupiah, contoh: <code>5000</code>, <code>Rp 50.000</code>, atau <code>50k</code>:"
+                ),
+                reply_markup=cancel_keyboard,
+                parse_mode="HTML"
+            )
+            return INPUT_AMOUNT
+    else:
+        is_valid, crypto_amount = validate_crypto_amount(text_input)
+        if not is_valid:
+            await update.message.reply_text(
+                text=(
+                    "❌ <b>Jumlah Tidak Valid!</b>\n\n"
+                    "Format angka salah. Harap kirimkan angka desimal positif (contoh: <code>1.5</code> atau <code>50</code>):"
+                ),
+                reply_markup=cancel_keyboard,
+                parse_mode="HTML"
+            )
+            return INPUT_AMOUNT
 
     symbol = context.user_data["sell_symbol"]
     network = context.user_data["sell_network"]
 
-    # Nominal dasar = presisi tampilan dikurangi 2 digit (dipakai kode unik saat order dibuat),
-    # supaya angka yang dihitung = angka yang ditampilkan = angka yang diverifikasi.
-    from services.deposit_amount import base_amount
-    crypto_amount = float(base_amount(symbol, crypto_amount))
-    if crypto_amount <= 0:
-        await update.message.reply_text(
-            "❌ <b>Jumlah terlalu kecil.</b> Silakan masukkan jumlah koin yang lebih besar:",
-            parse_mode="HTML")
-        return INPUT_AMOUNT
+    # Nominal koin = persis angka yang ditampilkan (dibulatkan ke bawah ke presisi deposit,
+    # tanpa kode unik), supaya angka yang dihitung = ditampilkan = diverifikasi on-chain.
+    from services.deposit_amount import base_amount, quantum
+    if crypto_amount is not None:
+        crypto_amount = float(base_amount(symbol, crypto_amount))
+        if crypto_amount <= 0:
+            await update.message.reply_text(
+                "❌ <b>Jumlah terlalu kecil.</b> Silakan masukkan jumlah koin yang lebih besar:",
+                parse_mode="HTML")
+            return INPUT_AMOUNT
 
     db = SessionLocal()
     try:
@@ -219,9 +273,19 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             raise ValueError(f"Harga {symbol} belum tersedia, coba lagi sebentar")
             
         sell_price_idr = price_data["sell_price_idr"]
-        
-        # Hitung kotor nominal IDR
-        gross_nominal_idr = int(crypto_amount * sell_price_idr)
+
+        if rupiah_target is not None:
+            # Mode Rupiah: koin = nilai / kurs jual, dibulatkan KE ATAS ke presisi deposit
+            # agar nilai jual tidak di bawah yang diminta (dan tetap memenuhi minimum order).
+            if not sell_price_idr or sell_price_idr <= 0:
+                raise ValueError(f"Harga {symbol} belum tersedia, coba lagi sebentar")
+            crypto_amount = float(
+                (Decimal(rupiah_target) / Decimal(str(sell_price_idr))).quantize(quantum(symbol), rounding=ROUND_UP))
+            if crypto_amount <= 0:
+                raise ValueError("Nominal Rupiah terlalu kecil. Silakan masukkan nominal yang lebih besar.")
+
+        # Hitung kotor nominal IDR dari koin yang benar-benar disetor
+        gross_nominal_idr = int(Decimal(str(crypto_amount)) * Decimal(str(sell_price_idr)))
         
         # Hitung fee transaksi (is_outgoing=False -> tanpa surcharge +2k untuk Jual)
         fee_category = get_fee_category(symbol)
@@ -289,10 +353,16 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     input_bank_keyboard = saved_bank_buttons + keyboard
 
+    from services.deposit_amount import format_deposit_amount
+    rupiah_note = (
+        f"• Nominal Diminta: <code>{format_idr(rupiah_target)}</code> "
+        f"<i>(koin dibulatkan ke atas)</i>\n" if rupiah_target is not None else ""
+    )
     await update.message.reply_text(
         text=(
             f"🪙 <b>Simulasi Perhitungan Penjualan:</b>\n"
-            f"• Aset Dijual: <code>{format_crypto(crypto_amount, symbol)} ({network})</code>\n"
+            f"• Aset Dijual: <code>{format_deposit_amount(crypto_amount, symbol)} {display_symbol(symbol)} ({network})</code>\n"
+            f"{rupiah_note}"
             f"• Kurs Jual: <code>{format_idr(sell_price_idr)}</code>\n"
             f"• Nominal Kotor: <code>{format_idr(gross_nominal_idr)}</code>\n"
             f"• Fee Layanan: <code>{format_idr(fee_idr)}</code>\n"
@@ -590,26 +660,25 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         waiting_text = (
             f"📥 <b>ORDER PENJUALAN DIBUAT</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"Harap kirimkan <b>TEPAT {deposit_str}</b> ke alamat Hot Wallet kami di bawah ini:\n"
-            f"<i>2 digit terakhir adalah kode unik order Anda — wajib dikirim persis "
-            f"agar terverifikasi otomatis.</i>\n\n"
+            f"Harap kirimkan <b>TEPAT {deposit_str}</b> ke alamat Hot Wallet kami di bawah ini:\n\n"
             f"Network: <b>{network}</b>\n"
             f"{token_hint}"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
             f"⏳ <b>Batas Waktu Quote:</b> {SELL_QUOTE_MINUTES} Menit\n"
-            f"• Koin yang masuk tetap dicek otomatis hingga <b>24 jam</b> setelah order dibuat.\n"
             f"• Kirim <b>hanya {symbol} di jaringan {network}</b>. Koin lain atau native coin "
             f"(mis. ETH/BNB/POL) tidak dapat diverifikasi otomatis dan harus diproses admin.\n\n"
+            f"✍️ <b>WAJIB kirim TX Hash setelah transfer.</b>\n"
+            f"Tekan tombol <b>Kirim TX Hash</b> di bawah lalu kirim Hash/TxID transaksimu. "
+            f"Bot akan memeriksanya langsung di blockchain; jika valid, admin langsung memproses Rupiah Anda. "
+            f"Tanpa TX Hash, order tidak bisa diproses.\n"
+            f"<i>Sudah menutup chat ini? Kirim perintah /txhash kapan saja untuk mengirim hash.</i>\n\n"
             f"⏰ <b>Catatan Layanan:</b>\n"
-            f"• Pengecekan koin masuk <b>otomatis 24 jam</b>.\n"
-            f"• Pencairan dana ke rekening/e-wallet Anda dilayani <b>08.00 - 22.00 WIB</b> (diproses manual saat admin online).\n\n"
-            f"<i>Setelah kirim, Anda dapat menekan tombol masukkan TX Hash untuk mempercepat verifikasi.</i>"
+            f"• Pencairan dana ke rekening/e-wallet Anda dilayani <b>08.00 - 22.00 WIB</b> (diproses manual saat admin online)."
         )
-        
+
         keyboard = [
             [InlineKeyboardButton("⛓ Salin Alamat Hot Wallet", copy_text=CopyTextButton(text=hot_wallet))],
-            [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
-            [InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data="sell_upload_proof")],
+            [InlineKeyboardButton("✍️ Kirim TX Hash", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
             [InlineKeyboardButton("Batal Jual", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
@@ -642,24 +711,8 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="HTML"
             )
         
-        # Beritahu admin dengan action buttons
-        admin_alert = (
-            f"🔔 <b>ORDER BARU DIBUAT (SELL)</b>\n\n"
-            f"Order ID: <code>{order_id}</code>\n"
-            f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
-            f"Crypto Dijual: {deposit_str} ({network})\n"
-            f"Rupiah Bersih Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
-            f"Tujuan Rekening:\n"
-            f"• {_esc(context.user_data['sell_bank_name'])} - {_esc(context.user_data['sell_bank_acc'])} a/n {_esc(context.user_data['sell_bank_holder'])}\n\n"
-            f"<i>Menunggu deposit crypto dari user ke hot wallet.</i>"
-        )
-        admin_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order_id}"),
-                InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
-            ]
-        ])
-        await notify_admins(context.bot, admin_alert, reply_markup=admin_keyboard, kind="jual")
+        # Admin TIDAK dikabari saat order dibuat: baru setelah TX hash user terverifikasi
+        # on-chain, DepositDetector mengirim notifikasi transfer Rupiah ke admin.
                 
     except Exception as e:
         logger.error(f"Error saat konfirmasi order sell: {e}", exc_info=True)
@@ -693,7 +746,7 @@ async def prompt_tx_hash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Memproses input TX Hash dari user, mengupdate status order, dan meneruskan ke admin."""
+    """TX Hash wajib: diverifikasi on-chain; valid -> admin dikabari untuk transfer Rupiah."""
     if not update.message or not update.message.text:
         await update.message.reply_text(
             "⚠️ Kirimkan <b>TX Hash</b> dalam bentuk teks. Contoh: <code>0xabc...def</code>",
@@ -701,133 +754,10 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return INPUT_TX_HASH
 
-    tx_hash = update.message.text.strip()
-    order_id = context.user_data["sell_order_id"]
-    symbol = context.user_data["sell_symbol"]
-    network = context.user_data["sell_network"]
-    crypto_amount = context.user_data["sell_crypto_amount"]
-    net_idr = context.user_data["sell_net_idr"]
-    bank_info = f"{context.user_data['sell_bank_name']} | {context.user_data['sell_bank_acc']} | {context.user_data['sell_bank_holder']}"
-    
-    # Pre-validasi format TX Hash sesuai jaringan order (64 hex / base58 / TON)
-    from services import tx_verifier
-    try:
-        # Simpan bentuk baku (huruf kecil/0x, URL explorer -> hash) agar hash yang sama
-        # tidak lolos dua kali lewat format berbeda.
-        tx_hash = tx_verifier.normalize_tx_hash(network, tx_hash)
-    except ValueError:
-        keyboard = [
-            [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-            [get_owner_button()]
-        ]
-        await update.message.reply_text(
-            text=(
-                "❌ <b>Format TX Hash Salah!</b>\n\n"
-                "Karakter TX Hash terlalu pendek atau mengandung karakter ilegal.\n"
-                "Silakan ketikkan ulang TX Hash yang valid:"
-            ),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        return INPUT_TX_HASH
+    from bot.handlers.deposit_hash import submit_deposit_hash
+    result = await submit_deposit_hash(update, context, context.user_data.get("sell_order_id"), update.message.text)
+    return INPUT_TX_HASH if result == "retry" else WAITING_TX
 
-    db = SessionLocal()
-    try:
-        # Simpan TX hash, biarkan DepositDetector memverifikasi on-chain
-        # lalu mengirim notifikasi admin untuk transfer Rupiah.
-        order = get_order_by_id(db, order_id)
-        # Hanya order milik user ini yang masih bisa menerima deposit.
-        if (order and order.telegram_id == update.effective_user.id
-                and order.status in ("WAITING_CRYPTO_DEPOSIT", "expired")):
-            order.deposit_tx_hash = tx_hash
-            db.commit()
-
-        # Verifikasi langsung + loop cepat agar user dapat kabar di bawah 1 menit
-        try:
-            import asyncio
-            from services import tx_verifier
-            from services.detector import deposit_detector
-            hasil = await tx_verifier.verify_deposit(
-                network=order.network,
-                symbol=order.crypto_symbol,
-                tx_hash=tx_hash,
-                expected_wallet=order.deposit_wallet,
-                expected_amount=float(order.crypto_amount),
-                not_before=order.created_at,
-                not_after=deposit_detector.deposit_deadline(order),
-            )
-            alasan = (hasil or {}).get("reason") or ""
-            # verified=True membawa reason "OK" — itu sukses, bukan penolakan.
-            lolos = bool((hasil or {}).get("verified"))
-            tertunda = (not alasan or alasan.startswith("Menunggu konfirmasi")
-                        or "belum dapat diverifikasi" in alasan)
-            if not lolos and not tertunda:
-                await update.message.reply_text(
-                    f"\u274c <b>Deposit Belum Bisa Diverifikasi</b>\n\n"
-                    f"Order ID: <code>{order_id}</code>\n"
-                    f"TX Hash: <code>{tx_hash}</code>\n\n"
-                    f"Alasan: <b>{alasan}</b>\n\n"
-                    f"Silakan periksa kembali transaksimu lalu kirim hash yang benar, "
-                    f"atau hubungi admin.",
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Menu Utama", callback_data="menu_back",
-                         icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-                        [get_owner_button()]
-                    ])
-                )
-                return ConversationHandler.END
-            asyncio.create_task(deposit_detector.verifikasi_cepat(order_id, context.application))
-        except Exception as scan_err:
-            logger.debug(f"Gagal trigger verifikasi deposit instan: {scan_err}")
-
-        # Beritahu admin update TX Hash dengan action buttons
-        admin_tx_alert = (
-            f"🔍 <b>TX HASH PENJUALAN DITERIMA (SELL)</b>\n\n"
-            f"Order ID: <code>{order_id}</code>\n"
-            f"User ID: <code>{order.telegram_id if order else context.user_data.get('sell_user_id', update.effective_user.id)}</code>\n"
-            f"Crypto: {format_crypto(crypto_amount, symbol)} ({network})\n"
-            f"Rupiah Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
-            f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
-            f"Tujuan Rekening:\n"
-            f"• {_esc(bank_info)}\n\n"
-            f"<i>Hash diterima, sedang diverifikasi on-chain. Tunggu notifikasi DEPOSIT TERVERIFIKASI sebelum transfer Rupiah.</i>"
-        )
-        admin_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order_id}"),
-                InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}")
-            ]
-        ])
-        await notify_admins(context.bot, admin_tx_alert, reply_markup=admin_keyboard, order_type="sell", kind="jual")
-
-        response_user = (
-            f"✅ <b>TX Hash Diterima!</b>\n\n"
-            f"Order ID: <code>{order_id}</code>\n"
-            f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
-            f"🔍 Deposit sedang <b>diverifikasi otomatis</b> di blockchain "
-            f"(<b>biasanya di bawah 1 menit</b>). Setelah terverifikasi, admin akan "
-            f"segera mentransfer Rupiah ke rekening Anda dan kamu akan menerima notifikasi. 🙏"
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-            [get_owner_button()]
-        ]
-        
-        await update.message.reply_text(
-            text=response_user,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error memproses input TX Hash jual: {e}", exc_info=True)
-        await update.message.reply_text("⚠️ Terjadi kesalahan internal saat menyimpan TX Hash.")
-    finally:
-        db.close()
-        
-    return WAITING_TX
 
 
 async def prompt_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -892,14 +822,15 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await notify_admins(context.bot, f"Bukti foto tersimpan untuk order {order.order_id}; penerusan foto gagal.", order_type="sell", kind="jual")
 
         keyboard = [
-            [InlineKeyboardButton("Masukkan TX Hash Manual", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
+            [InlineKeyboardButton("Kirim TX Hash", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
             [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await update.message.reply_text(
             "✅ <b>Bukti Transfer Tersimpan!</b>\n\n"
-            "Foto bukti telah diteruskan ke admin. Sistem sedang memverifikasi setoran Anda di blockchain secara otomatis.\n"
-            "Jika Anda memiliki <b>TX Hash</b>, Anda juga dapat menekannya di bawah untuk mempercepat verifikasi. 🙏",
+            "Foto bukti telah diteruskan ke admin, tetapi <b>foto bukan pengganti TX Hash</b>. "
+            "Order baru diproses setelah Anda mengirim <b>TX Hash</b> yang terverifikasi di blockchain. "
+            "Tekan tombol di bawah untuk mengirimnya. 🙏",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -978,6 +909,7 @@ sell_conversation_handler = ConversationHandler(
         ],
         INPUT_AMOUNT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input),
+            CallbackQueryHandler(handle_input_mode, pattern="^sell_mode_(coin|idr)$"),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],

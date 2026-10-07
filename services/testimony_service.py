@@ -9,12 +9,13 @@ Username pengguna disensor untuk privasi.
 import os
 import re
 import html
+import asyncio
 import logging
+from types import SimpleNamespace
 from decimal import Decimal
 from typing import Optional, Any
 
 from bot.utils.formatter import format_idr, format_crypto
-from bot.utils.emojis import tg_emoji
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ def format_testimony_message(
     bot_tag = f"@{bot_username.lstrip('@')}" if bot_username else "@TokoKoinID_Bot"
 
     msg = (
-        f"{tg_emoji('CHECK', '✅')} <b>Transaksi Selesai</b>\n"
+        f"✅ <b>Transaksi Selesai</b>\n"
         f"- Jenis Transaksi : {tx_type_label}\n"
         f"- Jenis Coin : {coin_label}\n"
         f"- Pengguna : {user_label}\n"
@@ -212,5 +213,46 @@ async def post_transaction_testimony(
         return True
 
     except Exception as e:
-        logger.warning(f"Gagal mengirim testimoni transaksi {getattr(order, 'order_id', '?')} ke {target_channel}: {e}")
+        logger.error(f"Gagal mengirim testimoni transaksi {getattr(order, 'order_id', '?')} ke {target_channel}: {e}", exc_info=True)
+        return False
+
+
+_TESTIMONY_FIELDS = (
+    "order_id", "order_type", "crypto_symbol", "network", "target_crypto_symbol",
+    "target_network", "total_idr", "nominal_idr", "payout_tx_hash", "tx_hash",
+    "deposit_tx_hash", "telegram_id", "user_username",
+)
+_scheduled_order_ids: set = set()
+
+
+def schedule_transaction_testimony(bot, order, db=None) -> bool:
+    """
+    Jadwalkan posting testimoni di background untuk order yang baru COMPLETED.
+    Data order di-snapshot SEKARANG (selagi session DB masih hidup), sehingga task
+    tidak bergantung pada session yang mungkin sudah ditutup. Satu order hanya
+    diposting sekali per proses.
+    """
+    try:
+        order_id = getattr(order, "order_id", None)
+        if not bot or not order_id or order_id in _scheduled_order_ids:
+            return False
+
+        snap = SimpleNamespace(**{f: getattr(order, f, None) for f in _TESTIMONY_FIELDS})
+        if not snap.user_username and db and snap.telegram_id:
+            from database.models import User
+            user_obj = db.query(User).filter(User.telegram_id == int(snap.telegram_id)).first()
+            if user_obj and user_obj.username:
+                snap.user_username = user_obj.username
+
+        _scheduled_order_ids.add(order_id)
+
+        async def _run():
+            ok = await post_transaction_testimony(bot, snap)
+            if not ok:
+                _scheduled_order_ids.discard(order_id)
+
+        asyncio.get_running_loop().create_task(_run())
+        return True
+    except Exception as e:
+        logger.error(f"Gagal menjadwalkan testimoni order {getattr(order, 'order_id', '?')}: {e}", exc_info=True)
         return False

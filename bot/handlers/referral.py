@@ -15,7 +15,6 @@ from config.settings import settings
 from database.connection import SessionLocal
 from database.crud import (
     get_referral_stats,
-    get_referral_config,
     get_top_referrers,
     get_referral_discount_info,
 )
@@ -35,29 +34,9 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         stats = get_referral_stats(db, user.id)
         disc_info = get_referral_discount_info(db, user.id)
 
-        # Get reward config
-        reward_str = get_referral_config(db, "reward_per_referral")
-        reward_idr = int(reward_str) if reward_str else 5000
-
-        # Get referee bonus/discount config
-        bonus_str = get_referral_config(db, "referee_discount_idr")
-        bonus_idr = int(bonus_str) if bonus_str else 0
-
-        # Get minimum trade config
-        min_trade_str = get_referral_config(db, "min_trade_amount_idr")
-        min_trade_idr = int(min_trade_str) if min_trade_str else 0
-
         # Build referral link
         bot_username = (await context.bot.get_me()).username if context.bot else "Hsnpro_bot"
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
-
-        bonus_line = ""
-        if bonus_idr > 0:
-            bonus_line = f"• Teman Anda juga mendapat cashback/potongan <b>{format_idr(bonus_idr)}</b> di transaksi pertamanya!\n"
-
-        min_trade_line = ""
-        if min_trade_idr > 0:
-            min_trade_line = f"• Syarat pencairan: Teman menyelesaikan pembelian minimal <b>{format_idr(min_trade_idr)}</b>.\n"
 
         # Discount status block
         if disc_info.get("active"):
@@ -85,10 +64,16 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"├── ⏳ Belum Selesai   : <b>{stats['pending']} orang</b>\n"
             f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>\n\n"
             f"{discount_status_text}"
-            f"💡 <i>Bagikan link di atas ke teman Anda:\n"
-            f"• Anda mendapat reward <b>{format_idr(reward_idr)}</b> untuk setiap teman yang menyelesaikan transaksi pertama!\n"
-            f"{bonus_line}"
-            f"{min_trade_line}</i>"
+            f"👥 <b>Mengundang Teman</b>\n"
+            f"• Rp 1.000 saat teman menyelesaikan transaksi pertama (beli/jual/convert)\n"
+            f"• Rp 500 saat teman menyelesaikan transaksi kedua\n\n"
+            f"🎉 <b>Untuk Teman yang Diundang</b>\n"
+            f"• Diskon fee Rp 1.000 di transaksi pertama\n\n"
+            f"💸 <b>Bonus dari Transaksi Teman</b>\n"
+            f"• 10% dari fee setiap transaksi temanmu masuk ke saldo bot kamu (maks. 10 transaksi teman)\n\n"
+            f"💰 <b>Saldo Referral</b>\n"
+            f"• Masuk ke saldo bot: bisa untuk transaksi atau ditarik ke rekening/e-wallet (min. Rp 10.000)\n"
+            f"• Reward masuk setelah transaksi selesai dan melewati masa tahan 24 jam"
         )
 
         share_text = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\n{ref_link}"

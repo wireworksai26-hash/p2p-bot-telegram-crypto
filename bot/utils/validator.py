@@ -175,3 +175,35 @@ def validate_crypto_amount(amount_str: str) -> tuple[bool, float]:
         return True, amount
     except Exception:
         return False, 0.0
+
+
+def parse_idr_amount(text: str) -> int:
+    """
+    Parse nominal Rupiah ketikan user (untuk Jual dengan Rupiah).
+    Menerima: 5000, 5.000, 5,000, Rp5000, Rp 5.000, 5k, 5rb, 50 ribu, 1.5jt, 2 juta.
+    Mengembalikan Rupiah bulat (> 0) atau melempar ValueError.
+    """
+    raw = (text or "").strip().lower()
+    raw = re.sub(r"^(?:rp|idr)\.?\s*", "", raw).strip()
+    m = re.fullmatch(r"([0-9]+(?:[.,][0-9]+)?)\s*(k|rb|ribu|jt|juta)", raw)
+    if m:
+        number = float(m.group(1).replace(",", "."))
+        multiplier = 1_000 if m.group(2) in ("k", "rb", "ribu") else 1_000_000
+        value = int(round(number * multiplier))
+    elif re.fullmatch(r"[0-9]{1,3}(?:[.,][0-9]{3})+", raw):
+        value = int(re.sub(r"[.,]", "", raw))
+    elif re.fullmatch(r"[0-9]+", raw):
+        value = int(raw)
+    else:
+        raise ValueError("Format nominal Rupiah tidak dikenali")
+    if value <= 0:
+        raise ValueError("Nominal Rupiah harus lebih besar dari 0")
+    return value
+
+
+def looks_like_idr(text: str) -> bool:
+    """True bila ketikan jelas Rupiah (awalan Rp/IDR atau akhiran k/rb/ribu/jt/juta)."""
+    raw = (text or "").strip().lower()
+    return bool(re.match(r"^(?:rp|idr)\.?\s*[0-9]", raw)
+                or re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?\s*(?:k|rb|ribu|jt|juta)", raw))
+

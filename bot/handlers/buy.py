@@ -44,14 +44,17 @@ from database.crud import (
     release_order_inventory,
 )
 from services.price_service import price_service, quote_source_text
-from services.fee_service import calculate_fee_idr, get_fee_category, gas_surcharge_note, calculate_qris_mdr, qris_mdr_note
+from services.fee_service import (
+    calculate_fee_idr, get_fee_category, gas_surcharge_note, calculate_qris_mdr, qris_mdr_note,
+    is_gas_pair, GAS_PAIR_MIN_IDR,
+)
 from services.gopay_service import gopay_service
 from bot.keyboards.crypto_select import (
     get_buy_symbol_keyboard,
     get_buy_network_keyboard,
 )
 from bot.keyboards.main_menu import get_owner_button
-from bot.utils.validator import validate_amount_idr, validate_wallet_address
+from bot.utils.validator import validate_amount_idr, validate_wallet_address, validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
@@ -153,6 +156,56 @@ async def handle_symbol_selection(update: Update, context: ContextTypes.DEFAULT_
     return SELECT_NETWORK
 
 
+def _amount_prompt(symbol: str, network: str, mode: str = None):
+    """Teks + keyboard permintaan jumlah beli. mode None = layar pilih cara input;
+    IDR = ketik nominal Rupiah; COIN = ketik jumlah koin yang ingin diterima."""
+    from bot.utils.amount_mode import mode_row
+    back_icon = CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850")
+    if mode == "IDR":
+        text = (
+            f"🛒 Anda memilih: <b>{symbol} ({network})</b>\n\n"
+            f"💵 <b>Mode Nominal Rupiah</b>\n"
+            f"Berapa nominal Rupiah (IDR) koin yang ingin Anda beli?\n"
+            f"<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
+            f"⚠️ Batas minimal pembelian adalah <b>Rp 5.000</b>."
+        )
+    elif mode == "COIN":
+        text = (
+            f"🛒 Anda memilih: <b>{symbol} ({network})</b>\n\n"
+            f"🪙 <b>Mode Jumlah Koin</b>\n"
+            f"Berapa jumlah <b>{symbol}</b> yang ingin Anda terima?\n"
+            f"<i>Ketik jumlah desimal di chat (contoh: 0.5 atau 10). Nominal Rupiah yang harus dibayar "
+            f"(sudah termasuk fee layanan) dihitung otomatis dari kurs beli saat ini.</i>\n\n"
+            f"⚠️ Batas pembelian <b>Rp 5.000</b> - <b>Rp 5.000.000</b>."
+        )
+    else:
+        text = (
+            f"🛒 Anda memilih: <b>{symbol} ({network})</b>\n\n"
+            f"Pilih cara memasukkan jumlah yang ingin dibeli:\n"
+            f"🪙 <b>Jumlah Koin</b> — contoh <code>0.5</code> {symbol}\n"
+            f"💵 <b>Nominal Rupiah</b> — contoh <code>Rp 50.000</code>\n\n"
+            f"⚠️ Batas pembelian <b>Rp 5.000</b> - <b>Rp 5.000.000</b>."
+        )
+    keyboard = InlineKeyboardMarkup([
+        mode_row("buy", mode),
+        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=back_icon)],
+        [get_owner_button()],
+    ])
+    return text, keyboard
+
+
+async def handle_input_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ganti cara input jumlah beli: koin <-> Rupiah."""
+    from bot.utils.amount_mode import mode_from_callback
+    query = update.callback_query
+    await query.answer()
+    mode = mode_from_callback(query.data)
+    context.user_data["buy_input_mode"] = mode
+    text, keyboard = _amount_prompt(context.user_data["buy_symbol"], context.user_data["buy_network"], mode)
+    await safe_edit_message(query, text=text, reply_markup=keyboard, parse_mode="HTML")
+    return INPUT_AMOUNT
+
+
 async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Tahap 2 Beli: Menyimpan jaringan yang dipilih, lalu meminta input nominal Rupiah.
@@ -184,21 +237,9 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
         )
         return SELECT_NETWORK
 
-    keyboard = [
-        [InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-        [get_owner_button()]
-    ]
-    
-    await query.edit_message_text(
-        text=(
-            f"🛒 Anda memilih: <b>{symbol} ({network})</b>\n\n"
-            f"Berapa nominal Rupiah (IDR) koin yang ingin Anda beli?\n"
-            f"<i>Ketik nominal langsung di chat (contoh: 50000 atau Rp 50.000).</i>\n\n"
-            f"⚠️ Batas minimal pembelian adalah <b>Rp 5.000</b>."
-        ),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+    context.user_data["buy_input_mode"] = None
+    text, keyboard = _amount_prompt(symbol, network, None)
+    await query.edit_message_text(text=text, reply_markup=keyboard, parse_mode="HTML")
     return INPUT_AMOUNT
 
 
@@ -227,8 +268,27 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return INPUT_AMOUNT
 
-    # 2. Validasi nominal IDR
-    is_valid, nominal_idr = validate_amount_idr(text_input)
+    # 2. Mode koin: user mengetik jumlah koin yang ingin diterima; nominal Rupiah dihitung
+    #    terbalik (termasuk fee) setelah harga diambil di bawah.
+    coin_target = None
+    nominal_idr = 0
+    if context.user_data.get("buy_input_mode") == "COIN":
+        coin_ok, coin_value = validate_crypto_amount(text_input)
+        if not coin_ok:
+            await update.message.reply_text(
+                text=(
+                    "❌ <b>Jumlah Koin Tidak Valid!</b>\n\n"
+                    "Ketik angka desimal positif (contoh: <code>0.5</code> atau <code>10</code>):"
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+            return INPUT_AMOUNT
+        coin_target = coin_value
+        is_valid = True
+    else:
+        # Validasi nominal IDR
+        is_valid, nominal_idr = validate_amount_idr(text_input)
     if not is_valid:
         if nominal_idr > 0 and nominal_idr < 5000:
             err_msg = "Nominal kurang dari batas minimal <b>Rp 5.000</b>."
@@ -260,7 +320,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             
         # Hitung fee dinamis (termasuk tambahan fee gas Rp 2.000 untuk ETH/TRX jika berlaku)
         fee_category = get_fee_category(symbol)
-        base_fee_idr = calculate_fee_idr(nominal_idr, category=fee_category, symbol=symbol, network=network)
 
         # Phase 7: Cek diskon referral aktif milik user
         user_id = update.effective_user.id
@@ -271,11 +330,63 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         discount_amount = 0
         discount_note = ""
 
-        fee_idr = base_fee_idr
-        if disc_info.get("active") and base_fee_idr > 0:
+        def _fees_for(nominal):
+            """(fee dasar, fee setelah diskon referral, nilai diskon) untuk nominal Rupiah tertentu."""
+            base = calculate_fee_idr(nominal, category=fee_category, symbol=symbol, network=network)
+            if disc_info.get("active") and base > 0:
+                off = int(base * float(disc_info["discount_pct"]) / 100)
+                return base, max(0, base - off), off
+            return base, base, 0
+
+        if coin_target is not None:
+            # Cari nominal Rupiah TERKECIL yang setelah dipotong fee bernilai >= koin x kurs beli.
+            import math
+            min_nominal = GAS_PAIR_MIN_IDR if is_gas_pair(symbol, network) else 5000
+            target_received = Decimal(str(coin_target)) * Decimal(str(price_data["buy_price_idr"]))
+            nominal_idr = max(min_nominal, int(math.ceil(target_received)))
+            need = nominal_idr
+            too_large = nominal_idr > 5_000_000
+            for _ in range(0 if too_large else 50):
+                try:
+                    _, fee_try, _ = _fees_for(nominal_idr)
+                except ValueError:  # di luar rentang tier fee
+                    too_large = True
+                    break
+                need = int(math.ceil(target_received + fee_try))
+                if need <= nominal_idr:
+                    break
+                nominal_idr = need
+            if too_large:
+                nominal_idr = max(nominal_idr, 5_000_001)
+            elif need < min_nominal and nominal_idr == min_nominal:
+                _, fee_min, _ = _fees_for(min_nominal)
+                min_coin = (Decimal(min_nominal) - Decimal(fee_min)) / Decimal(str(price_data["buy_price_idr"]))
+                await update.message.reply_text(
+                    text=(
+                        f"❌ <b>Jumlah Koin Terlalu Kecil!</b>\n\n"
+                        f"Minimal pembelian <b>{format_idr(min_nominal)}</b> "
+                        f"(≈ <code>{format_crypto(float(min_coin), symbol)}</code> setelah fee).\n"
+                        "Silakan ketik jumlah koin yang lebih besar:"
+                    ),
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+                return INPUT_AMOUNT
+            if nominal_idr > 5_000_000:
+                await update.message.reply_text(
+                    text=(
+                        f"❌ <b>Jumlah Koin Terlalu Besar!</b>\n\n"
+                        f"Nilainya (<b>{format_idr(nominal_idr)}</b>) melebihi batas maksimal "
+                        f"<b>Rp 5.000.000</b>. Untuk transaksi di atas itu, silakan hubungi admin."
+                    ),
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+                return INPUT_AMOUNT
+
+        base_fee_idr, fee_idr, discount_amount = _fees_for(nominal_idr)
+        if discount_amount:
             discount_pct = float(disc_info["discount_pct"])
-            discount_amount = int(base_fee_idr * discount_pct / 100)
-            fee_idr = max(0, base_fee_idr - discount_amount)
             discount_applied = True
             discount_note = (
                 f"\n🎁 <b>Diskon Referral:</b> -{format_idr(discount_amount)} "
@@ -301,6 +412,9 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Hitung jumlah crypto yang didapatkan ((Nominal - Fee) / Kurs Beli)
         received_idr = nominal_idr - fee_idr
         crypto_amount = received_idr / buy_price_idr
+        if coin_target is not None:
+            # Mode koin: terima persis jumlah yang diminta (nominal sudah dibulatkan ke atas ke Rupiah bulat).
+            crypto_amount = coin_target
         
         # Simpan rincian perhitungan ke context
         context.user_data["buy_nominal_idr"] = nominal_idr
@@ -1129,8 +1243,8 @@ async def finalize_gopay_buy_payment(
 
             # Post testimony ke channel (Phase 8)
             try:
-                from services.testimony_service import post_transaction_testimony
-                asyncio.create_task(post_transaction_testimony(bot or bot_app, order, db=db))
+                from services.testimony_service import schedule_transaction_testimony
+                schedule_transaction_testimony(bot or bot_app, order, db=db)
             except Exception as texc:
                 logger.warning(f"Gagal trigger testimony buy order {order.order_id}: {texc}")
         else:
@@ -1413,6 +1527,7 @@ buy_conversation_handler = ConversationHandler(
         ],
         INPUT_AMOUNT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input),
+            CallbackQueryHandler(handle_input_mode, pattern="^buy_mode_(coin|idr)$"),
             CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
             CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
         ],

@@ -1,16 +1,13 @@
-"""Kode unik koin untuk deposit Jual/Convert ke hot wallet bersama.
+"""Nominal koin deposit Jual/Convert ke hot wallet bersama.
 
-Deposit dicocokkan lewat nominal. Tanpa kode unik, transfer yang bukan milik
-order mana pun (isi ulang stok oleh owner, deposit telat dari order yang sudah
-expired) bisa diklaim order lain bernominal sama. Nominal deposit kini:
+Nominal deposit = persis jumlah yang dipilih user (dibulatkan ke bawah ke presisi
+tampilan), TANPA kode unik. Kode unik hanya ada di tagihan QRIS (Rupiah), bukan di koin.
 
-    dasar (dibulatkan ke bawah ke presisi tampilan) + kode 1..99 satuan terkecil
-
-dengan syarat dua digit terakhir bukan 00 (isi ulang bernominal "bulat" tidak
-pernah cocok) dan tidak sama dengan order lain yang depositnya masih bisa masuk.
+Karena tanpa kode unik deposit tidak bisa dicocokkan lewat nominal, kepemilikan deposit
+dibuktikan lewat TX hash yang WAJIB dikirim user (lihat bot/handlers/deposit_hash.py)
+dan diverifikasi on-chain (wallet, nominal, waktu, belum dipakai order lain).
 """
 import logging
-import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_DOWN
 from typing import Optional
@@ -22,14 +19,10 @@ logger = logging.getLogger(__name__)
 
 STABLE_LIKE = {"USDT", "USDC", "USDG", "TRX", "TON"}
 HIGH_VALUE = {"ETH", "BNB"}
-MAX_CODE = 99
 
 
 def deposit_precision(symbol: str) -> int:
-    """Jumlah desimal nominal deposit (≤ desimal on-chain semua jaringan yang didukung).
-
-    Kode unik maksimal 99 satuan: USDT/TRX/TON 0,0099; ETH/BNB 0,00000099; lainnya 0,000099.
-    """
+    """Jumlah desimal nominal deposit (≤ desimal on-chain semua jaringan yang didukung)."""
     sym = (symbol or "").upper()
     if sym in STABLE_LIKE:
         return 4
@@ -43,8 +36,8 @@ def quantum(symbol: str) -> Decimal:
 
 
 def base_amount(symbol: str, requested) -> Decimal:
-    """Nominal dasar yang dijual/di-convert: dibulatkan ke bawah, menyisakan 2 digit untuk kode."""
-    return Decimal(str(requested)).quantize(Decimal(1).scaleb(2 - deposit_precision(symbol)), rounding=ROUND_DOWN)
+    """Nominal yang dijual/di-convert: dibulatkan ke bawah ke presisi deposit."""
+    return Decimal(str(requested)).quantize(quantum(symbol), rounding=ROUND_DOWN)
 
 
 def format_deposit_amount(amount, symbol: str) -> str:
@@ -53,10 +46,8 @@ def format_deposit_amount(amount, symbol: str) -> str:
 
 
 def deposit_code_of(amount, symbol: str) -> int:
-    """Kode unik yang melekat pada nominal deposit (2 digit terakhir)."""
-    q = quantum(symbol)
-    units = int(Decimal(str(amount)).quantize(q) / q)
-    return units % 100
+    """Kode unik koin sudah dihapus; selalu 0 (dipertahankan agar pemanggil lama tetap jalan)."""
+    return 0
 
 
 def active_deposit_orders(db, network: str, symbol: str, wallet: str, exclude_order: str = None):
@@ -77,19 +68,8 @@ def active_deposit_orders(db, network: str, symbol: str, wallet: str, exclude_or
 
 
 def assign_deposit_amount(db, network: str, symbol: str, wallet: str, requested) -> Optional[Decimal]:
-    """Nominal deposit unik untuk order baru, atau None bila semua kode terpakai."""
-    q = quantum(symbol)
+    """Nominal deposit order baru = nominal dasar persis (tanpa kode unik); None bila terlalu kecil."""
     base = base_amount(symbol, requested)
     if base <= 0:
         return None
-    taken = {
-        Decimal(str(o.crypto_amount)).quantize(Decimal("0.00000001"))
-        for o in active_deposit_orders(db, network, symbol, wallet)
-        if o.crypto_amount is not None
-    }
-    candidates = [base + q * code for code in range(1, MAX_CODE + 1)
-                  if (base + q * code).quantize(Decimal("0.00000001")) not in taken]
-    if not candidates:
-        logger.warning("Kode unik deposit %s/%s habis untuk nominal %s", symbol, network, base)
-        return None
-    return secrets.choice(candidates)
+    return base

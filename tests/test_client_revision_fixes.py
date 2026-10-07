@@ -271,7 +271,8 @@ class TestBuyFlowStockValidation(unittest.IsolatedAsyncioTestCase):
             state = await handle_network_selection(update, context)
             self.assertEqual(state, INPUT_AMOUNT, callback_data)
             text = query.edit_message_text.call_args.kwargs.get("text", "")
-            self.assertIn("Berapa nominal Rupiah", text)
+            self.assertIn("Pilih cara memasukkan jumlah", text)
+            self.assertIn("Nominal Rupiah", text)
 
     async def test_buy_amount_input_warns_if_stock_insufficient(self):
         """Entering an amount that exceeds available stock must reject early at INPUT_AMOUNT."""

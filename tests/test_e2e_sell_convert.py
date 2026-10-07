@@ -261,10 +261,11 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order.status, "WAITING_CRYPTO_DEPOSIT")
         self.assertEqual(order.crypto_symbol, "APT")
         self.assertEqual(order.network, "APTOS")
-        # 2,5 APT + kode unik 1..99 di digit ke-5/6 (presisi deposit APT = 6).
-        self.assertTrue(2.500001 <= float(order.crypto_amount) <= 2.500099)
+        # Nominal koin persis yang dipilih user: tanpa kode unik (kode unik hanya di QRIS).
+        self.assertEqual(float(order.crypto_amount), 2.5)
         self.assertEqual(order.total_idr, 365500)
-        self.assertTrue(mock_notify.called)
+        # Admin baru dikabari setelah TX hash user terverifikasi on-chain, bukan saat order dibuat.
+        self.assertFalse(mock_notify.called)
 
     async def test_sell_tx_hash_and_proof_upload(self):
         """Uji pengiriman TX hash manual dan upload foto bukti transfer pada order sell."""
@@ -346,20 +347,26 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
             user_data={"sell_order_id": order_id, "sell_symbol": "USDT", "sell_network": "BSC",
                        "sell_crypto_amount": 10.0, "sell_net_idr": 175000, "sell_bank_name": "BCA",
                        "sell_bank_acc": "12345", "sell_bank_holder": "Test"},
-            bot=AsyncMock(), application=None,
+            bot=AsyncMock(), application=object(),
         )
-        verified = {"verified": True, "amount": 10.0, "reason": "OK", "from_address": "0xabc"}
-        with patch("services.tx_verifier.verify_deposit", new=AsyncMock(return_value=verified)), \
-             patch("services.detector.deposit_detector.verifikasi_cepat", new=AsyncMock()) as fast, \
-             patch("bot.handlers.sell.notify_admins", new=AsyncMock()) as notify:
+        from services import tx_verifier
+        order = get_order_by_id(self.db, order_id)
+        verified = {"verified": True, "amount": 10.0, "reason": "OK", "from_address": "0xabc",
+                    "tx_hash": "0x" + "b" * 64,
+                    "timestamp": tx_verifier._timestamp(order.created_at) + 5}
+        with patch("services.tx_verifier.verify_deposit", new=AsyncMock(return_value=verified)),              patch("services.detector.safe_send_message", new=AsyncMock()),              patch("services.detector.notify_admins", new=AsyncMock()) as notify_detector,              patch("bot.handlers.sell.notify_admins", new=AsyncMock()) as notify_sell:
             state = await sell_handle_tx_hash(update_tx, context_tx)
 
         self.assertEqual(state, SELL_WAITING_TX)
-        sent = message.reply_text.await_args.kwargs.get("text") or message.reply_text.await_args.args[0]
+        sent = " ".join(str(c.kwargs.get("text") or (c.args[0] if c.args else ""))
+                        for c in message.reply_text.await_args_list)
         self.assertIn("TX Hash Diterima", sent)
         self.assertNotIn("Belum Bisa Diverifikasi", sent)
-        fast.assert_called_once()
-        notify.assert_awaited_once()
+        # Valid -> deposit terkonfirmasi dan admin dikabari (sekali) untuk transfer Rupiah.
+        self.db.expire_all()
+        self.assertEqual(get_order_by_id(self.db, order_id).status, "CRYPTO_CONFIRMED")
+        notify_detector.assert_awaited_once()
+        notify_sell.assert_not_called()
 
     async def test_sell_cancellation_updates_db(self):
         """Uji pembatalan order sell mengupdate status di DB menjadi 'cancelled'."""
@@ -493,11 +500,11 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
             state = await swap_input_amount(update, context)
 
         self.assertEqual(state, SWAP_INPUT_TARGET_ADDR)
-        # Rp 100.000 -> USDT dibulatkan ke bawah 2 desimal (2 digit terakhir = kode unik),
+        # Rp 100.000 -> USDT dibulatkan ke bawah ke presisi deposit (4 desimal, tanpa kode unik),
         # Rupiah dihitung ulang dari jumlah yang benar-benar disetor.
         src = context.user_data["swap_src_amount"]
         usdt_px = mock_prices["USDT"]["market_price_idr"]
-        self.assertEqual(src, float(Decimal(str(100_000 / usdt_px)).quantize(Decimal("0.01"), rounding="ROUND_DOWN")))
+        self.assertEqual(src, float(Decimal(str(100_000 / usdt_px)).quantize(Decimal("0.0001"), rounding="ROUND_DOWN")))
         nominal = int(Decimal(str(src)) * Decimal(str(usdt_px)))
         self.assertEqual(context.user_data["swap_nominal_idr"], nominal)
         self.assertLessEqual(100_000 - nominal, usdt_px * 0.01)
@@ -587,8 +594,8 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
         order = self.db.query(Order).filter(Order.order_type == "swap").first()
         self.assertIsNotNone(order)
         self.assertEqual(order.status, "WAITING_CRYPTO_DEPOSIT")
-        # 10 USDT + kode unik 0,0001..0,0099 (presisi deposit USDT = 4).
-        self.assertTrue(10.0001 <= float(order.crypto_amount) <= 10.0099)
+        # 10 USDT persis, tanpa kode unik.
+        self.assertEqual(float(order.crypto_amount), 10.0)
         self.assertEqual(float(order.target_crypto_amount), 9.5)
         # Quote berlaku 30 menit
         self.assertIsNotNone(order.quote_expires_at)

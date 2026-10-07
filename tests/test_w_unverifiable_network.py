@@ -60,7 +60,7 @@ class CraftedNetworkE2E(unittest.IsolatedAsyncioTestCase):
         await self.tap(U, "menu_sell", from_screen=False)
         await self.tap(U, "sell_sym_USDC", from_screen=False)
         shown = await self.tap(U, "sell_net_USDC_BASE", from_screen=False)
-        self.assertIn("Berapa jumlah koin", shown)
+        self.assertIn("Pilih cara memasukkan jumlah", shown)
 
 
 if __name__ == "__main__":

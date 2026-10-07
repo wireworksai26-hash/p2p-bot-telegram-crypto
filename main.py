@@ -551,6 +551,7 @@ def build_bot_application() -> Application:
         weekly_report_command_handler,
         test_testimony_command_handler,
         topup_bot_command_handler,
+        topup_qris_command_handler,
         resend_testimony_command_handler,
         resend_recent_testimonies_command_handler,
     )
@@ -559,6 +560,7 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler(["posttesti", "resendtesti"], resend_testimony_command_handler))
     application.add_handler(CommandHandler(["postlasttesti", "resendlasttesti"], resend_recent_testimonies_command_handler))
     application.add_handler(CommandHandler(["topupbot", "saldobot", "dompetbot"], topup_bot_command_handler))
+    application.add_handler(CommandHandler(["topupqris", "qriskas", "topupkas"], topup_qris_command_handler))
 
     # --- Conversation Handlers (multi-step flows) ---
     # ConversationHandlers have higher priority than standalone commands
@@ -567,6 +569,8 @@ def build_bot_application() -> Application:
     application.add_handler(buy_conversation_handler)
     application.add_handler(sell_conversation_handler)
     application.add_handler(swap_conv_handler)
+    from bot.handlers.deposit_hash import txhash_conversation_handler
+    application.add_handler(txhash_conversation_handler)
     application.add_handler(calculator_conversation_handler)
 
     # /cancel saat tidak ada flow aktif — flow aktif sudah ditangkap fallback di atas.

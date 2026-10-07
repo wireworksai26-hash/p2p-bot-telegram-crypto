@@ -93,6 +93,14 @@ class Settings:
     ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 15))
     # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
     SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
+    # Jual/Convert: deposit hanya diterima lewat TX hash yang dikirim user. Auto-scan riwayat
+    # wallet tidak bisa menentukan pemilik deposit tanpa kode unik, jadi default mati.
+    DEPOSIT_AUTOSCAN_ENABLED = os.getenv("DEPOSIT_AUTOSCAN_ENABLED", "false").lower() in ("true", "1", "yes")
+    # Alamat wallet milik owner (cold wallet / sumber isi ulang stok), pisahkan dengan koma.
+    # Hash transfer dari alamat ini tidak pernah di-auto-konfirmasi sebagai deposit user.
+    OWNER_WALLET_ADDRESSES = tuple(
+        a.strip().lower() for a in os.getenv("OWNER_WALLET_ADDRESSES", "").replace(";", ",").split(",") if a.strip()
+    )
     # Kunci explorer (Etherscan V2, multichain) untuk fallback verifikasi bila RPC publik kena limit.
     ETHERSCAN_API_KEY = (os.getenv("ETHERSCAN_API_KEY") or "").strip()
     DEFAULT_SPREAD_PCT = float(os.getenv("DEFAULT_SPREAD_PCT", 0.0))

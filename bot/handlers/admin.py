@@ -11,7 +11,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from telegram.error import RetryAfter, BadRequest
 from telegram.ext import ContextTypes
 
@@ -1142,13 +1142,37 @@ def build_admin_treasury_qris_menu() -> tuple[str, InlineKeyboardMarkup]:
 
 
 async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int) -> None:
-    """Menyajikan invoice QRIS Dinamis untuk Top-Up Kas Bot Admin."""
+    """Menyajikan invoice QRIS Dinamis untuk Top-Up Kas Bot Admin (mendukung Chat Pribadi maupun Grup/Topik Forum)."""
     user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+
+    # Tentukan tujuan pengiriman (chat_id dan topic message_thread_id)
+    target_chat_id = chat.id if chat else (context.user_data.get("admin_treasury_qris_chat_id") if context and context.user_data else None)
+    if not target_chat_id and user:
+        target_chat_id = user.id
+
+    thread_id = None
+    if message and getattr(message, "message_thread_id", None):
+        thread_id = message.message_thread_id
+    elif update.callback_query and update.callback_query.message and getattr(update.callback_query.message, "message_thread_id", None):
+        thread_id = update.callback_query.message.message_thread_id
+    elif context and context.user_data and context.user_data.get("admin_treasury_qris_thread_id"):
+        thread_id = context.user_data.get("admin_treasury_qris_thread_id")
+
     status_msg = None
-    if update.callback_query:
-        status_msg = await update.callback_query.edit_message_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
-    else:
-        status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+    try:
+        if update.callback_query:
+            status_msg = await update.callback_query.edit_message_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+        elif update.message:
+            status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
+        elif target_chat_id:
+            msg_kw = {"chat_id": target_chat_id, "text": "⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", "parse_mode": "HTML"}
+            if thread_id:
+                msg_kw["message_thread_id"] = thread_id
+            status_msg = await context.bot.send_message(**msg_kw)
+    except Exception as st_err:
+        logger.debug("Info status invoice tidak dapat ditampilkan: %s", st_err)
 
     import secrets
     topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}-{secrets.token_hex(3).upper()}"
@@ -1161,20 +1185,28 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
         mdr_idr = calculate_qris_mdr(amount)
         from services.fee_service import qris_max_nominal
         if amount > qris_max_nominal():
-            await status_msg.edit_text(
+            err_text = (
                 f"❌ Top-up Kas Bot via QRIS maksimal {format_idr(qris_max_nominal())} per invoice "
-                "(batas QRIS Rp 10.000.000 termasuk pajak & kode unik). Bagi menjadi beberapa invoice.",
-                parse_mode="HTML",
+                "(batas QRIS Rp 10.000.000 termasuk pajak & kode unik). Bagi menjadi beberapa invoice."
             )
+            if status_msg and hasattr(status_msg, "edit_text"):
+                await status_msg.edit_text(err_text, parse_mode="HTML")
+            else:
+                await context.bot.send_message(chat_id=target_chat_id, text=err_text, parse_mode="HTML", message_thread_id=thread_id)
             return
+
         unique_code = generate_unique_payment_code(db, base_amount=amount + mdr_idr)
         if unique_code is None:
-            await status_msg.edit_text(
+            err_text = (
                 "⏳ Antrean QRIS sedang penuh (nominal bentrok dengan tagihan lain). "
-                "Coba lagi beberapa menit lagi atau ubah nominal.",
-                parse_mode="HTML",
+                "Coba lagi beberapa menit lagi atau ubah nominal."
             )
+            if status_msg and hasattr(status_msg, "edit_text"):
+                await status_msg.edit_text(err_text, parse_mode="HTML")
+            else:
+                await context.bot.send_message(chat_id=target_chat_id, text=err_text, parse_mode="HTML", message_thread_id=thread_id)
             return
+
         final_amount = amount + mdr_idr + unique_code
         topup_order = create_topup_order(
             db=db,
@@ -1189,7 +1221,11 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
     finally:
         db.close()
 
-    context.user_data["active_topup_id"] = topup_id
+    if context and context.user_data is not None:
+        context.user_data["active_topup_id"] = topup_id
+        context.user_data.pop("admin_awaiting_treasury_qris_custom", None)
+        context.user_data.pop("admin_treasury_qris_chat_id", None)
+        context.user_data.pop("admin_treasury_qris_thread_id", None)
 
     mdr_line = f"\n🧾 <b>Biaya QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
     caption_text = (
@@ -1224,26 +1260,89 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
     from services.qris_generator import get_qris_image_stream
     qris_stream = get_qris_image_stream(final_amount)
     sent = False
+
+    send_kwargs = {
+        "chat_id": target_chat_id,
+        "parse_mode": "HTML",
+        "reply_markup": InlineKeyboardMarkup(keyboard),
+    }
+    if thread_id:
+        send_kwargs["message_thread_id"] = thread_id
+
     if qris_stream:
         try:
             await context.bot.send_photo(
-                chat_id=user.id,
                 photo=qris_stream.getvalue(),
                 caption=caption_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML",
+                **send_kwargs,
             )
             sent = True
         except Exception as err:
-            logger.warning("Gagal kirim QRIS photo treasury: %s", err)
+            logger.warning("Gagal kirim QRIS photo treasury ke %s (thread %s): %s", target_chat_id, thread_id, err)
 
     if not sent:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=caption_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML",
-        )
+        try:
+            await context.bot.send_message(
+                text=caption_text,
+                **send_kwargs,
+            )
+            sent = True
+        except Exception as err:
+            logger.warning("Gagal kirim QRIS text treasury ke %s (thread %s): %s", target_chat_id, thread_id, err)
+            # Fallback ke DM pribadi admin jika chat grup/channel membatasi bot
+            if user and target_chat_id != user.id:
+                try:
+                    dm_kwargs = {
+                        "chat_id": user.id,
+                        "parse_mode": "HTML",
+                        "reply_markup": InlineKeyboardMarkup(keyboard),
+                    }
+                    if qris_stream:
+                        await context.bot.send_photo(photo=qris_stream.getvalue(), caption=caption_text, **dm_kwargs)
+                    else:
+                        await context.bot.send_message(text=caption_text, **dm_kwargs)
+                except Exception as dm_err:
+                    logger.error("Gagal fallback kirim QRIS ke DM admin %s: %s", user.id, dm_err)
+
+
+async def topup_qris_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /topupqris <nominal> atau /qriskas untuk generate invoice QRIS Kas Bot langsung di chat/grup."""
+    if not update.effective_user:
+        return
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    # Jika admin menyertakan nominal langsung (misal: /topupqris 50000, /topupqris 5k, /topupqris 1.5jt)
+    if context.args:
+        arg_str = context.args[0].lower().replace("k", "000").replace("jt", "000000").replace(".", "").replace(",", "")
+        clean_digits = "".join(ch for ch in arg_str if ch.isdigit())
+        if not clean_digits or int(clean_digits) < 5000:
+            await update.message.reply_text("⚠️ Nominal top-up QRIS Kas Bot minimal Rp 5.000 (contoh: <code>/topupqris 50000</code>).", parse_mode="HTML")
+            return
+        amount = int(clean_digits)
+        if amount > 10_000_000:
+            await update.message.reply_text("⚠️ Nominal maksimal per transaksi QRIS adalah Rp 10.000.000 (Limit BI).", parse_mode="HTML")
+            return
+        await generate_and_send_treasury_qris(update, context, amount)
+        return
+
+    # Tanpa argumen -> kirim menu pilihan nominal QRIS Kas Bot
+    text, markup = build_admin_treasury_qris_menu()
+    thread_id = update.message.message_thread_id if update.message else None
+    if context and context.user_data is not None:
+        context.user_data["admin_treasury_qris_chat_id"] = update.effective_chat.id if update.effective_chat else None
+        context.user_data["admin_treasury_qris_thread_id"] = thread_id
+
+    send_kw = {
+        "text": text,
+        "reply_markup": markup,
+        "parse_mode": "HTML",
+    }
+    if thread_id:
+        send_kw["message_thread_id"] = thread_id
+
+    await update.message.reply_text(**send_kw)
 
 
 
@@ -1729,11 +1828,20 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "admin_panel_treasury" or data == "camp_treasury_view":
             context.user_data.pop("admin_awaiting_treasury_custom", None)
             context.user_data.pop("admin_awaiting_treasury_set_manual", None)
+            context.user_data.pop("admin_awaiting_treasury_qris_custom", None)
             text, markup = build_admin_treasury_view(
                 db, admin_id=user_id, chat_id=query.message.chat_id,
                 message_id=query.message.message_id,
             )
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            if query.message and query.message.photo:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await query.message.reply_text(text=text, reply_markup=markup, parse_mode="HTML")
+            else:
+                from bot.utils.telegram_utils import safe_edit_message
+                await safe_edit_message(query, text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Kas bot dimuat.")
 
         elif data.startswith("admin_treasury_topup_"):
@@ -1793,20 +1901,51 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         elif data == "admin_treasury_qris_menu":
             text, markup = build_admin_treasury_qris_menu()
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            if query.message and query.message.photo:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await query.message.reply_text(text=text, reply_markup=markup, parse_mode="HTML")
+            else:
+                from bot.utils.telegram_utils import safe_edit_message
+                await safe_edit_message(query, text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Menu QRIS Kas Bot dimuat.")
 
         elif data == "admin_treasury_qris_custom":
             context.user_data["admin_awaiting_treasury_qris_custom"] = True
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            thread_id = query.message.message_thread_id if query.message else None
+            context.user_data["admin_treasury_qris_chat_id"] = chat_id
+            context.user_data["admin_treasury_qris_thread_id"] = thread_id
             await query.answer()
+
+            is_group = bool(update.effective_chat and getattr(update.effective_chat, "type", "") in ("group", "supergroup", "channel"))
+            tip_group = ""
+            if is_group:
+                tip_group = (
+                    "\n\n💡 <b>Petunjuk Top-Up di Grup / Topik:</b>\n"
+                    "• <b>Reply (Balas)</b> pesan ini dengan angka nominal (contoh: <code>5000</code>), ATAU\n"
+                    "• Ketik langsung perintah: <code>/topupqris 5000</code>\n\n"
+                    "<i>(Ketik /cancel untuk membatalkan)</i>"
+                )
+
             cancel_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Batal", callback_data="admin_treasury_qris_menu")]
             ])
-            await query.message.reply_text(
+            # Menggunakan ForceReply jika di dalam grup agar klien Telegram admin otomatis membuka mode Reply,
+            # sehingga pesan angka dari admin dijamin 100% diterima bot walaupun Telegram Group Privacy aktif!
+            reply_markup = ForceReply(selective=True) if is_group else cancel_markup
+
+            prompt_text = (
                 f"{tg_emoji('BANK', '🏦')} <b>Top Up Kas Bot via QRIS (Nominal Kustom)</b>\n\n"
                 "Ketik nominal Rupiah (Uang Asli) yang ingin Anda bayar via QRIS (contoh: <code>750000</code>):\n\n"
-                "<i>Minimal: Rp 5.000 (Maksimal: Rp 10.000.000)</i>",
-                reply_markup=cancel_markup,
+                f"<i>Minimal: Rp 5.000 (Maksimal: Rp 10.000.000)</i>"
+                f"{tip_group}"
+            )
+            await query.message.reply_text(
+                prompt_text,
+                reply_markup=reply_markup,
                 parse_mode="HTML"
             )
 
@@ -2896,6 +3035,8 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 completed_at=datetime.utcnow()
             )
             crud.release_order_inventory(db, order_id, consumed=True)
+            from services.testimony_service import schedule_transaction_testimony
+            schedule_transaction_testimony(context.bot, order, db=db)
         
         # Kirim notifikasi sukses ke user
         from bot.utils.telegram_utils import safe_send_message
@@ -2962,6 +3103,8 @@ async def _finish_sell_order(db, order, query, bot) -> None:
     if not was_already_completed:
         crud.update_order_status(db, order.order_id, new_status="completed", completed_at=datetime.utcnow())
         crud.release_order_inventory(db, order.order_id)
+        from services.testimony_service import schedule_transaction_testimony
+        schedule_transaction_testimony(bot, order, db=db)
 
     menu_keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Menu Utama", callback_data="menu_back",
@@ -3337,8 +3480,8 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
 
         # Post testimony ke channel (Phase 8)
         try:
-            from services.testimony_service import post_transaction_testimony
-            asyncio.create_task(post_transaction_testimony(context.bot, order, db=db))
+            from services.testimony_service import schedule_transaction_testimony
+            schedule_transaction_testimony(context.bot, order, db=db)
         except Exception as texc:
             logger.warning(f"Gagal trigger testimony sell order {order.order_id}: {texc}")
 

@@ -35,6 +35,8 @@ from database import crud
 from bot.handlers.admin import (
     admin_interactive_text_router,
     topup_bot_command_handler,
+    topup_qris_command_handler,
+    generate_and_send_treasury_qris,
     is_admin,
     build_admin_treasury_view,
     build_admin_send_balance_amount_view,
@@ -264,6 +266,82 @@ class TestBotCampaignTreasurySecurity(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TOP UP KAS BOT BERHASIL", args[0])
         self.assertIn("1.000.000", args[0])
 
+    async def test_topup_qris_command_security_and_execution(self):
+        """Command /topupqris hanya untuk admin dan dapat menerima argumen nominal atau menampilkan menu."""
+        # Non-admin diblokir
+        update_non_admin = SimpleNamespace(
+            effective_user=SimpleNamespace(id=777),
+            message=AsyncMock(),
+        )
+        context = SimpleNamespace(args=["50000"])
+        await topup_qris_command_handler(update_non_admin, context)
+        update_non_admin.message.reply_text.assert_not_called()
+
+        # Admin tanpa argumen -> tampilkan menu pilihan nominal
+        update_menu = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            effective_chat=SimpleNamespace(id=-100123456, type="supergroup"),
+            message=AsyncMock(message_thread_id=55),
+        )
+        context_empty = SimpleNamespace(args=[], user_data={})
+        await topup_qris_command_handler(update_menu, context_empty)
+        update_menu.message.reply_text.assert_called_once()
+        args, kwargs = update_menu.message.reply_text.call_args
+        self.assertIn("TOP-UP KAS BOT VIA QRIS", kwargs["text"])
+        self.assertEqual(kwargs["message_thread_id"], 55)
+        self.assertEqual(context_empty.user_data.get("admin_treasury_qris_chat_id"), -100123456)
+        self.assertEqual(context_empty.user_data.get("admin_treasury_qris_thread_id"), 55)
+
+        # Admin dengan nominal valid -> generate QRIS
+        update_exec = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            effective_chat=SimpleNamespace(id=-100123456, type="supergroup"),
+            effective_message=SimpleNamespace(message_thread_id=55),
+            message=AsyncMock(message_thread_id=55),
+            callback_query=None,
+        )
+        bot_mock = AsyncMock()
+        context_exec = SimpleNamespace(
+            args=["75000"],
+            user_data={},
+            bot=bot_mock,
+        )
+        await topup_qris_command_handler(update_exec, context_exec)
+        # Verify photo dikirim ke chat grup dan thread topik yang benar
+        bot_mock.send_photo.assert_called_once()
+        _, photo_kwargs = bot_mock.send_photo.call_args
+        self.assertEqual(photo_kwargs["chat_id"], -100123456)
+        self.assertEqual(photo_kwargs["message_thread_id"], 55)
+        self.assertIn("INVOICE TOP-UP KAS BOT", photo_kwargs["caption"])
+        self.assertIn("75.000", photo_kwargs["caption"])
+
+    async def test_admin_interactive_text_router_treasury_qris_custom(self):
+        """Router teks admin memproses input angka nominal kustom QRIS dari grup/topik."""
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=999),
+            effective_chat=SimpleNamespace(id=-100123456, type="supergroup"),
+            effective_message=SimpleNamespace(message_thread_id=55),
+            message=AsyncMock(text="5000", message_thread_id=55),
+            callback_query=None,
+        )
+        bot_mock = AsyncMock()
+        context = SimpleNamespace(
+            user_data={
+                "admin_awaiting_treasury_qris_custom": True,
+                "admin_treasury_qris_chat_id": -100123456,
+                "admin_treasury_qris_thread_id": 55,
+            },
+            bot=bot_mock,
+        )
+        handled = await admin_interactive_text_router(update, context)
+        self.assertTrue(handled)
+        self.assertNotIn("admin_awaiting_treasury_qris_custom", context.user_data)
+        bot_mock.send_photo.assert_called_once()
+        _, photo_kwargs = bot_mock.send_photo.call_args
+        self.assertEqual(photo_kwargs["chat_id"], -100123456)
+        self.assertEqual(photo_kwargs["message_thread_id"], 55)
+        self.assertIn("5.000", photo_kwargs["caption"])
+
 
 class TestAnimatedCustomEmojisAndTestimony(unittest.TestCase):
     """Pengujian integrasi Telegram animated custom emojis dan posting testimoni publik."""
@@ -325,17 +403,17 @@ class TestCampaignNotificationCustomization(unittest.TestCase):
     """Pengujian kustomisasi pesan notifikasi pemenang campaign dan template formatting."""
 
     def test_campaign_templates_include_animated_emojis(self):
-        """Semua template bawaan campaign memuat tg-emoji tags."""
+        """Semua template bawaan campaign memuat placeholder dan emoji."""
         tpl_split = get_template("tpl_split_all")
         self.assertIsNotNone(tpl_split)
-        self.assertIn("<tg-emoji", tpl_split["default_notif"])
+        self.assertIn("🎁", tpl_split["default_notif"])
         self.assertIn("{name}", tpl_split["default_notif"])
         self.assertIn("{reward}", tpl_split["default_notif"])
         self.assertIn("{new_balance}", tpl_split["default_notif"])
 
         tpl_loyalty = get_template("tpl_loyalty_buyers")
         self.assertIsNotNone(tpl_loyalty)
-        self.assertIn("<tg-emoji", tpl_loyalty["default_notif"])
+        self.assertIn("🎉", tpl_loyalty["default_notif"])
 
         tpl_top = get_template("tpl_top_spenders")
         self.assertIsNotNone(tpl_top)

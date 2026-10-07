@@ -235,8 +235,8 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
 
                     # Post testimony ke channel (Phase 8)
                     try:
-                        from services.testimony_service import post_transaction_testimony
-                        asyncio.create_task(post_transaction_testimony(bot, order, db=db))
+                        from services.testimony_service import schedule_transaction_testimony
+                        schedule_transaction_testimony(bot, order, db=db)
                     except Exception as exc:
                         logger.warning("Gagal kirim testimoni watchdog order %s: %s", order.order_id, exc)
 

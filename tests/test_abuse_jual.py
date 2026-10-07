@@ -281,15 +281,39 @@ class TestHashInputAbuse(unittest.IsolatedAsyncioTestCase):
             await handle_tx_hash_input(update, context)
         return update, notify
 
-    async def test_injection_tx_hash_tidak_lolos_ke_pesan_admin(self):
-        """Bank/hash diketik user masuk ke pesan keputusan admin tanpa escape →
-        bisa menyisipkan teks 'SEGERA TRANSFER' palsu."""
-        _, notify = await self._kirim_hash(
-            "0x" + "12" * 32, "Menunggu konfirmasi jaringan", bank_name="<b>HACK</b>"
-        )
-        teks = notify.call_args.args[1] if notify.call_args.args else ""
+    async def test_admin_tidak_dikabari_sebelum_hash_terverifikasi(self):
+        """Hash yang masih menunggu konfirmasi disimpan, tetapi admin baru dikabari
+        (untuk transfer Rupiah) setelah deposit terverifikasi on-chain."""
+        notify = AsyncMock()
+        with patch("services.detector.notify_admins", notify):
+            _, sell_notify = await self._kirim_hash(
+                "0x" + "12" * 32, "Menunggu konfirmasi jaringan", bank_name="Bank Uji"
+            )
+        notify.assert_not_called()
+        sell_notify.assert_not_called()
+        self.db.expire_all()
+        order = self.db.query(Order).filter(Order.order_id == "ORD-HASH-1").first()
+        self.assertEqual(order.deposit_tx_hash, "0x" + "12" * 32)
+
+    async def test_pesan_admin_setelah_verifikasi_meng_escape_rekening(self):
+        """Bank diketik user masuk ke pesan keputusan admin: wajib di-escape, dan
+        alamat pengirim ikut ditampilkan agar admin bisa memeriksa."""
+        from services import tx_verifier
+        order = self.db.query(Order).filter(Order.order_id == "ORD-HASH-1").first()
+        order.buyer_wallet = "<b>HACK</b> | 123456 | Pemilik"
+        self.db.commit()
+        verified = {
+            "verified": True, "amount": 10.0, "tx_hash": HASH_A,
+            "timestamp": tx_verifier._timestamp(order.created_at) + 5,
+            "from_address": "0x" + "9" * 40, "reason": "OK",
+        }
+        notify = AsyncMock()
+        with patch("services.detector.notify_admins", notify),              patch("services.detector.safe_send_message", new=AsyncMock()):
+            await deposit_detector._confirm_order(self.db, order, HASH_A, verified, object())
+        teks = notify.call_args.args[1]
         self.assertIn("&lt;b&gt;HACK", teks)
         self.assertNotIn("<b>HACK", teks)
+        self.assertIn("0x" + "9" * 40, teks)
 
     async def test_hash_sampah_tidak_dianggap_menunggu(self):
         """Hash format invalid (ValueError) tidak boleh dibalas 'TX Hash Diterima'

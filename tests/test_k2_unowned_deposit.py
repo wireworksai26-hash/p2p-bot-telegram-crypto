@@ -1,17 +1,18 @@
 """K2 — deposit yang bukan milik order tidak boleh diklaim order lain.
 
-Hot wallet dipakai bersama dan deposit dicocokkan lewat nominal. Serangan:
-A. Owner mengisi ulang stok dengan nominal bulat (mis. tepat 10 USDT). Order
-   Jual/Convert penyerang bernominal sama terkonfirmasi otomatis (Convert
-   langsung membayar koin ke penyerang).
-B. Order korban sudah `expired`, depositnya masuk telat (masih dalam jendela
-   24 jam). Order penyerang bernominal sama mengambil deposit itu.
-C. Penyerang menempel hash isi ulang stok ke ordernya (jalur hash user,
-   dulu toleransi lebih bayar 0,5%).
+Hot wallet dipakai bersama dan nominal koin TIDAK lagi berkode unik (kode unik hanya di
+QRIS). Kepemilikan deposit dibuktikan lewat TX hash kiriman user yang diverifikasi
+on-chain; auto-scan riwayat wallet dimatikan. Serangan yang tetap harus gagal:
+A. Owner mengisi ulang stok dengan nominal bulat (mis. tepat 500 USDT). Penyerang
+   membuat order bernominal sama lalu menempel hash isi ulang itu ke ordernya.
+B. Order korban sudah `expired`, depositnya masuk telat (masih dalam jendela 24 jam).
+   Order penyerang bernominal sama tidak boleh mengambil deposit itu.
+C. Hash isi ulang ditempel ke order bernominal sedikit di bawahnya.
+D. Dua order aktif bernominal sama: tidak ada yang boleh auto-klaim (eskalasi admin).
+E. Tanpa hash, deposit yang kebetulan pas nominalnya tidak boleh dikonfirmasi.
 
-Rantai disimulasikan: daftar deposit masuk on-chain, `get_recent_incoming`
-menyaring nominal persis seperti aslinya, `verify_deposit` memeriksa nominal
->= order seperti aslinya.
+Rantai disimulasikan: daftar deposit masuk on-chain, `verify_deposit` memeriksa nominal
+>= order seperti aslinya dan mengembalikan alamat pengirim.
 """
 import os
 import unittest
@@ -33,6 +34,7 @@ from database.connection import Base, SessionLocal, engine  # noqa: E402
 from database.models import AuditLog, Order  # noqa: E402
 from services import tx_verifier  # noqa: E402
 from services.detector import DepositDetector  # noqa: E402
+from config.settings import settings  # noqa: E402
 from services.deposit_amount import assign_deposit_amount  # noqa: E402
 
 HOT = os.environ["EVM_WALLET_ADDRESS"]
@@ -50,25 +52,25 @@ class FakeChain:
     def __init__(self):
         self.deposits = {}  # hash -> (amount, timestamp)
 
-    def send(self, tx_hash, amount, when=None):
-        self.deposits[tx_hash] = (Decimal(str(amount)), tx_verifier._timestamp(when or datetime.utcnow()))
+    def send(self, tx_hash, amount, when=None, sender="0x" + "5" * 40):
+        self.deposits[tx_hash] = (Decimal(str(amount)), tx_verifier._timestamp(when or datetime.utcnow()), sender)
 
     async def verify_deposit(self, network, symbol, tx_hash, expected_wallet, expected_amount,
                              not_before=None, not_after=None):
         if tx_hash not in self.deposits:
             return tx_verifier._fail("Transaksi gagal atau belum confirmed.")
-        amount, stamp = self.deposits[tx_hash]
+        amount, stamp, sender = self.deposits[tx_hash]
         if not tx_verifier._amount_matches(amount, expected_amount):
             return tx_verifier._fail(f"Nominal deposit kurang: diterima {amount} {symbol}, "
                                      f"dibutuhkan {Decimal(str(expected_amount))} {symbol}.")
-        return tx_verifier._ok(amount, stamp, tx_hash)
+        return tx_verifier._ok(amount, stamp, tx_hash, sender)
 
     async def get_recent_incoming(self, network, symbol, wallet, min_amount=0.0, limit=20,
                                   not_before=None, not_after=None):
         out = []
-        for tx_hash, (amount, stamp) in self.deposits.items():
+        for tx_hash, (amount, stamp, sender) in self.deposits.items():
             if tx_verifier.automatic_amount_matches(amount, min_amount):
-                out.append(tx_verifier._ok(amount, stamp, tx_hash))
+                out.append(tx_verifier._ok(amount, stamp, tx_hash, sender))
         return out
 
 
@@ -124,6 +126,18 @@ class DetectorCase(unittest.IsolatedAsyncioTestCase):
         finally:
             db.close()
 
+    def _attach_hash(self, order_id, tx_hash):
+        self.db.query(Order).filter(Order.order_id == order_id).update({Order.deposit_tx_hash: tx_hash})
+        self.db.commit()
+
+    def _reviewed(self, order_id):
+        db = SessionLocal()
+        try:
+            return db.query(AuditLog).filter(
+                AuditLog.order_id == order_id, AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW").first() is not None
+        finally:
+            db.close()
+
     def _new_order(self, order_id, requested, **kw):
         amount = assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal(str(requested)))
         self.assertIsNotNone(amount)
@@ -133,15 +147,28 @@ class DetectorCase(unittest.IsolatedAsyncioTestCase):
 
 
 class SkenarioA_IsiUlangStok(DetectorCase):
-    async def test_isi_ulang_bulat_tidak_mengkonfirmasi_order_penyerang(self):
+    async def test_isi_ulang_bulat_tanpa_hash_tidak_mengkonfirmasi_order_penyerang(self):
         self._new_order("ORD-ATK", 500, order_type="swap", telegram_id=666)
         self.chain.send(H("refill"), 500)  # owner isi ulang tepat 500 USDT
         await self._process("ORD-ATK")
         self.assertEqual(self._status("ORD-ATK"), "WAITING_CRYPTO_DEPOSIT")
 
-    async def test_kontrol_deposit_pas_milik_order_tetap_auto(self):
+    async def test_hash_isi_ulang_dari_wallet_owner_tidak_auto(self):
+        """Penyerang menempel hash isi ulang owner (nominal persis sama) ke ordernya:
+        pengirimnya wallet owner, jadi tidak boleh auto-konfirmasi/auto-payout."""
+        owner = "0x" + "a" * 40
+        self._new_order("ORD-ATK", 500, order_type="swap", telegram_id=666)
+        self.chain.send(H("refill"), 500, sender=owner)
+        self._attach_hash("ORD-ATK", H("refill"))
+        with patch.object(settings, "OWNER_WALLET_ADDRESSES", (owner,)):
+            await self._process("ORD-ATK")
+        self.assertEqual(self._status("ORD-ATK"), "WAITING_CRYPTO_DEPOSIT")
+        self.assertTrue(self._reviewed("ORD-ATK"))
+
+    async def test_kontrol_hash_pas_milik_order_tetap_auto(self):
         amount = self._new_order("ORD-OK", 500)
         self.chain.send(H("mine"), amount)
+        self._attach_hash("ORD-OK", H("mine"))
         await self._process("ORD-OK")
         self.assertEqual(self._status("ORD-OK"), "CRYPTO_CONFIRMED")
 
@@ -150,24 +177,26 @@ class SkenarioB_DepositTelat(DetectorCase):
     async def test_deposit_telat_korban_tidak_diambil_order_penyerang(self):
         old = datetime.utcnow() - timedelta(hours=2)
         victim_amount = self._new_order("ORD-VICTIM", 25, status="expired", created=old)
-        # Penyerang meminta nominal yang sama persis dengan order korban.
+        # Penyerang meminta nominal yang sama persis dengan order korban, lalu menempel
+        # hash deposit korban ke ordernya.
         attacker_amount = assign_deposit_amount(self.db, "BSC", "USDT", HOT, victim_amount)
+        self.assertEqual(attacker_amount, victim_amount)
         self.db.add(_order("ORD-ATK", attacker_amount, telegram_id=666))
         self.db.commit()
         self.chain.send(H("victim"), victim_amount)
+        self._attach_hash("ORD-ATK", H("victim"))
         await self._process("ORD-ATK")
         self.assertEqual(self._status("ORD-ATK"), "WAITING_CRYPTO_DEPOSIT")
-        await self._process("ORD-VICTIM")
-        self.assertEqual(self._status("ORD-VICTIM"), "CRYPTO_CONFIRMED")
+        self.assertTrue(self._reviewed("ORD-ATK"), "ambigu: harus dicek admin, bukan diklaim diam-diam")
 
     async def test_order_lama_kembar_nominal_tidak_auto(self):
-        """Pertahanan berlapis: order lama (tanpa kode unik) bernominal sama dengan
-        order expired yang masih dalam jendela tidak boleh auto-klaim."""
+        """Order bernominal sama dengan order expired yang masih dalam jendela tidak boleh auto-klaim."""
         old = datetime.utcnow() - timedelta(hours=2)
         self.db.add(_order("ORD-VICTIM", 25, status="expired", created=old))
         self.db.add(_order("ORD-ATK", 25, telegram_id=666))
         self.db.commit()
         self.chain.send(H("victim"), 25)
+        self._attach_hash("ORD-ATK", H("victim"))
         await self._process("ORD-ATK")
         self.assertEqual(self._status("ORD-ATK"), "WAITING_CRYPTO_DEPOSIT")
 
@@ -176,34 +205,56 @@ class SkenarioC_HashUser(DetectorCase):
     async def test_hash_isi_ulang_ditempel_ke_order_penyerang(self):
         amount = self._new_order("ORD-ATK", "499.5", telegram_id=666)
         self.chain.send(H("refill"), 500)
-        self.db.query(Order).filter(Order.order_id == "ORD-ATK").update({Order.deposit_tx_hash: H("refill")})
-        self.db.commit()
+        self._attach_hash("ORD-ATK", H("refill"))
         self.assertLess(amount, Decimal("500"))
         await self._process("ORD-ATK")
         self.assertEqual(self._status("ORD-ATK"), "WAITING_CRYPTO_DEPOSIT")
 
-    async def test_lupa_kode_unik_dieskalasi_ke_admin(self):
-        amount = self._new_order("ORD-LUPA", 10)
-        self.assertNotEqual(amount, Decimal("10"))
-        self.chain.send(H("lupa"), 10)  # user kirim tanpa kode unik
-        self.db.query(Order).filter(Order.order_id == "ORD-LUPA").update({Order.deposit_tx_hash: H("lupa")})
-        self.db.commit()
-        await self._process("ORD-LUPA")
-        self.assertEqual(self._status("ORD-LUPA"), "WAITING_CRYPTO_DEPOSIT")
-        db = SessionLocal()
-        try:
-            self.assertTrue(db.query(AuditLog).filter(
-                AuditLog.order_id == "ORD-LUPA", AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW").first())
-        finally:
-            db.close()
+    async def test_hash_nominal_kurang_ditolak(self):
+        """User mengirim kurang dari nominal order: tidak boleh terkonfirmasi."""
+        self._new_order("ORD-KURANG", 10)
+        self.chain.send(H("kurang"), "9.99")
+        self._attach_hash("ORD-KURANG", H("kurang"))
+        await self._process("ORD-KURANG")
+        self.assertEqual(self._status("ORD-KURANG"), "WAITING_CRYPTO_DEPOSIT")
 
     async def test_hash_pas_milik_sendiri_auto(self):
         amount = self._new_order("ORD-OK", 10)
+        self.assertEqual(amount, Decimal("10"))
         self.chain.send(H("ok"), amount)
-        self.db.query(Order).filter(Order.order_id == "ORD-OK").update({Order.deposit_tx_hash: H("ok")})
-        self.db.commit()
+        self._attach_hash("ORD-OK", H("ok"))
         await self._process("ORD-OK")
         self.assertEqual(self._status("ORD-OK"), "CRYPTO_CONFIRMED")
+
+
+class SkenarioD_NominalKembar(DetectorCase):
+    async def test_dua_order_aktif_nominal_sama_dieskalasi_bukan_auto(self):
+        """Tanpa kode unik dua user bisa menjual nominal yang sama persis. Hash masing-masing
+        valid on-chain tetapi tidak bisa dipastikan pemiliknya -> admin yang memutuskan."""
+        self._new_order("ORD-U1", 10, telegram_id=1)
+        self._new_order("ORD-U2", 10, telegram_id=2)
+        self.chain.send(H("u1"), 10)
+        self._attach_hash("ORD-U1", H("u1"))
+        await self._process("ORD-U1")
+        self.assertEqual(self._status("ORD-U1"), "WAITING_CRYPTO_DEPOSIT")
+        self.assertTrue(self._reviewed("ORD-U1"))
+        self.assertEqual(self._status("ORD-U2"), "WAITING_CRYPTO_DEPOSIT")
+
+
+class SkenarioE_TanpaHash(DetectorCase):
+    async def test_deposit_pas_tanpa_hash_tidak_dikonfirmasi(self):
+        """Auto-scan mati: deposit yang kebetulan sama persis tapi tanpa hash dari user tidak diklaim."""
+        amount = self._new_order("ORD-NOHASH", 500)
+        self.chain.send(H("mine"), amount)
+        await self._process("ORD-NOHASH")
+        self.assertEqual(self._status("ORD-NOHASH"), "WAITING_CRYPTO_DEPOSIT")
+
+    async def test_autoscan_bisa_dinyalakan_lewat_setting(self):
+        amount = self._new_order("ORD-SCAN", 500)
+        self.chain.send(H("mine"), amount)
+        with patch.object(settings, "DEPOSIT_AUTOSCAN_ENABLED", True):
+            await self._process("ORD-SCAN")
+        self.assertEqual(self._status("ORD-SCAN"), "CRYPTO_CONFIRMED")
 
 
 class AssignAmount(unittest.TestCase):
@@ -215,26 +266,30 @@ class AssignAmount(unittest.TestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    def test_nominal_unik_tidak_bulat_dan_presisi_tampilan(self):
-        seen = set()
-        for i in range(60):
-            amt = assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal("100"))
+    def test_nominal_tanpa_kode_unik_persis_yang_dipilih(self):
+        for requested in ("100", "0.5", "10.5"):
+            amt = assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal(requested))
+            self.assertEqual(amt, Decimal(requested), "tidak ada kode unik di nominal koin")
             self.assertEqual(amt, amt.quantize(Decimal("0.0001")), "presisi = presisi tampilan USDT")
-            self.assertNotEqual(amt, amt.quantize(Decimal("0.01")), "dua digit terakhir tidak boleh 00")
-            self.assertTrue(Decimal("100") < amt < Decimal("100.01"))
-            self.assertNotIn(amt, seen)
-            seen.add(amt)
+
+    def test_nominal_dibulatkan_ke_bawah_ke_presisi_koin(self):
+        self.assertEqual(assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal("10.123456")), Decimal("10.1234"))
+        self.assertIsNone(assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal("0.00001")))
+
+    def test_nominal_sama_boleh_dipakai_banyak_order(self):
+        for i in range(5):
+            amt = assign_deposit_amount(self.db, "BSC", "USDT", HOT, Decimal("100"))
+            self.assertEqual(amt, Decimal("100"))
             self.db.add(_order(f"ORD-{i}", amt))
             self.db.commit()
 
-    def test_eth_presisi_8_dan_kode_kecil(self):
+    def test_eth_presisi_8(self):
         amt = assign_deposit_amount(self.db, "BASE", "ETH", HOT, Decimal("0.0123456789"))
-        self.assertEqual(amt, amt.quantize(Decimal("0.00000001")))
-        self.assertTrue(Decimal("0.012345") < amt < Decimal("0.012346"))
+        self.assertEqual(amt, Decimal("0.01234567"))
 
 
 class SellE2E(unittest.IsolatedAsyncioTestCase):
-    """Alur Jual asli: nominal yang diminta bot = nominal order, berkode unik."""
+    """Alur Jual/Convert asli: nominal yang diminta bot = nominal order, bulat, tanpa kode unik."""
     async def asyncSetUp(self):
         await e2e_setup(self)
     async def asyncTearDown(self):
@@ -246,7 +301,7 @@ class SellE2E(unittest.IsolatedAsyncioTestCase):
     _sell_order_waiting_deposit = _e2e.BotFlowE2E._sell_order_waiting_deposit
     A = 70001
 
-    async def test_order_jual_berkode_unik_dan_tampil_persis(self):
+    async def test_order_jual_nominal_bulat_tanpa_kode_unik(self):
         order_id = await self._sell_order_waiting_deposit(self.A)
         db = SessionLocal()
         try:
@@ -254,12 +309,14 @@ class SellE2E(unittest.IsolatedAsyncioTestCase):
             amount = Decimal(str(order.crypto_amount))
         finally:
             db.close()
-        self.assertNotEqual(amount, Decimal("10"), "isi ulang tepat 10 USDT tidak boleh cocok")
+        self.assertEqual(amount, Decimal("10"), "nominal koin = persis yang dipilih user")
         shown = "\n".join(str(p.get("text") or p.get("caption") or "") for e, p in _e2e.FakeTelegram.calls
                           if e in ("sendMessage", "editMessageText", "sendPhoto"))
         self.assertIn(f"{amount:.4f}", shown, "nominal yang diminta harus sama persis dengan order")
+        self.assertNotIn("kode unik", shown.lower())
+        self.assertIn("TX Hash", shown, "user harus diminta mengirim TX Hash")
 
-    async def test_order_convert_berkode_unik(self):
+    async def test_order_convert_nominal_bulat_tanpa_kode_unik(self):
         await self.say(self.A, "/start")
         await self.tap(self.A, "start_swap", from_screen=False)
         await self.tap(self.A, "swap_src_sym_USDT", from_screen=False)
@@ -275,8 +332,10 @@ class SellE2E(unittest.IsolatedAsyncioTestCase):
             amount = Decimal(str(order.crypto_amount))
         finally:
             db.close()
-        self.assertNotEqual(amount, amount.quantize(Decimal("0.01")))
+        self.assertEqual(amount, Decimal("20"))
         self.assertIn(f"{amount:.4f}", shown)
+        self.assertNotIn("kode unik", shown.lower())
+        self.assertIn("TX Hash", shown)
 
 
 if __name__ == "__main__":

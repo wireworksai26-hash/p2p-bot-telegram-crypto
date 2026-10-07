@@ -81,7 +81,8 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E_USER()} <b>Nama</b>    : {_esc(user.full_name or 'N/A')}\n"
         f"{E_TAG()} <b>Username</b>: @{user.username or 'N/A'}\n"
         f"{E_ID()} <b>ID User</b> : <code>{user.id}</code>\n"
-        f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n\n"
+        f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n"
+        f"💸 <i>Minimal Withdraw 10k</i>\n\n"
         f"{E_SPARKLES()} <i>Saldo IDR dapat digunakan untuk membeli koin crypto secara instan (1-Tap) tanpa perlu transfer bank!</i>"
     )
 
@@ -511,7 +512,10 @@ async def cancel_topup_manual(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not topup:
             await query.answer("❌ Data topup tidak ditemukan.", show_alert=True)
             return
-        if topup.telegram_id != query.from_user.id:
+        from bot.handlers.admin import is_admin
+        is_adm = is_admin(query.from_user.id)
+        is_treasury = topup_id.startswith("TREASURY-") or topup_id.startswith("TOPUP-TREASURY-")
+        if topup.telegram_id != query.from_user.id and not (is_adm and is_treasury):
             await query.answer("❌ Topup ini bukan milik Anda.", show_alert=True)
             return
         if (topup.status or "").upper() != "PENDING":
@@ -522,11 +526,32 @@ async def cancel_topup_manual(update: Update, context: ContextTypes.DEFAULT_TYPE
         db.close()
 
     await query.answer()
-    await query.edit_message_caption(
-        caption=f"❌ <b>Invoice Topup {topup_id} telah dibatalkan.</b>",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
-        parse_mode="HTML"
+    back_button = (
+        InlineKeyboardButton("🏦 Kembali ke Kas Bot", callback_data="camp_treasury_view")
+        if is_treasury
+        else InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
     )
+    cancel_text = f"❌ <b>Invoice Topup {topup_id} telah dibatalkan.</b>"
+    markup = InlineKeyboardMarkup([[back_button]])
+    try:
+        await query.edit_message_caption(
+            caption=cancel_text,
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+    except Exception:
+        try:
+            await query.edit_message_text(
+                text=cancel_text,
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
+        except Exception:
+            await query.message.reply_text(
+                text=cancel_text,
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
 
 
 async def cancel_topup_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
