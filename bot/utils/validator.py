@@ -52,9 +52,9 @@ def validate_wallet_address(address: str, network: str) -> bool:
         try:
             if len(address) != 34 or not address.startswith("T"):
                 return False
-            # Check base58 encoding
-            base58.b58decode(address)
-            return True
+            # Checksum base58check: salah ketik satu huruf = koin hilang (tidak bisa dipulihkan).
+            raw = base58.b58decode_check(address)
+            return len(raw) == 21 and raw[0] == 0x41
         except Exception:
             return False
 

@@ -7,6 +7,7 @@ Semua fungsi menerima `db` (SQLAlchemy Session) sebagai parameter pertama.
 """
 
 import logging
+import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -30,6 +31,8 @@ from database.models import (
     ReferralDiscount,
     LoyaltyReward,
     LoyaltyConfig,
+    AdminActionToken,
+    CampaignActionLock,
 )
 
 logger = logging.getLogger(__name__)
@@ -168,6 +171,109 @@ def create_order(db: Session, order_data: dict) -> Order:
         raise
 
 
+def create_bot_balance_order(db: Session, order_data: dict) -> Optional[Order]:
+    """Buat order Saldo Bot, debit saldo, statistik, dan paid_at dalam satu transaksi."""
+    from sqlalchemy import update
+
+    if order_data.get("payment_method") != "BOT_BALANCE":
+        raise ValueError("create_bot_balance_order hanya untuk payment_method BOT_BALANCE.")
+    amount = _positive_amount(order_data.get("total_idr"))
+    if amount <= 0:
+        raise ValueError("Nominal order Saldo Bot harus lebih besar dari nol.")
+
+    try:
+        order = Order(**order_data)
+        db.add(order)
+        db.flush()
+        spent = int(order_data["total_idr"])
+        changed = db.execute(
+            update(User)
+            .where(
+                User.telegram_id == int(order_data["telegram_id"]),
+                func.coalesce(User.balance_idr, 0) >= amount,
+            )
+            .values(
+                balance_idr=func.coalesce(User.balance_idr, 0) - amount,
+                total_orders=func.coalesce(User.total_orders, 0) + 1,
+                total_spent_idr=func.coalesce(User.total_spent_idr, 0) + spent,
+            )
+        )
+        if changed.rowcount != 1:
+            db.rollback()
+            return None
+
+        order.paid_at = datetime.utcnow()
+        db.commit()
+        db.refresh(order)
+        return order
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal membuat order Saldo Bot atomik")
+        raise
+
+
+def reject_and_refund_bot_balance_order(db: Session, order_id: str, admin_id: int) -> dict:
+    """Tolak order beli Saldo Bot dan refund satu kali dalam transaksi DB yang sama."""
+    from sqlalchemy import update
+
+    order = db.query(Order).filter(Order.order_id == order_id).first()
+    if not order or order.order_type != "buy" or order.payment_method != "BOT_BALANCE":
+        return {"refunded": False, "reason": "not_bot_balance_order"}
+    if order.status != "pending":
+        return {"refunded": False, "reason": "status_changed", "status": order.status}
+    if order.paid_at is None:
+        return {"refunded": False, "reason": "debit_not_confirmed"}
+
+    amount = int(order.total_idr or 0)
+    if amount <= 0:
+        return {"refunded": False, "reason": "invalid_refund_amount"}
+
+    try:
+        now = datetime.utcnow()
+        changed = db.execute(
+            update(Order)
+            .where(
+                Order.order_id == order_id,
+                Order.order_type == "buy",
+                Order.payment_method == "BOT_BALANCE",
+                Order.status == "pending",
+                Order.paid_at.isnot(None),
+                Order.total_idr > 0,
+            )
+            .values(
+                status="rejected",
+                failure_reason="Ditolak oleh admin (Saldo di-refund)",
+                updated_at=now,
+            )
+        )
+        if changed.rowcount != 1:
+            db.rollback()
+            return {"refunded": False, "reason": "status_changed"}
+
+        credited = db.execute(
+            update(User)
+            .where(User.telegram_id == order.telegram_id)
+            .values(balance_idr=func.coalesce(User.balance_idr, 0) + amount)
+        )
+        if credited.rowcount != 1:
+            raise RuntimeError(f"User {order.telegram_id} tidak ditemukan saat refund {order_id}")
+
+        db.add(AuditLog(
+            telegram_id=order.telegram_id,
+            action="BOT_BALANCE_ORDER_REFUND",
+            order_id=order_id,
+            from_status="pending",
+            to_status="rejected",
+            details=f"Admin {admin_id} menolak order Saldo Bot dan mengembalikan Rp {amount:,}.",
+        ))
+        db.commit()
+        return {"refunded": True, "telegram_id": int(order.telegram_id), "amount": amount}
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal menolak/refund order Saldo Bot %s", order_id)
+        raise
+
+
 def get_order_by_id(db: Session, order_id: str) -> Optional[Order]:
     """Cari order berdasarkan order_id (string unik, bukan auto-increment id)."""
     try:
@@ -212,6 +318,12 @@ def update_order_status(
             return None
 
         old_status = order.status
+        # COMPLETED final: koin/Rupiah sudah berpindah, membatalkan/mengubahnya merusak
+        # pembukuan dan bisa memicu proses ulang (bayar dua kali).
+        if (str(old_status or "").lower() == "completed"
+                and str(new_status or "").lower() != "completed"):
+            logger.warning(f"Tolak transisi order {order_id}: {old_status} -> {new_status} (order sudah selesai)")
+            return None
         order.status = new_status
 
         # Set extra fields yang dikirim (misal: paid_at, tx_hash, dll)
@@ -229,7 +341,8 @@ def update_order_status(
             auto_save_order_accounts(db, order)
             try:
                 amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                complete_referral(db, order.telegram_id, trade_amount_idr=amt)
+                complete_referral(db, order.telegram_id, trade_amount_idr=amt,
+                                  fee_idr=float(order.fee_idr or 0))
             except Exception as ref_err:
                 logger.warning(f"Error completing referral on order {order_id}: {ref_err}")
 
@@ -241,7 +354,7 @@ def update_order_status(
         raise
 
 
-def claim_order_paid(db: Session, order_id: str) -> bool:
+def claim_order_paid(db: Session, order_id: str, allow_expired_qris: bool = False) -> bool:
     """
     Atomic claim order: pending -> paid.
     Hanya satu pemanggil yang menang (rowcount == 1); pemanggil lain dapat False.
@@ -249,9 +362,15 @@ def claim_order_paid(db: Session, order_id: str) -> bool:
     """
     from sqlalchemy import update
     try:
+        claimable_status = Order.status == "pending"
+        if allow_expired_qris:
+            claimable_status = or_(
+                claimable_status,
+                (Order.status == "expired") & (Order.payment_method == "GOPAY_QRIS") & Order.paid_at.is_(None),
+            )
         result = db.execute(
             update(Order)
-            .where(Order.order_id == order_id, Order.status == "pending")
+            .where(Order.order_id == order_id, claimable_status)
             .values(status="paid", paid_at=datetime.utcnow(), updated_at=datetime.utcnow())
         )
         db.commit()
@@ -310,16 +429,18 @@ def claim_stale_payout_processing(db: Session, order_id: str, stale_seconds: int
         raise
 
 
-def claim_topup_success(db: Session, topup_id: str) -> bool:
+def claim_topup_success(db: Session, topup_id: str, allow_expired: bool = False) -> bool:
     """
-    Atomic claim topup: PENDING -> SUCCESS.
+    Atomic claim topup: PENDING -> SUCCESS (juga EXPIRED bila allow_expired, khusus
+    persetujuan admin untuk user yang membayar di menit terakhir).
     Hanya satu pemanggil yang menang; cegah double credit saldo.
     """
+    claimable = ["PENDING", "EXPIRED"] if allow_expired else ["PENDING"]
     from sqlalchemy import update
     try:
         result = db.execute(
             update(TopupOrder)
-            .where(TopupOrder.topup_id == topup_id, TopupOrder.status == "PENDING")
+            .where(TopupOrder.topup_id == topup_id, TopupOrder.status.in_(claimable))
             .values(status="SUCCESS", paid_at=datetime.utcnow())
         )
         db.commit()
@@ -374,6 +495,136 @@ def claim_qris_payment(db: Session, tx_id: str, ref_id: str, kind: str, amount_i
         return bool(existing and existing.ref_id == ref_id)
 
 
+ADMIN_ACTION_TOKEN_TTL_SECONDS = 600
+
+
+def issue_admin_action_token(
+    db: Session,
+    admin_id: int,
+    action: str,
+    payload: str,
+    *,
+    chat_id: int = None,
+    message_id: int = None,
+    ttl_seconds: int = ADMIN_ACTION_TOKEN_TTL_SECONDS,
+) -> str:
+    """Terbitkan token callback admin yang terikat ke admin, aksi, payload, dan pesan."""
+    now = datetime.utcnow()
+    token = secrets.token_hex(12)
+    try:
+        bound_chat_id = int(chat_id) if chat_id is not None else None
+    except (TypeError, ValueError):
+        bound_chat_id = None
+    try:
+        bound_message_id = int(message_id) if message_id is not None else None
+    except (TypeError, ValueError):
+        bound_message_id = None
+    try:
+        db.query(AdminActionToken).filter(AdminActionToken.expires_at <= now).delete(
+            synchronize_session=False
+        )
+        db.add(AdminActionToken(
+            token=token,
+            admin_id=int(admin_id),
+            action=str(action),
+            payload=str(payload),
+            chat_id=bound_chat_id,
+            message_id=bound_message_id,
+            created_at=now,
+            expires_at=now + timedelta(seconds=max(1, int(ttl_seconds))),
+        ))
+        db.commit()
+        return token
+    except Exception:
+        db.rollback()
+        raise
+
+
+def claim_admin_action_token(
+    db: Session,
+    token: str,
+    admin_id: int,
+    action: str,
+    payload: str = None,
+    *,
+    chat_id: int = None,
+    message_id: int = None,
+) -> Optional[str]:
+    """Klaim token secara atomik; perubahan ikut commit/rollback aksi pemanggil."""
+    from sqlalchemy import update
+
+    now = datetime.utcnow()
+    query = db.query(AdminActionToken).filter(
+        AdminActionToken.token == str(token or ""),
+        AdminActionToken.admin_id == int(admin_id),
+        AdminActionToken.action == str(action),
+        AdminActionToken.consumed_at.is_(None),
+        AdminActionToken.expires_at > now,
+    )
+    entry = query.first()
+    if not entry or (payload is not None and entry.payload != str(payload)):
+        return None
+    if entry.chat_id is not None and (chat_id is None or entry.chat_id != int(chat_id)):
+        return None
+    if entry.message_id is not None and (message_id is None or entry.message_id != int(message_id)):
+        return None
+
+    conditions = [
+        AdminActionToken.token == entry.token,
+        AdminActionToken.admin_id == int(admin_id),
+        AdminActionToken.action == str(action),
+        AdminActionToken.payload == entry.payload,
+        AdminActionToken.consumed_at.is_(None),
+        AdminActionToken.expires_at > now,
+    ]
+    if entry.chat_id is not None:
+        conditions.append(AdminActionToken.chat_id == int(chat_id))
+    if entry.message_id is not None:
+        conditions.append(AdminActionToken.message_id == int(message_id))
+    result = db.execute(
+        update(AdminActionToken)
+        .where(*conditions)
+        .values(consumed_at=now)
+    )
+    return entry.payload if result.rowcount == 1 else None
+
+
+def claim_campaign_action_lock(db: Session, action: str, cooldown_seconds: int) -> bool:
+    """Ambil lock campaign lintas worker hingga cooldown berakhir, tanpa commit sendiri."""
+    from sqlalchemy import update
+
+    dialect = db.get_bind().dialect.name
+    values = {"action": str(action)}
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+        db.execute(insert(CampaignActionLock).values(**values).on_conflict_do_nothing(
+            index_elements=[CampaignActionLock.action]
+        ))
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+        db.execute(insert(CampaignActionLock).values(**values).on_conflict_do_nothing(
+            index_elements=[CampaignActionLock.action]
+        ))
+    else:
+        if not db.query(CampaignActionLock.action).filter_by(action=action).first():
+            db.add(CampaignActionLock(action=action))
+            db.flush()
+
+    now = datetime.utcnow()
+    result = db.execute(
+        update(CampaignActionLock)
+        .where(
+            CampaignActionLock.action == str(action),
+            or_(CampaignActionLock.locked_until.is_(None), CampaignActionLock.locked_until <= now),
+        )
+        .values(
+            locked_until=now + timedelta(seconds=max(1, int(cooldown_seconds))),
+            updated_at=now,
+        )
+    )
+    return result.rowcount == 1
+
+
 def is_qris_payment_claimed(db: Session, tx_id: str) -> bool:
     from database.models import QrisPaymentClaim
     tx_id = str(tx_id or "").strip()
@@ -409,7 +660,7 @@ def get_gopay_resume_orders(db: Session) -> list[Order]:
     return gopay_stuck + balance_paid
 
 
-def expire_stale_orders(db: Session, minutes: int = 15) -> int:
+def expire_stale_orders(db: Session, minutes: int = 15, exclude_order_ids: set[str] = None) -> int:
     """
     Menandai order yang kedaluwarsa menjadi 'expired':
       - Order 'pending' lama (created_at > cutoff).
@@ -421,16 +672,15 @@ def expire_stale_orders(db: Session, minutes: int = 15) -> int:
     try:
         now = datetime.utcnow()
         cutoff_time = now - timedelta(minutes=minutes)
-        pending = (
-            db.query(Order)
-            .filter(
+        pending_query = db.query(Order).filter(
                 Order.status == "pending",
                 Order.created_at <= cutoff_time,
                 # Sudah dibayar (Saldo Bot) — jangan expire, biarkan resume payout.
                 Order.paid_at.is_(None),
             )
-            .all()
-        )
+        if exclude_order_ids:
+            pending_query = pending_query.filter(~Order.order_id.in_(set(exclude_order_ids)))
+        pending = pending_query.all()
         deposit_waiting = (
             db.query(Order)
             .filter(
@@ -459,11 +709,17 @@ def expire_stale_orders(db: Session, minutes: int = 15) -> int:
         if not expired_orders:
             return 0
 
+        # UPDATE bersyarat per order: order yang dibayar/diproses sesudah SELECT tadi tidak
+        # boleh ikut di-expire (dulu status ditimpa dari objek ORM yang sudah basi).
+        count = 0
         for order in expired_orders:
-            order.status = "expired"
-
+            guard = Order.status == order.status
+            if order.status == "pending":
+                guard = guard & Order.paid_at.is_(None)
+            count += db.query(Order).filter(Order.order_id == order.order_id, guard).update(
+                {"status": "expired"}, synchronize_session=False)
         db.commit()
-        return len(expired_orders)
+        return count
     except Exception as e:
         db.rollback()
         logger.error(f"Gagal memproses expire stale orders: {e}")
@@ -760,8 +1016,16 @@ def reserve_order_inventory(
         raise
 
 
-def release_order_inventory(db: Session, order_id: str) -> bool:
-    """Lepas reservation setelah payout sukses atau order dibatalkan."""
+def release_order_inventory(db: Session, order_id: str, consumed: bool = False) -> bool:
+    """Lepas reservasi inventory secara atomik.
+
+    consumed=True: koin benar-benar keluar dari wallet (payout sukses / dikirim manual),
+    jadi `balance` ikut dikurangi — kalau tidak, stok tampak utuh sampai sync berikutnya
+    dan bot menjual koin yang sudah tidak ada. consumed=False: order batal/gagal sebelum
+    broadcast, hanya reservasi yang dilepas.
+    Semua lewat UPDATE bersyarat (bukan baca-ubah-tulis dari objek yang mungkin basi).
+    """
+    from sqlalchemy import case, update
     reservation = (
         db.query(InventoryReservation)
         .filter(
@@ -773,21 +1037,28 @@ def release_order_inventory(db: Session, order_id: str) -> bool:
     if not reservation:
         return False
 
-    wallet = (
-        db.query(WalletBalance)
-        .filter(
+    amount = Decimal(str(reservation.amount))
+    try:
+        claimed = db.query(InventoryReservation).filter(
+            InventoryReservation.id == reservation.id,
+            InventoryReservation.status == "RESERVED",
+        ).update({"status": "RELEASED", "released_at": datetime.utcnow()}, synchronize_session=False)
+        if claimed != 1:
+            db.rollback()
+            return False  # proses lain sudah melepasnya
+        values = {"reserved_balance": case(
+            (WalletBalance.reserved_balance >= amount, WalletBalance.reserved_balance - amount), else_=0)}
+        if consumed:
+            values["balance"] = case(
+                (WalletBalance.balance >= amount, WalletBalance.balance - amount), else_=0)
+        db.execute(update(WalletBalance).where(
             WalletBalance.network == reservation.network,
             WalletBalance.symbol == reservation.symbol,
-        )
-        .first()
-    )
-    try:
-        if wallet:
-            current = Decimal(str(wallet.reserved_balance or 0))
-            wallet.reserved_balance = max(Decimal("0"), current - Decimal(str(reservation.amount)))
-        reservation.status = "RELEASED"
-        reservation.released_at = datetime.utcnow()
+        ).values(**values))
         db.commit()
+        for obj in list(db.identity_map.values()):
+            if isinstance(obj, (WalletBalance, InventoryReservation)):
+                db.refresh(obj)
         return True
     except Exception:
         db.rollback()
@@ -858,40 +1129,51 @@ def get_low_balance_wallets(db: Session) -> list[WalletBalance]:
         raise
 
 
-def generate_unique_payment_code(db: Session, min_code: int = 1, max_code: int = 400) -> int:
+def generate_unique_payment_code(
+    db: Session, base_amount: Optional[int] = None, min_code: int = 1, max_code: int = 400
+) -> Optional[int]:
     """
-    Menghasilkan kode unik kecil (001..400) yang belum dipakai oleh order/topup PENDING
-    lainnya. Mencegah selisih pembayaran terlalu jauh dari nominal asli transaksi.
+    Kode unik kecil (001..400) untuk tagihan QRIS baru, atau None bila tidak aman.
+
+    Pembayaran QRIS dicocokkan hanya lewat nominal, jadi total tagihan baru
+    (base_amount + kode) tidak boleh sama dengan tagihan PENDING mana pun —
+    kalau sama, pembayaran satu orang bisa melunasi tagihan orang lain.
+    Total kelipatan 100 juga dihindari (ambigu sen/rupiah di gateway).
+    Kode pending juga tidak dipakai ulang. Bila semua kode habis → None
+    (pemanggil wajib menolak tagihan, jangan memakai kode kembar).
     """
-    import random
-    try:
-        pending_order_codes = {
-            r[0] for r in db.query(Order.unique_code).filter(
-                Order.status == "pending",
-                Order.unique_code > 0
-            ).all()
-        }
-        pending_topup_codes = {
-            r[0] for r in db.query(TopupOrder.unique_code).filter(
-                TopupOrder.status == "PENDING",
-                TopupOrder.unique_code > 0
-            ).all()
-        }
-        used_codes = pending_order_codes.union(pending_topup_codes)
-
-        # Cari kode unik yang belum terpakai di rentang kecil (001..400)
-        available = [c for c in range(min_code, max_code + 1) if c not in used_codes]
-        if available:
-            return random.choice(available)
-
-        # Fallback jika ada >400 order pending bersamaan — tetap di rentang 001..400
-        wider_available = [c for c in range(1, 201) if c not in used_codes]
-        if wider_available:
-            return random.choice(wider_available)
-        return random.randint(min_code, max_code)
-    except Exception as e:
-        logger.error(f"Gagal generate unique code: {e}")
-        return random.randint(min_code, max_code)
+    import secrets
+    used_codes = {
+        r[0] for r in db.query(Order.unique_code).filter(
+            Order.status == "pending", Order.unique_code > 0).all()
+    } | {
+        r[0] for r in db.query(TopupOrder.unique_code).filter(
+            TopupOrder.status == "PENDING", TopupOrder.unique_code > 0).all()
+    }
+    pending_totals = {
+        int(r[0]) for r in db.query(Order.total_idr).filter(
+            Order.status == "pending", Order.payment_method == "GOPAY_QRIS").all()
+        if r[0] is not None
+    } | {
+        int(r[0]) for r in db.query(TopupOrder.amount_idr).filter(
+            TopupOrder.status == "PENDING").all()
+        if r[0] is not None
+    }
+    available = [
+        c for c in range(min_code, max_code + 1)
+        if c not in used_codes
+        and (base_amount is None or (
+            int(base_amount) + c not in pending_totals
+            # Total kelipatan 100 ambigu di gateway (sen vs rupiah) — lihat gopay-gateway/amount.js.
+            and (int(base_amount) + c) % 100 != 0
+            # Di atas batas QRIS (BI Rp 10 jt) QRIS dinamis tidak bisa dibuat.
+            and int(base_amount) + c <= 10_000_000
+        ))
+    ]
+    if not available:
+        logger.warning("Kode unik QRIS habis/bentrok untuk base %s — tagihan ditolak", base_amount)
+        return None
+    return secrets.choice(available)
 
 
 
@@ -969,7 +1251,8 @@ def build_monthly_report(db: Session, year: int, month: int) -> MonthlyReport:
         fee_idr=fee_idr,
         topup_count=len(topups),
         topup_idr=topup_idr,
-        total_idr=volume_idr + fee_idr + topup_idr,
+        # total_idr order sudah mengandung fee; menambahkan fee_idr lagi = hitung ganda.
+        total_idr=volume_idr + topup_idr,
     )
 
 
@@ -1030,19 +1313,34 @@ def get_user_balance(db: Session, telegram_id: int) -> float:
     return float(user.balance_idr or 0.0)
 
 
+def _positive_amount(amount_idr) -> Decimal:
+    amount = Decimal(str(amount_idr))
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(f"Nominal saldo tidak valid: {amount_idr}")
+    return amount
+
+
+def _refresh_balance(db: Session, telegram_id: int) -> float:
+    # Objek User yang sudah dimuat sesi ini dimuat ulang agar tidak memegang saldo basi.
+    for obj in list(db.identity_map.values()):
+        if isinstance(obj, User) and obj.telegram_id == telegram_id:
+            db.refresh(obj)
+    value = db.query(User.balance_idr).filter(User.telegram_id == telegram_id).scalar()
+    return float(value or 0)
+
+
 def credit_user_balance(db: Session, telegram_id: int, amount_idr: float) -> float:
-    """Menambahkan (mengkreditkan) saldo IDR pengguna."""
+    """Menambahkan saldo IDR pengguna secara atomik (UPDATE balance = balance + n)."""
+    amount = _positive_amount(amount_idr)
     try:
-        user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        if not user:
-            user = create_user(db, telegram_id)
-            
-        current_bal = float(user.balance_idr or 0.0)
-        new_bal = current_bal + float(amount_idr)
-        user.balance_idr = Decimal(str(new_bal))
+        if not db.query(User.telegram_id).filter(User.telegram_id == telegram_id).first():
+            create_user(db, telegram_id)
+        db.query(User).filter(User.telegram_id == telegram_id).update(
+            {User.balance_idr: func.coalesce(User.balance_idr, 0) + amount},
+            synchronize_session=False)
         db.commit()
-        db.refresh(user)
-        logger.info(f"User {telegram_id} balance credited +Rp {amount_idr:,.0f} -> New Balance: Rp {new_bal:,.0f}")
+        new_bal = _refresh_balance(db, telegram_id)
+        logger.info(f"User {telegram_id} balance credited +Rp {amount:,.0f} -> New Balance: Rp {new_bal:,.0f}")
         return new_bal
     except Exception as e:
         db.rollback()
@@ -1051,22 +1349,25 @@ def credit_user_balance(db: Session, telegram_id: int, amount_idr: float) -> flo
 
 
 def deduct_user_balance(db: Session, telegram_id: int, amount_idr: float) -> bool:
-    """Memotong (debit) saldo IDR pengguna jika saldo mencukupi."""
+    """Memotong saldo IDR secara atomik; False bila saldo tidak cukup.
+
+    Satu UPDATE ... WHERE balance >= n: dua potongan bersamaan (atau sesi yang memegang
+    saldo basi) tidak bisa sama-sama lolos.
+    """
+    amount = _positive_amount(amount_idr)
     try:
-        user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        if not user:
-            return False
-            
-        current_bal = float(user.balance_idr or 0.0)
-        if current_bal < amount_idr:
-            logger.warning(f"User {telegram_id} saldo tidak cukup. Saldo: {current_bal}, Butuh: {amount_idr}")
-            return False
-            
-        new_bal = current_bal - float(amount_idr)
-        user.balance_idr = Decimal(str(new_bal))
+        changed = db.query(User).filter(
+            User.telegram_id == telegram_id,
+            func.coalesce(User.balance_idr, 0) >= amount,
+        ).update({User.balance_idr: func.coalesce(User.balance_idr, 0) - amount},
+                 synchronize_session=False)
         db.commit()
-        db.refresh(user)
-        logger.info(f"User {telegram_id} balance deducted -Rp {amount_idr:,.0f} -> Sisa: Rp {new_bal:,.0f}")
+        if changed != 1:
+            logger.warning(f"User {telegram_id} saldo tidak cukup untuk potongan Rp {amount:,.0f}")
+            _refresh_balance(db, telegram_id)
+            return False
+        new_bal = _refresh_balance(db, telegram_id)
+        logger.info(f"User {telegram_id} balance deducted -Rp {amount:,.0f} -> Sisa: Rp {new_bal:,.0f}")
         return True
     except Exception as e:
         db.rollback()
@@ -1108,21 +1409,51 @@ def get_topup_order_by_id(db: Session, topup_id: str) -> Optional[TopupOrder]:
 
 
 def update_topup_status(db: Session, topup_id: str, status: str, paid_at: datetime = None) -> Optional[TopupOrder]:
-    """Memperbarui status TopupOrder (e.g. SUCCESS, EXPIRED, CANCELLED)."""
+    """Ubah topup yang masih PENDING agar aksi stale tidak menimpa pembayaran."""
+    from sqlalchemy import update
+
     try:
-        topup = db.query(TopupOrder).filter(TopupOrder.topup_id == topup_id).first()
-        if not topup:
-            return None
-        topup.status = status
+        values = {"status": status}
         if paid_at:
-            topup.paid_at = paid_at
+            values["paid_at"] = paid_at
+        result = db.execute(
+            update(TopupOrder)
+            .where(TopupOrder.topup_id == topup_id, TopupOrder.status == "PENDING")
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return None
         db.commit()
-        db.refresh(topup)
         logger.info(f"TopupOrder {topup_id} status updated -> {status}")
-        return topup
+        return db.query(TopupOrder).filter(TopupOrder.topup_id == topup_id).first()
     except Exception as e:
         db.rollback()
         logger.error(f"Gagal update status TopupOrder {topup_id}: {e}")
+        raise
+
+
+def expire_topup_if_pending(db: Session, topup_id: str, now: datetime = None) -> bool:
+    """Expire topup hanya jika masih PENDING dan batas waktunya benar-benar lewat."""
+    from sqlalchemy import update
+
+    now = now or datetime.utcnow()
+    try:
+        result = db.execute(
+            update(TopupOrder)
+            .where(
+                TopupOrder.topup_id == topup_id,
+                TopupOrder.status == "PENDING",
+                TopupOrder.expires_at.isnot(None),
+                TopupOrder.expires_at <= now,
+            )
+            .values(status="EXPIRED")
+        )
+        db.commit()
+        return result.rowcount == 1
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal expire topup %s", topup_id)
         raise
 
 
@@ -1357,12 +1688,17 @@ def get_referral_by_referee(db: Session, referee_id: int):
     return db.query(Referral).filter(Referral.referee_id == referee_id).first()
 
 
-def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.0) -> bool:
+def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.0,
+                      fee_idr: Optional[float] = None) -> bool:
     """Mark referral COMPLETED dan credit reward ke referrer serta potongan/bonus ke referee.
 
-    Dipanggil saat referee menyelesaikan transaksi pertama.
-    Jika ada aturan min_trade_amount_idr > 0, nominal transaksi harus >= nilai tersebut.
-    Return True jika berhasil, False jika tidak ada referral, belum memenuhi syarat minimal, atau sudah completed.
+    Dipanggil saat referee menyelesaikan transaksi (detector, payout watchdog, dan
+    update_order_status bisa memanggil bersamaan). Status diklaim atomik
+    (PENDING -> COMPLETED dalam satu UPDATE) sebelum kredit, jadi reward hanya sekali.
+
+    Guard fee (default aktif, config `referral_fee_guard`): reward + bonus hanya dibayar
+    bila fee transaksi itu menutupinya — akun palsu yang belanja minimum tidak bisa
+    menjadi sumber untung. Referral tetap PENDING sampai ada transaksi yang memenuhi.
     """
     from database.models import Referral, AuditLog
 
@@ -1383,9 +1719,32 @@ def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.
         )
         return False
 
+    reward = int(ref.reward_idr or 0)
+    bonus_cfg = get_referral_config(db, "referee_discount_idr")
+    bonus_idr = int(bonus_cfg) if bonus_cfg else 0
+    guard_on = (get_referral_config(db, "referral_fee_guard") or "true").lower() != "false"
+    if guard_on and fee_idr is not None and float(fee_idr) < reward + bonus_idr:
+        logger.info(
+            f"Referral pending for referee {referee_id}: fee Rp {float(fee_idr):,.0f} "
+            f"< reward+bonus Rp {reward + bonus_idr:,}"
+        )
+        return False
+
     try:
-        # 1. Credit reward ke referrer
-        reward = ref.reward_idr or 0
+        claimed = db.query(Referral).filter(
+            Referral.id == ref.id, Referral.status == "PENDING",
+        ).update({"status": "COMPLETED", "completed_at": datetime.utcnow()}, synchronize_session=False)
+        db.commit()
+        db.refresh(ref)
+        if claimed != 1:
+            return False  # pemanggil lain sudah menyelesaikan referral ini
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error claiming referral for {referee_id}: {e}")
+        return False
+
+    # Status sudah COMPLETED: kegagalan kredit di bawah dicatat untuk admin, tidak diulang otomatis.
+    try:
         if reward > 0:
             credit_user_balance(db, ref.referrer_id, float(reward))
             db.add(AuditLog(
@@ -1393,10 +1752,6 @@ def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.
                 action="REFERRAL_REWARD",
                 details=f"Reward referral dari transaksi user {referee_id}: +Rp {reward:,}",
             ))
-
-        # 2. Credit bonus/potongan ke referee jika diaktifkan admin
-        bonus_cfg = get_referral_config(db, "referee_discount_idr")
-        bonus_idr = int(bonus_cfg) if bonus_cfg else 0
         if bonus_idr > 0:
             credit_user_balance(db, referee_id, float(bonus_idr))
             db.add(AuditLog(
@@ -1404,9 +1759,6 @@ def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.
                 action="REFERRAL_BONUS",
                 details=f"Bonus/Potongan transaksi pertama referral (diajak oleh {ref.referrer_id}): +Rp {bonus_idr:,}",
             ))
-
-        ref.status = "COMPLETED"
-        ref.completed_at = datetime.utcnow()
         db.commit()
         logger.info(
             f"Referral completed: {ref.referrer_id} ← {referee_id}. "
@@ -1415,7 +1767,13 @@ def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.
         return True
     except Exception as e:
         db.rollback()
-        logger.error(f"Error completing referral for {referee_id}: {e}")
+        logger.error(f"Referral {referee_id} COMPLETED tetapi kredit gagal — perlu cek admin: {e}")
+        try:
+            db.add(AuditLog(telegram_id=ref.referrer_id, action="REFERRAL_CREDIT_FAILED",
+                            details=f"Referee {referee_id}: reward Rp {reward:,} / bonus Rp {bonus_idr:,} gagal dikredit: {e}"))
+            db.commit()
+        except Exception:
+            db.rollback()
         return False
 
 
@@ -2378,32 +2736,56 @@ def topup_bot_treasury(
     if amount_idr <= 0:
         raise ValueError("Nominal topup kas bot harus lebih besar dari 0.")
 
-    from sqlalchemy import update, cast, BigInteger, String
-    current_bal = get_bot_treasury_balance(db)
-    # Tambah atomik (UPDATE value = value + n) agar tidak menimpa potongan yang baru terjadi.
-    result = db.execute(
-        update(LoyaltyConfig)
-        .where(LoyaltyConfig.key == "bot_treasury_balance_idr")
-        .values(value=cast(cast(LoyaltyConfig.value, BigInteger) + amount_idr, String), updated_at=datetime.utcnow())
-    )
-    db.commit()
-    if result.rowcount != 1:      # baris belum ada (saldo awal 0): buat
-        set_loyalty_config(db, "bot_treasury_balance_idr", str(amount_idr))
-    new_bal = get_bot_treasury_balance(db)
-
+    from sqlalchemy import BigInteger, String, cast, select, update
+    now = datetime.utcnow()
     try:
-        audit = AuditLog(
+        dialect = db.get_bind().dialect.name
+        if dialect in {"postgresql", "sqlite"}:
+            if dialect == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+            else:
+                from sqlalchemy.dialects.sqlite import insert
+            stmt = insert(LoyaltyConfig).values(
+                key="bot_treasury_balance_idr", value=str(amount_idr), updated_at=now,
+            ).on_conflict_do_update(
+                index_elements=[LoyaltyConfig.key],
+                set_={
+                    "value": cast(cast(LoyaltyConfig.value, BigInteger) + int(amount_idr), String),
+                    "updated_at": now,
+                },
+            )
+            db.execute(stmt)
+        else:
+            result = db.execute(
+                update(LoyaltyConfig)
+                .where(LoyaltyConfig.key == "bot_treasury_balance_idr")
+                .values(
+                    value=cast(cast(LoyaltyConfig.value, BigInteger) + int(amount_idr), String),
+                    updated_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                db.add(LoyaltyConfig(key="bot_treasury_balance_idr", value=str(amount_idr), updated_at=now))
+                db.flush()
+
+        stored = db.execute(
+            select(LoyaltyConfig.value).where(LoyaltyConfig.key == "bot_treasury_balance_idr")
+        ).scalar_one()
+        new_bal = int(stored)
+        old_bal = new_bal - int(amount_idr)
+        db.add(AuditLog(
             telegram_id=admin_id,
             action="TOPUP_BOT_TREASURY",
             details=(
-                f"Topup Kas Bot: +Rp {amount_idr:,} (Saldo: Rp {current_bal:,} -> Rp {new_bal:,}) "
+                f"Topup Kas Bot: +Rp {amount_idr:,} (Saldo: Rp {old_bal:,} -> Rp {new_bal:,}) "
                 f"oleh admin {admin_id}. Note: {note}"
             ),
-        )
-        db.add(audit)
+        ))
         db.commit()
-    except Exception as audit_err:
-        logger.warning("Gagal mencatat audit topup kas bot: %s", audit_err)
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal topup kas bot")
+        raise
 
     logger.info("Bot Treasury Topup: +Rp %d -> New Balance: Rp %d by Admin %s", amount_idr, new_bal, admin_id)
     return new_bal
@@ -2442,7 +2824,7 @@ def set_bot_treasury_balance(
 
 
 def try_deduct_bot_treasury(db: Session, amount_idr: int, admin_id: Optional[int] = None,
-                            note: str = "Reward") -> Optional[int]:
+                            note: str = "Reward", *, commit: bool = True) -> Optional[int]:
     """Potong Kas Bot HANYA bila saldo cukup. Mengembalikan saldo baru, atau None bila kurang.
 
     Beda dengan deduct_bot_treasury (yang diam-diam membulatkan ke 0): reward ke user
@@ -2450,7 +2832,7 @@ def try_deduct_bot_treasury(db: Session, amount_idr: int, admin_id: Optional[int
     """
     if amount_idr <= 0:
         return get_bot_treasury_balance(db)
-    from sqlalchemy import update, cast, BigInteger, String
+    from sqlalchemy import update, cast, BigInteger, String, select
     balance = cast(LoyaltyConfig.value, BigInteger)
     # Satu UPDATE bersyarat (saldo >= jumlah): dua proses/tap bersamaan tidak bisa sama-sama lolos
     # lalu membelanjakan Kas Bot melebihi saldo (baca-lalu-tulis lama bisa).
@@ -2459,15 +2841,22 @@ def try_deduct_bot_treasury(db: Session, amount_idr: int, admin_id: Optional[int
         .where(LoyaltyConfig.key == "bot_treasury_balance_idr", balance >= amount_idr)
         .values(value=cast(balance - amount_idr, String), updated_at=datetime.utcnow())
     )
-    db.commit()
+    if commit:
+        db.commit()
     if result.rowcount != 1:
         return None
-    new_bal = get_bot_treasury_balance(db)
+    stored = db.execute(
+        select(LoyaltyConfig.value).where(LoyaltyConfig.key == "bot_treasury_balance_idr")
+    ).scalar_one_or_none()
+    new_bal = int(stored) if stored is not None else 0
     try:
         db.add(AuditLog(telegram_id=admin_id, action="DEDUCT_BOT_TREASURY",
                         details=f"Potong Kas Bot: -Rp {amount_idr:,} (saldo baru: Rp {new_bal:,}) oleh admin {admin_id}. Note: {note}"))
-        db.commit()
+        if commit:
+            db.commit()
     except Exception as audit_err:
+        if not commit:
+            raise
         db.rollback()
         logger.warning("Gagal mencatat audit potong kas bot: %s", audit_err)
     return new_bal

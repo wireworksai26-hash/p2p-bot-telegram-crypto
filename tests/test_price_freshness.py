@@ -49,6 +49,10 @@ def baris(updated_age, idr=17000.0, usd=1.0):
 
 class TestPriceFreshness(unittest.TestCase):
     def setUp(self):
+        # NOW diambil per tes, bukan saat impor: suite yang berjalan > 30 dtk sebelum
+        # modul ini membuat "masa depan +X dtk" sudah lewat dan tes gagal acak.
+        global NOW
+        NOW = time.time()
         self.ps = PriceService()
 
     def _isi(self, tether_age=10, fetch_age=0):

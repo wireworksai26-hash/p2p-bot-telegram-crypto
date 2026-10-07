@@ -133,6 +133,23 @@ def calculate_qris_mdr(nominal_idr: int) -> int:
     return math.ceil(nominal_idr * QRIS_MDR_PCT / 100)
 
 
+QRIS_MAX_TOTAL_IDR = 10_000_000  # batas transaksi QRIS (BI)
+QRIS_MAX_UNIQUE_CODE = 400
+
+
+def qris_max_nominal() -> int:
+    """Nominal terbesar yang total tagihannya (nominal + pajak QRIS + kode unik) masih
+    di bawah batas QRIS. Di atas itu QRIS dinamis tidak bisa dibuat."""
+    lo, hi = 0, QRIS_MAX_TOTAL_IDR
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if mid + calculate_qris_mdr(mid) + QRIS_MAX_UNIQUE_CODE <= QRIS_MAX_TOTAL_IDR:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def qris_mdr_note(nominal_idr: int) -> str:
     """Keterangan pajak QRIS untuk pesan; string kosong bila tidak kena."""
     mdr = calculate_qris_mdr(nominal_idr)

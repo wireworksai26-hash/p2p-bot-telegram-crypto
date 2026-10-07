@@ -350,10 +350,20 @@ def execute_campaign(
         balance = crud.get_bot_treasury_balance(db)
         if balance < needed:
             raise TreasuryInsufficient(needed, balance)
-        # RUNNING di-commit SEBELUM kas dipotong: crash di antaranya tidak membuat re-run
-        # memotong Kas Bot dua kali (paling buruk campaign macet RUNNING tanpa uang keluar).
-        campaign.status = "RUNNING"
-        db.commit()
+
+    # Klaim status dengan satu UPDATE bersyarat. Dua callback simultan dapat sama-sama
+    # membaca DRAFT di atas, tetapi hanya satu yang boleh mulai mendistribusikan saldo.
+    claimed = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.status == "DRAFT",
+    ).update({Campaign.status: "RUNNING"}, synchronize_session=False)
+    if claimed != 1:
+        db.rollback()
+        raise ValueError("Campaign sudah diproses oleh callback lain atau tidak lagi berstatus DRAFT.")
+    db.commit()
+    db.refresh(campaign)
+
+    if from_treasury:
         if crud.try_deduct_bot_treasury(db, needed, admin_id=admin_id,
                                         note=f"Campaign milestone '{campaign.title}' (ID {campaign.id})") is None:
             campaign.status = "DRAFT"   # kas berkurang di antara cek & potong (proses lain)
@@ -364,9 +374,6 @@ def execute_campaign(
     total_given = 0
 
     try:
-        campaign.status = "RUNNING"
-        db.commit()
-
         for w in winners:
             t_id = w["telegram_id"]
             amount = w["amount"]
@@ -527,6 +534,8 @@ TOP_SPENDER_REWARDS: dict[int, int] = {
 
 
 TOP_SPENDER_COOLDOWN_MINUTES = 5
+RANDOM_DRAW_COOLDOWN_MINUTES = 2
+RANDOM_DRAW_MAX_WINNERS = 100
 
 
 class TreasuryInsufficient(ValueError):
@@ -553,6 +562,9 @@ async def execute_top_spender_campaign(
     admin_id: int,
     period_days: int = 30,
     bot_username: str = "",
+    action_token: str = "",
+    chat_id: int = None,
+    message_id: int = None,
 ) -> dict:
     """
     Eksekusi campaign Top Spender: ambil top 10 spender, kredit reward tiered.
@@ -603,12 +615,38 @@ async def execute_top_spender_campaign(
             "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
             "winners": [], "error": str(err), "treasury_shortfall": err.shortfall,
         }
-    crud.try_deduct_bot_treasury(db, needed, admin_id=admin_id,
-                                 note=f"Hadiah Top Spender Milestone ({period_days}D)")
+
+    payload = str(int(period_days))
+    if not crud.claim_admin_action_token(
+        db, action_token, admin_id, "top_spender", payload,
+        chat_id=chat_id, message_id=message_id,
+    ):
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [], "error": "Tombol ini sudah diproses atau kedaluwarsa. Muat ulang menu untuk aksi baru.",
+        }
+    if not crud.claim_campaign_action_lock(db, "top_spender", TOP_SPENDER_COOLDOWN_MINUTES * 60):
+        db.rollback()
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [], "error": f"Hadiah Top Spender baru dijalankan. Tunggu {TOP_SPENDER_COOLDOWN_MINUTES} menit.",
+        }
+
+    if crud.try_deduct_bot_treasury(
+        db, needed, admin_id=admin_id,
+        note=f"Hadiah Top Spender Milestone ({period_days}D)", commit=False,
+    ) is None:
+        db.rollback()
+        balance = crud.get_bot_treasury_balance(db)
+        err = TreasuryInsufficient(needed, balance)
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [], "error": str(err), "treasury_shortfall": err.shortfall,
+        }
 
     try:
         # Buat campaign record
-        campaign_code = f"TOP_SPENDER_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        campaign_code = f"TOP_SPENDER_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{action_token[:8]}"
         total_pool = sum(TOP_SPENDER_REWARDS.get(s["rank"], 0) for s in top_spenders)
         campaign = Campaign(
             campaign_code=campaign_code,
@@ -685,8 +723,6 @@ async def execute_top_spender_campaign(
 
     except Exception:
         db.rollback()
-        crud.topup_bot_treasury(db, needed, admin_id=admin_id,
-                                note="Refund hadiah Top Spender (eksekusi gagal)")
         raise
 
     # Di LUAR try: hadiah sudah ter-commit; gagal refund sisa tidak boleh memicu refund penuh.
@@ -739,6 +775,9 @@ async def execute_random_winner_campaign(
     reward_per_winner: int,
     custom_title: str = "",
     bot_username: str = "",
+    action_token: str = "",
+    chat_id: int = None,
+    message_id: int = None,
 ) -> dict:
     """
     Eksekusi undian random: pilih N pemenang dari pool, kredit saldo.
@@ -756,6 +795,21 @@ async def execute_random_winner_campaign(
 
     if winner_count <= 0 or reward_per_winner <= 0:
         return {"error": "winner_count dan reward_per_winner harus > 0", "distributed_count": 0}
+    if winner_count > RANDOM_DRAW_MAX_WINNERS or reward_per_winner > 10_000_000:
+        return {"error": f"Maksimal {RANDOM_DRAW_MAX_WINNERS} pemenang dan Rp 10.000.000 per pemenang.",
+                "distributed_count": 0}
+    if pool_segment not in {"ALL", "BUYERS", "ACTIVE_30D"}:
+        return {"error": "Pool undian tidak valid.", "distributed_count": 0}
+
+    # Anti dobel-tekan: tombol undian langsung membayar tanpa langkah konfirmasi.
+    recent = db.query(Campaign).filter(
+        Campaign.template_type == "tpl_flash_random",
+        Campaign.created_at >= datetime.utcnow() - timedelta(minutes=RANDOM_DRAW_COOLDOWN_MINUTES),
+    ).first()
+    if recent:
+        return {"error": (f"Undian baru saja dijalankan ({recent.campaign_code}). "
+                          f"Tunggu {RANDOM_DRAW_COOLDOWN_MINUTES} menit sebelum undian berikutnya."),
+                "distributed_count": 0}
 
     candidates = crud.get_random_winners(db, pool_segment, winner_count)
     if not candidates:
@@ -764,9 +818,25 @@ async def execute_random_winner_campaign(
             "distributed_count": 0,
         }
 
+    payload = f"{pool_segment}|{int(winner_count)}|{int(reward_per_winner)}"
+    if not crud.claim_admin_action_token(
+        db, action_token, admin_id, "random_draw", payload,
+        chat_id=chat_id, message_id=message_id,
+    ):
+        return {
+            "error": "Tombol ini sudah diproses atau kedaluwarsa. Muat ulang menu untuk undian baru.",
+            "distributed_count": 0,
+        }
+    if not crud.claim_campaign_action_lock(db, "random_draw", RANDOM_DRAW_COOLDOWN_MINUTES * 60):
+        db.rollback()
+        return {
+            "error": f"Undian baru saja dijalankan. Tunggu {RANDOM_DRAW_COOLDOWN_MINUTES} menit sebelum undian berikutnya.",
+            "distributed_count": 0,
+        }
+
     total_pool = len(candidates) * reward_per_winner
     title = custom_title or f"⚡ Flash Giveaway — {pool_segment} ({winner_count} Pemenang)"
-    campaign_code = f"RANDOM_{pool_segment}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    campaign_code = f"RANDOM_{pool_segment}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{action_token[:8]}"
 
     campaign = Campaign(
         campaign_code=campaign_code,

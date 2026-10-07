@@ -351,11 +351,13 @@ class TestTopSpendersCampaign(unittest.TestCase):
         crud.topup_bot_treasury(self.db, 1_000_000, admin_id=999)
 
         async def _run():
+            token = crud.issue_admin_action_token(self.db, 999, "top_spender", "30")
             return await execute_top_spender_campaign(
                 db=self.db,
                 bot=mock_bot,
                 admin_id=999,
                 period_days=30,
+                action_token=token,
             )
 
         res = asyncio.run(_run())
@@ -404,6 +406,7 @@ class TestRandomWinnerCampaign(unittest.TestCase):
         mock_bot = AsyncMock()
 
         async def _run():
+            token = crud.issue_admin_action_token(self.db, 999, "random_draw", "ALL|5|50000")
             return await execute_random_winner_campaign(
                 db=self.db,
                 bot=mock_bot,
@@ -411,6 +414,7 @@ class TestRandomWinnerCampaign(unittest.TestCase):
                 pool_segment="ALL",
                 winner_count=5,
                 reward_per_winner=50_000,
+                action_token=token,
             )
 
         res = asyncio.run(_run())

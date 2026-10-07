@@ -472,13 +472,22 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         # Regresi: impor lokal `format_idr` di admin_panel_callback membuat jalur ini
         # mengkredit lalu CRASH saat menyusun pesan → admin menekan lagi → kredit dobel.
         self._seed_admin_world(treasury=0)
-        shown = await self.tap(self.ADMIN_UID, f"admin_send_bal_confirm_{self.GIFT_A}_50000", from_screen=False)
+        await self.tap(self.ADMIN_UID, f"admin_send_bal_user_{self.GIFT_A}", from_screen=False)
+        await self.tap(self.ADMIN_UID, "admin_send_bal_amt_50000", from_screen=False)
+        confirm = next(b["callback_data"] for b in self.last_buttons[self.ADMIN_UID]
+                       if b.get("callback_data", "").startswith("admin_send_bal_confirm_"))
+        shown = await self.tap(self.ADMIN_UID, confirm)
         self.assertIn("Nominal Terkirim", shown)
         self.assertEqual(self._balance(self.GIFT_A), 50000)
 
     async def test_admin_treasury_preset_topup_and_manual_set_views_render(self):
         self._seed_admin_world(treasury=0)
-        await self.tap(self.ADMIN_UID, "admin_treasury_topup_100000", from_screen=False)
+        await self.tap(self.ADMIN_UID, "admin_panel_treasury", from_screen=False)
+        topup_button = next(
+            b["callback_data"] for b in self.last_buttons[self.ADMIN_UID]
+            if b.get("callback_data", "").startswith("admin_treasury_topup_100000_")
+        )
+        await self.tap(self.ADMIN_UID, topup_button)
         self.assertTrue(any("Kas bot berhasil di-topup +Rp 100.000" in (t or "") for t in self._alerts()))
         shown = await self.tap(self.ADMIN_UID, "admin_treasury_set_manual", from_screen=False)
         self.assertIn("Saldo saat ini", shown)
@@ -607,14 +616,18 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
             db.close()
         shown = await self.tap(a, "admin_panel_top_spenders", from_screen=False)
         self.assertNotIn("Kas Bot kurang", shown)
-        await self.tap(a, "admin_top_spender_exec_30", from_screen=False)
+        top_spender_button = next(
+            b["callback_data"] for b in self.last_buttons[a]
+            if (b.get("callback_data") or "").startswith("admin_top_spender_exec_")
+        )
+        await self.tap(a, top_spender_button)
         self.assertEqual((self._balance(self.GIFT_A), self._balance(self.GIFT_B)), (150_000, 100_000))
         db = SessionLocal()
         try:
             self.assertEqual(crud.get_bot_treasury_balance(db), 50_000)
         finally:
             db.close()
-        await self.tap(a, "admin_top_spender_exec_30", from_screen=False)  # tap ganda
+        await self.tap(a, top_spender_button, from_screen=False)  # tap ganda
         self.assertEqual(self._balance(self.GIFT_A), 150_000)
 
     async def test_cancel_clears_admin_wizard(self):

@@ -261,7 +261,8 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order.status, "WAITING_CRYPTO_DEPOSIT")
         self.assertEqual(order.crypto_symbol, "APT")
         self.assertEqual(order.network, "APTOS")
-        self.assertEqual(float(order.crypto_amount), 2.5)
+        # 2,5 APT + kode unik 1..99 di digit ke-5/6 (presisi deposit APT = 6).
+        self.assertTrue(2.500001 <= float(order.crypto_amount) <= 2.500099)
         self.assertEqual(order.total_idr, 365500)
         self.assertTrue(mock_notify.called)
 
@@ -492,13 +493,17 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
             state = await swap_input_amount(update, context)
 
         self.assertEqual(state, SWAP_INPUT_TARGET_ADDR)
-        self.assertEqual(context.user_data["swap_nominal_idr"], 100_000)
-        # Convert fee 100.000 (tier 98.001-109k): 6.000 IDR
-        expected_fee = calculate_fee_idr(100_000, "CONVERT", symbol="SOL", network="SOLANA", is_outgoing=True)
+        # Rp 100.000 -> USDT dibulatkan ke bawah 2 desimal (2 digit terakhir = kode unik),
+        # Rupiah dihitung ulang dari jumlah yang benar-benar disetor.
+        src = context.user_data["swap_src_amount"]
+        usdt_px = mock_prices["USDT"]["market_price_idr"]
+        self.assertEqual(src, float(Decimal(str(100_000 / usdt_px)).quantize(Decimal("0.01"), rounding="ROUND_DOWN")))
+        nominal = int(Decimal(str(src)) * Decimal(str(usdt_px)))
+        self.assertEqual(context.user_data["swap_nominal_idr"], nominal)
+        self.assertLessEqual(100_000 - nominal, usdt_px * 0.01)
+        expected_fee = calculate_fee_idr(nominal, "CONVERT", symbol="SOL", network="SOLANA", is_outgoing=True)
         self.assertEqual(context.user_data["swap_fee_idr"], expected_fee)
-        # Net for target = 100.000 - 6.000 = 94.000
-        # Target SOL = 94.000 / 2.160.000 = 0.0435185...
-        expected_tgt = 94_000 / 2_160_000.0
+        expected_tgt = (nominal - expected_fee) / 2_160_000.0
         self.assertAlmostEqual(context.user_data["swap_tgt_amount"], expected_tgt, places=6)
 
     async def test_convert_rejects_self_dealing_wallet(self):
@@ -582,7 +587,8 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
         order = self.db.query(Order).filter(Order.order_type == "swap").first()
         self.assertIsNotNone(order)
         self.assertEqual(order.status, "WAITING_CRYPTO_DEPOSIT")
-        self.assertEqual(float(order.crypto_amount), 10.0)
+        # 10 USDT + kode unik 0,0001..0,0099 (presisi deposit USDT = 4).
+        self.assertTrue(10.0001 <= float(order.crypto_amount) <= 10.0099)
         self.assertEqual(float(order.target_crypto_amount), 9.5)
         # Quote berlaku 30 menit
         self.assertIsNotNone(order.quote_expires_at)

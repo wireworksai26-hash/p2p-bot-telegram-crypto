@@ -280,7 +280,10 @@ class MilestoneExclusion(Base_):
         self._seed_top()
         crud.topup_bot_treasury(self.db, 5_000_000, admin_id=ADMIN)
         crud.add_milestone_exclusion(self.db, 100, created_by=ADMIN)
-        result = await execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+        token = crud.issue_admin_action_token(self.db, ADMIN, "top_spender", "30")
+        result = await execute_top_spender_campaign(
+            self.db, self.bot, ADMIN, period_days=30, action_token=token,
+        )
         paid = [w["telegram_id"] for w in result["winners"]]
         self.assertNotIn(100, paid)
         self.assertEqual(len(paid), 10)
@@ -292,7 +295,10 @@ class MilestoneExclusion(Base_):
         from services.campaign_service import execute_top_spender_campaign
         self._seed_top()
         crud.topup_bot_treasury(self.db, 5_000_000, admin_id=ADMIN)
-        first = await execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+        token = crud.issue_admin_action_token(self.db, ADMIN, "top_spender", "30")
+        first = await execute_top_spender_campaign(
+            self.db, self.bot, ADMIN, period_days=30, action_token=token,
+        )
         second = await execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
         self.assertIsNone(first["error"])
         self.assertIn("sudah dibagikan", second["error"])

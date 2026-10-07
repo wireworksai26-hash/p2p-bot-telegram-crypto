@@ -10,6 +10,7 @@ Mengelola percakapan multi-langkah (ConversationHandler) untuk penjualan crypto:
 """
 
 import logging
+import re
 from html import escape as _esc
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -33,7 +34,7 @@ from bot.keyboards.crypto_select import (
 )
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_crypto_amount
-from bot.utils.formatter import format_idr, format_crypto, generate_order_id
+from bot.utils.formatter import format_idr, format_crypto, generate_order_id, display_symbol
 from bot.utils.messages import ORDER_SUMMARY_SELL, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
 from bot.utils.flow_guard import block_if_busy
@@ -144,7 +145,18 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
     parts = query.data.split("_")
     symbol = parts[2]
     network = parts[3]
-    
+
+    # Tombol basi/rakitan: hanya jaringan yang depositnya bisa diverifikasi on-chain.
+    from bot.keyboards.crypto_select import sell_networks
+    if network not in sell_networks(symbol):
+        await safe_edit_message(
+            query,
+            text=f"⚠️ Jaringan <b>{network}</b> belum didukung untuk jual {symbol}. Silakan pilih jaringan lain.",
+            reply_markup=get_sell_network_keyboard(symbol),
+            parse_mode="HTML",
+        )
+        return SELECT_NETWORK
+
     context.user_data["sell_symbol"] = symbol
     context.user_data["sell_network"] = network
     
@@ -188,7 +200,17 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     symbol = context.user_data["sell_symbol"]
     network = context.user_data["sell_network"]
-    
+
+    # Nominal dasar = presisi tampilan dikurangi 2 digit (dipakai kode unik saat order dibuat),
+    # supaya angka yang dihitung = angka yang ditampilkan = angka yang diverifikasi.
+    from services.deposit_amount import base_amount
+    crypto_amount = float(base_amount(symbol, crypto_amount))
+    if crypto_amount <= 0:
+        await update.message.reply_text(
+            "❌ <b>Jumlah terlalu kecil.</b> Silakan masukkan jumlah koin yang lebih besar:",
+            parse_mode="HTML")
+        return INPUT_AMOUNT
+
     db = SessionLocal()
     try:
         # Fetch harga jual terkini (0% spread)
@@ -337,11 +359,11 @@ async def _proceed_to_sell_confirmation(
         price_per_unit_str=format_idr(price_per_unit),
         nominal_idr_str=format_idr(net_idr),
         fee_idr_str=format_idr(fee_idr),
-        bank_name=bank_name,
-        bank_acc=bank_acc,
-        bank_holder=bank_holder
+        bank_name=_esc(bank_name),
+        bank_acc=_esc(bank_acc),
+        bank_holder=_esc(bank_holder)
     )
-    summary += "\n\n" + BANK_LOCK_NOTE
+    summary +="\n\n" + BANK_LOCK_NOTE
 
     keyboard = [
         [
@@ -404,12 +426,25 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return INPUT_BANK
 
-    # Coba mem-parse bank info dengan koma
-    parts = [p.strip() for p in bank_info.split(",") if p.strip()]
-    if len(parts) >= 3:
-        bank_name = parts[0]
-        bank_acc = parts[1]
-        bank_holder = " ".join(parts[2:])
+    parsed = parse_bank_text(bank_info)
+    if not parsed:
+        # Dulu: jatuh ke "Bank Lokal" + nama Telegram sebagai pemilik rekening (bisa salah
+        # transfer) dan cek rekening terkunci dilewati. Minta ulang dengan data lengkap.
+        await update.message.reply_text(
+            text=(
+                "❌ <b>Data Rekening Belum Lengkap</b>\n\n"
+                "Sertakan <b>Nama Bank/E-Wallet</b>, <b>No Rekening/HP</b>, dan <b>Atas Nama</b>.\n"
+                "<i>Contoh: BCA, 882049281, Budi Santoso</i>"
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                [get_owner_button()],
+            ]),
+            parse_mode="HTML",
+        )
+        return INPUT_BANK
+    if parsed:
+        bank_name, bank_acc, bank_holder = parsed
 
         # Auto-save ke database agar user bisa 1-Tap pada transaksi berikutnya
         user_id = update.effective_user.id
@@ -432,11 +467,6 @@ async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             logger.debug(f"Auto save bank error: {exc}")
         finally:
             db.close()
-    else:
-        # Jika format tidak pakai koma, simpan sebagai string utuh
-        bank_name = "Bank Lokal"
-        bank_acc = bank_info
-        bank_holder = update.effective_user.first_name
 
     return await _proceed_to_sell_confirmation(
         update=update,
@@ -516,6 +546,19 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     
     db = SessionLocal()
     try:
+        from services.deposit_amount import assign_deposit_amount, format_deposit_amount
+        deposit_amount = assign_deposit_amount(db, network, symbol, hot_wallet, crypto_amount)
+        if deposit_amount is None:
+            context.user_data.pop("sell_order_id", None)  # order belum dibuat
+            await query.edit_message_text(
+                "⏳ Antrean deposit untuk nominal ini sedang penuh. Silakan coba lagi beberapa "
+                "menit lagi atau gunakan jumlah lain. Jangan mengirim koin dulu.",
+                parse_mode="HTML")
+            return ConversationHandler.END
+        crypto_amount = float(deposit_amount)
+        context.user_data["sell_crypto_amount"] = crypto_amount
+        deposit_str = f"{format_deposit_amount(deposit_amount, symbol)} {display_symbol(symbol)}"
+
         # Simpan order ke DB dengan status WAITING_CRYPTO_DEPOSIT
         # (deposit crypto akan diverifikasi otomatis oleh DepositDetector)
         order_data = {
@@ -524,7 +567,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             "order_type": "sell",
             "crypto_symbol": symbol,
             "network": network,
-            "crypto_amount": Decimal(str(crypto_amount)),
+            "crypto_amount": deposit_amount,
             "price_per_unit": int(price_per_unit),
             "nominal_idr": int(nominal_idr),
             "fee_idr": int(fee_idr),
@@ -547,7 +590,9 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         waiting_text = (
             f"📥 <b>ORDER PENJUALAN DIBUAT</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"Harap kirimkan tepat <b>{format_crypto(crypto_amount, symbol)}</b> ke alamat Hot Wallet kami di bawah ini:\n\n"
+            f"Harap kirimkan <b>TEPAT {deposit_str}</b> ke alamat Hot Wallet kami di bawah ini:\n"
+            f"<i>2 digit terakhir adalah kode unik order Anda — wajib dikirim persis "
+            f"agar terverifikasi otomatis.</i>\n\n"
             f"Network: <b>{network}</b>\n"
             f"{token_hint}"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
@@ -602,7 +647,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             f"🔔 <b>ORDER BARU DIBUAT (SELL)</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
             f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
-            f"Crypto Dijual: {format_crypto(crypto_amount, symbol)} ({network})\n"
+            f"Crypto Dijual: {deposit_str} ({network})\n"
             f"Rupiah Bersih Harus Dikirim: <b>{format_idr(net_idr)}</b>\n"
             f"Tujuan Rekening:\n"
             f"• {_esc(context.user_data['sell_bank_name'])} - {_esc(context.user_data['sell_bank_acc'])} a/n {_esc(context.user_data['sell_bank_holder'])}\n\n"
@@ -667,7 +712,9 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
     # Pre-validasi format TX Hash sesuai jaringan order (64 hex / base58 / TON)
     from services import tx_verifier
     try:
-        tx_verifier.normalize_tx_hash(network, tx_hash)
+        # Simpan bentuk baku (huruf kecil/0x, URL explorer -> hash) agar hash yang sama
+        # tidak lolos dua kali lewat format berbeda.
+        tx_hash = tx_verifier.normalize_tx_hash(network, tx_hash)
     except ValueError:
         keyboard = [
             [InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
@@ -689,7 +736,9 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
         # Simpan TX hash, biarkan DepositDetector memverifikasi on-chain
         # lalu mengirim notifikasi admin untuk transfer Rupiah.
         order = get_order_by_id(db, order_id)
-        if order:
+        # Hanya order milik user ini yang masih bisa menerima deposit.
+        if (order and order.telegram_id == update.effective_user.id
+                and order.status in ("WAITING_CRYPTO_DEPOSIT", "expired")):
             order.deposit_tx_hash = tx_hash
             db.commit()
 
@@ -972,3 +1021,27 @@ sell_conversation_handler = ConversationHandler(
     allow_reentry=True
 )
 
+
+
+_BANK_ACC_RE = re.compile(r"(?<![\w])(\+?\d[\d .\-]{3,}\d)(?![\w])")
+
+
+def parse_bank_text(text: str):
+    """(bank, no_rekening, atas_nama) dari input bebas, atau None bila tidak lengkap.
+
+    Mendukung "BCA, 123, Budi", "BCA 123 Budi", "BCA - 123 - Budi", "DANA 0812 3456 a/n Siti",
+    dan baris terpisah. Nama bank = teks sebelum nomor, atas nama = teks sesudahnya.
+    """
+    raw = (text or "").replace("|", "/").strip()  # "|" pemisah internal buyer_wallet
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) >= 3:
+        return parts[0], parts[1], " ".join(parts[2:])
+    match = _BANK_ACC_RE.search(raw)
+    if not match or sum(ch.isdigit() for ch in match.group(1)) < 5:
+        return None
+    bank = re.sub(r"[\s\-:,/]+$", "", raw[:match.start()]).strip()
+    holder = re.sub(r"^[\s\-:,/]+", "", raw[match.end():]).strip()
+    holder = re.sub(r"^(a\s*[/.]\s*n\.?|atas\s+nama)(?=[\s:.]|$)\s*[:.]?\s*", "", holder, flags=re.IGNORECASE).strip()
+    if not bank or not holder:
+        return None
+    return bank, match.group(1).strip(), " ".join(holder.split())

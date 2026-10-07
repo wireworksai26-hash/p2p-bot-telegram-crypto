@@ -65,6 +65,8 @@ def _get_network_keyboard(symbol: str, prefix: str, back_callback: str) -> Inlin
     """Keyboard pilih jaringan untuk alur beli (buy_net_*) atau jual (sell_net_*)."""
     symbol = symbol.upper()
     networks = BUY_NETWORKS_BY_SYMBOL.get(symbol, ["BSC"])
+    if prefix == "sell":
+        networks = sell_networks(symbol)
 
     keyboard = [
         [
@@ -97,3 +99,10 @@ def get_sell_symbol_keyboard() -> InlineKeyboardMarkup:
 
 def get_sell_network_keyboard(symbol: str) -> InlineKeyboardMarkup:
     return _get_network_keyboard(symbol, "sell", "sell_back_symbols")
+
+
+def sell_networks(symbol: str) -> list:
+    """Jaringan Jual = jaringan Beli yang depositnya bisa diverifikasi on-chain (tanpa MORPH dll)."""
+    from services.tx_verifier import deposit_verifiable
+    symbol = (symbol or "").upper()
+    return [net for net in BUY_NETWORKS_BY_SYMBOL.get(symbol, ["BSC"]) if deposit_verifiable(net, symbol)]

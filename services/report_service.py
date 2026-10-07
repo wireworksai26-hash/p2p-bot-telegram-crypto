@@ -134,6 +134,15 @@ def calculate_weekly_summary(transactions: list[dict[str, Any]], days: int = 7) 
     }
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", chr(9), chr(13))
+
+
+def _csv_text(value) -> str:
+    """Teks dari user dinetralkan agar tidak dieksekusi sebagai formula Excel/Sheets."""
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(_FORMULA_PREFIXES) else text
+
+
 def generate_weekly_report_csv_buffer(transactions: list[dict[str, Any]]) -> io.BytesIO:
     """
     Menghasilkan file CSV (BytesIO) berformat rapi dengan encoding UTF-8 BOM
@@ -167,22 +176,22 @@ def generate_weekly_report_csv_buffer(transactions: list[dict[str, Any]]) -> io.
     for idx, t in enumerate(transactions, start=1):
         writer.writerow([
             idx,
-            t["order_id"],
+            _csv_text(t["order_id"]),
             t["created_at"],
             t["order_type"],
             t["status"],
-            t["username"],
+            _csv_text(t["username"]),
             str(t["telegram_id"]),
-            t["full_name"],
+            _csv_text(t["full_name"]),
             t["nominal_idr"],
             f"{t['crypto_amount']:.8f}".rstrip("0").rstrip("."),
-            t["crypto_symbol"],
-            t["network"],
-            t["destination"],
-            t["payment_method"],
+            _csv_text(t["crypto_symbol"]),
+            _csv_text(t["network"]),
+            _csv_text(t["destination"]),
+            _csv_text(t["payment_method"]),
             t["fee_idr"],
-            t["tx_hash"],
-            t["explorer_url"],
+            _csv_text(t["tx_hash"]),
+            _csv_text(t["explorer_url"]),
         ])
 
     csv_bytes = output.getvalue().encode("utf-8-sig")

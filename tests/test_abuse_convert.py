@@ -67,13 +67,11 @@ class TestParseConvertAmount(unittest.TestCase):
                 with self.assertRaises((ValueError, OverflowError)):
                     parse_convert_amount(raw, HARGA_SRC, KURS_USDT, "USDT")
 
-    @unittest.expectedFailure
     def test_notasi_ilmiah_ditolak(self):
         """"1e3" bukan format nominal yang boleh diterima (ambigu: 1000 koin atau Rp 1.000?)."""
         with self.assertRaises(ValueError):
             parse_convert_amount("1e3", HARGA_SRC, KURS_USDT, "BNB")
 
-    @unittest.expectedFailure
     def test_titik_desimal_koin_usd_tidak_jadi_rupiah(self):
         """User USDT mengetik "1.000" (artinya 1 koin) — saat ini dibaca Rp 1.000 (IDR)."""
         _, _, mode = parse_convert_amount("1.000", HARGA_SRC, KURS_USDT, "USDT")
@@ -81,6 +79,8 @@ class TestParseConvertAmount(unittest.TestCase):
             mode, "CRYPTO",
             "'1.000' pada koin USD harus dianggap jumlah koin (CRYPTO), bukan Rp 1.000",
         )
+        # Nominal Rupiah yang wajar tetap dibaca Rupiah.
+        self.assertEqual(parse_convert_amount("50.000", HARGA_SRC, KURS_USDT, "USDT")[2], "IDR")
 
 
 class TestConfirmSwapHardening(unittest.IsolatedAsyncioTestCase):

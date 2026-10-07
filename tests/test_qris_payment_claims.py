@@ -55,7 +55,14 @@ class ConfirmPayment(unittest.IsolatedAsyncioTestCase):
 
     async def test_payment_without_transaction_id_is_not_accepted(self):
         self._gateway_returns(None)
-        self.assertFalse(await self.gopay.confirm_payment(
+        self.assertIsNone(await self.gopay.confirm_payment(
+            self.db, amount=1, ref_id="ORD-1", kind="buy", created_at=CREATED))
+
+    async def test_gateway_error_returns_unknown(self):
+        self.gopay.check_payment = AsyncMock(return_value={
+            "paid": False, "transaction": None, "available": False,
+        })
+        self.assertIsNone(await self.gopay.confirm_payment(
             self.db, amount=1, ref_id="ORD-1", kind="buy", created_at=CREATED))
 
     async def test_unpaid(self):

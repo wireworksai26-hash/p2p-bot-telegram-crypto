@@ -192,14 +192,12 @@ class TestKodeUnikQris(unittest.TestCase):
         sig = inspect.signature(crud.generate_unique_payment_code)
         self.assertEqual(sig.parameters["max_code"].default, 400)
 
-    def test_selalu_dalam_rentang_1_400(self):
-        # Isi pool penuh 1..400 → fallback pun harus tetap di rentang 1..400.
+    def test_pool_penuh_ditolak_bukan_kode_kembar(self):
+        # Pool 1..400 penuh → None (K1): kode kembar = nominal kembar = pembayaran salah klaim.
         for c in range(1, 401):
             self.db.add(self._order(f"ORD-{c:03d}", c))
         self.db.commit()
-        kode = crud.generate_unique_payment_code(self.db)
-        self.assertGreaterEqual(kode, 1)
-        self.assertLessEqual(kode, 400)
+        self.assertIsNone(crud.generate_unique_payment_code(self.db))
 
     def test_kode_pending_tidak_dipakai_ulang(self):
         for c in range(1, 400):

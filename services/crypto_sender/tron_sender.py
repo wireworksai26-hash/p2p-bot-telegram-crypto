@@ -39,7 +39,9 @@ class TronSender(BaseCryptoSender):
             if TRONPY_AVAILABLE:
                 from tronpy.keys import is_address
                 return is_address(address)
-            return True
+            import base58
+            raw = base58.b58decode_check(address)
+            return len(raw) == 21 and raw[0] == 0x41
         except Exception:
             return False
 

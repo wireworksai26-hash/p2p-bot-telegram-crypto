@@ -28,6 +28,20 @@ _ton_lock = asyncio.Lock()
 _ton_last_request = 0.0
 
 
+NON_EVM_VERIFIABLE = {"SOLANA": {"SOL"}, "TRON": {"TRX", "USDT"}, "TON": {"TON", "USDT"},
+                      "SUI": {"SUI"}, "APTOS": {"APT"}}
+
+
+def deposit_verifiable(network: str, symbol: str) -> bool:
+    """True bila deposit (network, symbol) bisa diverifikasi on-chain oleh verify_deposit."""
+    net, sym = (network or "").upper(), (symbol or "").upper()
+    if net in EVM_NETWORKS:
+        return True
+    if net == "SOLANA":
+        return sym == "SOL" or sym in NON_EVM_TOKENS.get("SOLANA", {})
+    return sym in NON_EVM_VERIFIABLE.get(net, set())
+
+
 def _scan_web3(rpc_url: str):
     """Web3 khusus scan deposit: endpoint bisa dipilih + middleware PoA (BSC/AVAX dll).
 
@@ -110,14 +124,24 @@ def _ok(amount, stamp, tx_hash, from_address=""):
             "tx_hash": tx_hash, "from_address": from_address, "reason": "OK"}
 
 
+_AMOUNT_SCALE = Decimal("0.00000001")
+# Lebih bayar maksimal yang masih dianggap deposit order ini. Transfer jauh lebih besar
+# hampir pasti milik orang lain (mis. isi ulang stok) dan harus dicek admin.
+MAX_OVERPAY_RATIO = Decimal("1.005")
+
+
 def _amount_matches(received, expected):
     received, expected = Decimal(str(received)), Decimal(str(expected))
-    return received.is_finite() and expected.is_finite() and expected > 0 and received >= expected
+    if not (received.is_finite() and expected.is_finite()) or expected <= 0:
+        return False
+    # Skala 8 desimal: kolom Numeric di SQLite tersimpan sebagai float (noise ~1e-16).
+    received, expected = received.quantize(_AMOUNT_SCALE), expected.quantize(_AMOUNT_SCALE)
+    return expected <= received <= expected * MAX_OVERPAY_RATIO
 
 
 def automatic_amount_matches(received, expected):
     # Shared-wallet discovery must not claim an unrelated larger transfer.
-    return Decimal(str(received)).quantize(Decimal("0.00000001")) == Decimal(str(expected)).quantize(Decimal("0.00000001"))
+    return Decimal(str(received)).quantize(_AMOUNT_SCALE) == Decimal(str(expected)).quantize(_AMOUNT_SCALE)
 
 
 async def _json(method, url, **kwargs):
@@ -520,8 +544,9 @@ async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amo
             if not_after is not None and stamp > (_timestamp(not_after) + 120):
                 return _fail("Transaksi melewati batas waktu order.")
             if not _amount_matches(result["amount"], expected_amount):
+                kind = "kurang" if Decimal(str(result["amount"])) < Decimal(str(expected_amount)) else "jauh lebih besar"
                 return _fail(
-                    f"Nominal deposit kurang: diterima {result['amount']} {symbol}, "
+                    f"Nominal deposit {kind}: diterima {result['amount']} {symbol}, "
                     f"dibutuhkan {Decimal(str(expected_amount))} {symbol}.")
         return result
     except Exception as exc:

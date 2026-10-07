@@ -31,7 +31,8 @@ class Settings:
 
     # GoPay / Gopiz API Gateway
     GOPAY_GATEWAY_URL = (os.getenv("GOPAY_GATEWAY_URL", "http://127.0.0.1:3005") or "").strip()
-    GOPAY_API_KEY = (os.getenv("GOPAY_API_KEY", "RAHASIA") or "").strip()
+    # Tanpa default: key lemah/kosong ditolak gateway (gopay-gateway/auth.js).
+    GOPAY_API_KEY = (os.getenv("GOPAY_API_KEY") or "").strip()
     GOPAY_MERCHANT_ID = (os.getenv("GOPAY_MERCHANT_ID") or "").strip()
     QRIS_STATIC = (os.getenv("QRIS_STATIC") or "00020101021126610014COM.GO-JEK.WWW01189360091432922297020210G2922297020303UMI51440014ID.CO.QRIS.WWW0215ID10265038922870303UMI5204899953033605802ID5925Toko digital HSN, Digital6008SIDOARJO61056126162070703A016304A581").strip()
 

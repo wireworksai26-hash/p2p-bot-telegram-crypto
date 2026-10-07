@@ -33,7 +33,7 @@ NETWORK_PATTERNS: dict[str, dict] = {
     "TRON": {
         "chain_type": "TRON",
         "chains": ["TRC20"],
-        "pattern": re.compile(r"^T[a-zA-Z0-9]{33}$"),
+        "pattern": re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$"),
         "emoji": "🔴",
         "label": "Tron (TRC20)",
     },
@@ -105,7 +105,7 @@ def detect_wallet_network(address: str) -> Optional[dict]:
 
     for chain_type in DETECTION_ORDER:
         meta = NETWORK_PATTERNS[chain_type]
-        if meta["pattern"].match(address):
+        if meta["pattern"].match(address) and _checksum_ok(chain_type, address):
             return {
                 "chain_type": chain_type,
                 "chains": meta["chains"],
@@ -153,7 +153,21 @@ def validate_wallet_address(address: str, network: str) -> bool:
     if not meta:
         return False
 
-    return bool(meta["pattern"].match(address))
+    if not meta["pattern"].match(address):
+        return False
+    return _checksum_ok(chain_type, address)
+
+
+def _checksum_ok(chain_type: str, address: str) -> bool:
+    """Validasi checksum untuk chain yang punya (TRON); salah ketik tidak boleh lolos."""
+    if chain_type == "TRON":
+        import base58
+        try:
+            raw = base58.b58decode_check(address)
+        except Exception:
+            return False
+        return len(raw) == 21 and raw[0] == 0x41
+    return True
 
 
 def get_chain_type_for_network(network: str) -> Optional[str]:

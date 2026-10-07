@@ -21,6 +21,7 @@ Jika ada URL koin yang berubah atau mati:
 """
 
 import asyncio
+import re
 import logging
 import time
 from datetime import datetime, timezone
@@ -29,6 +30,31 @@ import httpx
 
 from config.settings import settings
 from bot.utils.telegram_utils import notify_admins
+
+
+def redact_url(url: str) -> str:
+    """URL untuk ditampilkan di Telegram: host tetap terlihat, secret disensor.
+
+    API key RPC biasanya ada di path (Alchemy /v2/<key>, Infura /v3/<key>), di query
+    (?api_key=), atau di userinfo (user:pass@host).
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(url or "")
+    except ValueError:
+        return "<url>"
+    if not parts.scheme or not parts.hostname:
+        return url or ""
+    host = parts.hostname + (f":{parts.port}" if parts.port else "")
+    segments = ["***" if re.fullmatch(r"[A-Za-z0-9_\-]{16,}", seg) else seg
+                for seg in parts.path.split("/")]
+    query = "***" if parts.query else ""
+    return urlunsplit((parts.scheme, host, "/".join(segments), query, ""))
+
+
+def _redact_in_text(text: str, url: str) -> str:
+    text = str(text or "")
+    return text.replace(url, redact_url(url)) if url else text
 from services.price_service import next_coingecko_key
 
 logger = logging.getLogger(__name__)
@@ -341,7 +367,7 @@ class CoinAPIMonitor:
                     result.update(fallback_result)
                     result["status"] = "DEGRADED"
                     result["error_code"] = "PRIMARY_DOWN"
-                    result["error_detail"] = f"URL utama tidak terjangkau; fallback aktif: {fallback}"
+                    result["error_detail"] = f"URL utama tidak terjangkau; fallback aktif: {redact_url(fallback)}"
                     break
 
         return result
@@ -629,6 +655,7 @@ class CoinAPIMonitor:
 
     def format_alarm_message(self, res: Dict[str, Any]) -> str:
         """Membuat teks notifikasi alarm deteksi dini untuk dikirim ke admin."""
+        res = _safe_result(res)
         env_var = res.get("env_var", "RPC_URL")
         fallbacks = res.get("fallback_urls", [])
         fallback_text = ""
@@ -653,6 +680,7 @@ class CoinAPIMonitor:
 
     def format_recovery_message(self, res: Dict[str, Any]) -> str:
         """Membuat teks notifikasi saat URL kembali pulih."""
+        res = _safe_result(res)
         return (
             f"✅ <b>PEMULIHAN: API / URL KOIN KEMBALI NORMAL</b>\n\n"
             f"Target: <b>{res['name']}</b> ({res['symbol']})\n"
@@ -665,6 +693,7 @@ class CoinAPIMonitor:
 
     def format_admin_dashboard(self, results: List[Dict[str, Any]]) -> str:
         """Membuat teks dashboard diagnostik lengkap untuk menu Admin (/checkapi)."""
+        results = [_safe_result(r) for r in results]
         now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M:%S UTC")
         total = len(results)
         healthy = sum(1 for r in results if r["status"] == "OK")
@@ -723,3 +752,16 @@ class CoinAPIMonitor:
 
 # Singleton instance
 coin_api_monitor = CoinAPIMonitor()
+
+
+def _safe_result(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Salinan hasil cek dengan URL & detail error tersensor dan aman untuk HTML."""
+    from html import escape
+    url = res.get("url") or ""
+    safe = dict(res)
+    safe["url"] = escape(redact_url(url))
+    for key in ("error_detail", "block_info"):
+        if key in safe and safe[key] is not None:
+            safe[key] = escape(_redact_in_text(safe[key], url))
+    safe["fallback_urls"] = [escape(redact_url(u)) for u in (res.get("fallback_urls") or [])]
+    return safe

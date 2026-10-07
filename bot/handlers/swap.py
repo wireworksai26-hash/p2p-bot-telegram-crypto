@@ -156,6 +156,18 @@ async def select_src_net(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     net = query.data.replace("swap_src_net_", "")
+    src_sym = context.user_data.get("swap_src_symbol", "")
+    # Tombol basi/rakitan: jaringan asal harus milik koin ini dan depositnya bisa diverifikasi.
+    from services.tx_verifier import deposit_verifiable
+    if net not in NETWORKS_BY_SYMBOL.get(src_sym, []) or not deposit_verifiable(net, src_sym):
+        await query.edit_message_text(
+            f"⚠️ Jaringan <b>{net}</b> tidak tersedia untuk {src_sym}. Silakan mulai ulang Convert.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                "Batal", callback_data="cancel_swap",
+                icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+        )
+        return SELECT_SRC_NET
     context.user_data["swap_src_network"] = net
 
     keyboard = []
@@ -223,6 +235,10 @@ async def select_tgt_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_TGT_NET
 
 
+USD_COINS = {"USDT", "USDC", "USDG"}
+MIN_CONVERT_IDR = 6000  # tier fee CONVERT terendah (fee_service.CONVERT_FEE_TIERS)
+
+
 def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: float, src_sym: str = "") -> tuple[float, int, str]:
     """
     Parse input nominal convert dari user:
@@ -242,7 +258,7 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         if usd_val <= 0:
             raise ValueError("Nominal USD harus lebih besar dari 0")
         nominal_idr = int(usd_val * usdt_idr_rate)
-        if src_sym_upper in ["USDT", "USDC"]:
+        if src_sym_upper in USD_COINS:
             src_amount = usd_val
         else:
             src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
@@ -261,8 +277,11 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
         src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "IDR"
 
-    # 3. IDR thousand dot notation: 50.000, 1.000.000 (starts with 1-9)
-    if re.match(r'^[1-9]\d{0,2}(?:\.\d{3})+$', clean):
+    # 3. IDR thousand dot notation: 50.000, 1.000.000 (starts with 1-9).
+    # Koin USD: "1.000" lebih masuk akal sebagai 1 koin (Rp 1.000 di bawah minimum convert),
+    # jadi dibaca Rupiah hanya bila nilainya mencapai minimum convert.
+    if re.match(r'^[1-9]\d{0,2}(?:\.\d{3})+$', clean) and not (
+            src_sym_upper in USD_COINS and int(clean.replace('.', '')) < MIN_CONVERT_IDR):
         nominal_idr = int(clean.replace('.', ''))
         if nominal_idr <= 0:
             raise ValueError("Nominal Rupiah harus lebih besar dari 0")
@@ -279,18 +298,21 @@ def parse_convert_amount(raw_text: str, src_idr_price: float, usdt_idr_rate: flo
             src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
             return src_amount, nominal_idr, "IDR"
 
-    # 5. General number: crypto amount or raw IDR (if >= 1000)
+    # 5. General number: crypto amount or raw IDR (if >= 1000).
+    # Hanya angka desimal biasa: "1e3"/"nan"/"inf" ambigu dan ditolak.
     num_str = text.replace(',', '.')
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', num_str):
+        raise ValueError("Format nominal tidak dikenali")
     val = float(num_str)
     if val <= 0:
         raise ValueError("Nominal harus lebih besar dari 0")
-    if val >= 1000 and src_sym_upper not in ["USDT", "USDC"]:
+    if val >= 1000 and src_sym_upper not in USD_COINS:
         nominal_idr = int(val)
         src_amount = nominal_idr / src_idr_price if src_idr_price > 0 else 0
         return src_amount, nominal_idr, "IDR"
     else:
         src_amount = val
-        if src_sym_upper in ["USDT", "USDC"]:
+        if src_sym_upper in USD_COINS:
             nominal_idr = int(src_amount * usdt_idr_rate)
         else:
             nominal_idr = int(src_amount * src_idr_price)
@@ -401,6 +423,13 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return INPUT_AMOUNT
 
+    # Dasar = presisi deposit dikurangi 2 digit; 2 digit terakhir diisi kode unik saat order
+    # dibuat. Rupiah dihitung ulang dari jumlah yang benar-benar disetor (bukan input mentah).
+    from services.deposit_amount import base_amount
+    src_amount = float(base_amount(src_sym, src_amount))
+    if src_amount > 0 and src_market_price:
+        nominal_idr = int(Decimal(str(src_amount)) * Decimal(str(src_market_price)))
+
     # Hitung Fee Convert Tier (Min Rp 6.000, Max Rp 1.010.000)
     try:
         fee_idr = calculate_fee_idr(
@@ -427,7 +456,6 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Store exactly the amount shown in deposit instructions. Never request a
     # rounded-down display amount while expecting a higher hidden amount.
-    src_amount = float(Decimal(str(src_amount)).quantize(Decimal("0.000001"), rounding=ROUND_DOWN))
     if src_amount <= 0 or tgt_amount <= 0:
         await update.message.reply_text("Nominal terlalu kecil untuk convert.")
         return INPUT_AMOUNT
@@ -533,7 +561,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📑 <b>[RINGKASAN QUOTE CONVERT]</b>\n"
         f"<i>Masa berlaku quote: 30 Menit</i>\n\n"
-        f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net})\n"
+        f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net}) + kode unik (2 digit terakhir, ditetapkan saat konfirmasi)\n"
         f"<b>Nilai IDR:</b> Rp {nominal_idr:,}\n"
         f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
@@ -600,6 +628,15 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     db = SessionLocal()
     try:
+        from services.deposit_amount import assign_deposit_amount, format_deposit_amount
+        deposit_amount = assign_deposit_amount(db, src_net, src_sym, seller_deposit_wallet, src_amount)
+        if deposit_amount is None:
+            await query.edit_message_text(
+                "⏳ Antrean deposit untuk nominal ini sedang penuh. Silakan coba lagi beberapa "
+                "menit lagi atau gunakan jumlah lain. Jangan mengirim koin dulu.")
+            return ConversationHandler.END
+        src_amount = deposit_amount
+
         # User record
         user = db.query(User).filter(User.telegram_id == telegram_id).first()
         if not user:
@@ -668,7 +705,8 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"<b>ID Order:</b> <code>{order_id}</code>\n"
         f"<b>Batas Waktu Quote:</b> 30 Menit\n\n"
         f"📌 <b>INSTRUKSI SETORAN DANA:</b>\n"
-        f"Silakan kirim tepat <code>{src_amount:.6f}</code> <b>{src_sym} ({src_net})</b> ke alamat wallet seller berikut:\n\n"
+        f"Silakan kirim <b>TEPAT</b> <code>{format_deposit_amount(src_amount, src_sym)}</code> <b>{src_sym} ({src_net})</b> ke alamat wallet seller berikut:\n"
+        f"<i>2 digit terakhir adalah kode unik order Anda — wajib dikirim persis agar convert diproses otomatis.</i>\n\n"
         f"<code>{seller_deposit_wallet}</code>\n\n"
         f"Setelah mengirim, tekan tombol di bawah ini untuk memasukkan TX Hash atau foto bukti pengirimanmu:",
         parse_mode="HTML",

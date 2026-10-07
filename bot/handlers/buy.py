@@ -30,8 +30,8 @@ from database.connection import SessionLocal
 from database.models import Order
 from database.crud import (
     create_order,
+    create_bot_balance_order,
     get_user_balance,
-    deduct_user_balance,
     get_order_by_id,
     get_pending_gopay_order_for_user,
     update_order_status,
@@ -797,29 +797,14 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "referral_discount_pct": discount_pct,
                 "discount_amount_idr": discount_amount,
             }
-            order = create_order(db, order_data)
-
-            # Potong saldo setelah order terbuat
-            deduct_success = deduct_user_balance(db, user_id, float(total_idr))
-            if not deduct_success:
-                # Rollback: hapus order yang baru dibuat
-                try:
-                    db.delete(order)
-                    db.commit()
-                except Exception:
-                    db.rollback()
+            order = create_bot_balance_order(db, order_data)
+            if not order:
                 await query.edit_message_text(
                     text="❌ <b>Saldo Bot Tidak Mencukupi!</b>\n\nSilakan topup saldo bot Anda terlebih dahulu.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
                     parse_mode="HTML"
                 )
                 return ConversationHandler.END
-
-            # Update status order ke paid setelah saldo berhasil dipotong
-            order.status = "pending"
-            order.paid_at = datetime.utcnow()
-            db.commit()
-            db.refresh(order)
 
             # Konsumsi kuota diskon jika ada
             _consume_discount_if_needed()
@@ -852,8 +837,32 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
         # --- 2b. GoPay QRIS Payment (QRIS Statis, pembayaran manual) ---
         if method_code == "GOPAY_QRIS":
-            unique_code = generate_unique_payment_code(db)
             mdr_idr = int(context.user_data.get("buy_mdr_idr") or 0)
+            from services.fee_service import QRIS_MAX_TOTAL_IDR, QRIS_MAX_UNIQUE_CODE
+            if int(total_idr) + mdr_idr + QRIS_MAX_UNIQUE_CODE > QRIS_MAX_TOTAL_IDR:
+                await query.edit_message_text(
+                    text=(
+                        "❌ <b>Nominal terlalu besar untuk QRIS.</b>\n\n"
+                        "Total bayar (termasuk pajak QRIS & kode unik) tidak boleh melewati "
+                        "batas QRIS Rp 10.000.000. Kurangi nominal, bagi menjadi beberapa "
+                        "transaksi, atau gunakan Saldo Bot. Pembayaran belum dilakukan."
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+                    parse_mode="HTML",
+                )
+                return ConversationHandler.END
+            unique_code = generate_unique_payment_code(db, base_amount=int(total_idr) + mdr_idr)
+            if unique_code is None:
+                await query.edit_message_text(
+                    text=(
+                        "⏳ <b>Antrean pembayaran QRIS sedang penuh.</b>\n\n"
+                        "Silakan coba lagi beberapa menit lagi atau gunakan nominal lain. "
+                        "Pembayaran belum dilakukan."
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]),
+                    parse_mode="HTML",
+                )
+                return ConversationHandler.END
             final_total_idr = int(total_idr) + mdr_idr + unique_code
 
             order_data = {
@@ -999,6 +1008,7 @@ async def finalize_gopay_buy_payment(
     *,
     allow_admin=False,
     allow_recovery=False,
+    allow_expired_payment=False,
 ) -> None:
     """
     Finalisasi order Buy (GoPay QRIS / Saldo Bot):
@@ -1019,8 +1029,15 @@ async def finalize_gopay_buy_payment(
         if order.payout_tx_hash or order.status == "completed":
             return
 
-        if order.status == "pending":
-            if not claim_order_paid(db, order.order_id):
+        if order.status == "pending" or (
+            order.status == "expired"
+            and allow_expired_payment
+            and order.payment_method == "GOPAY_QRIS"
+        ):
+            if not claim_order_paid(
+                db, order.order_id,
+                allow_expired_qris=(order.status == "expired" and allow_expired_payment),
+            ):
                 return
             db.refresh(order)
 
@@ -1092,7 +1109,7 @@ async def finalize_gopay_buy_payment(
                 payout_tx_hash=result["tx_hash"],
                 completed_at=datetime.utcnow(),
             )
-            release_order_inventory(db, order.order_id)
+            release_order_inventory(db, order.order_id, consumed=True)
             user_msg = (
                 f"✅ <b>Crypto Terkirim!</b>\n\n"
                 f"<b>Order:</b> <code>{order.order_id}</code>\n"
@@ -1129,6 +1146,9 @@ async def finalize_gopay_buy_payment(
                 failure_reason=result["error_message"],
                 **extra,
             )
+            if not tx_hash_gagal:
+                # Tidak ada broadcast: koin masih di wallet, jangan tahan stok selamanya.
+                release_order_inventory(db, order.order_id)
             jejak = f"\nTX (broadcast): <code>{tx_hash_gagal}</code>" if tx_hash_gagal else ""
             if result.get("explorer_url"):
                 jejak += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
@@ -1192,6 +1212,7 @@ async def _run_finalize_background(
     *,
     allow_admin=False,
     allow_recovery=False,
+    allow_expired_payment=False,
 ) -> None:
     """
     Jalankan finalize payout di background task dengan session DB sendiri.
@@ -1208,6 +1229,7 @@ async def _run_finalize_background(
                 bot=bot,
                 allow_admin=allow_admin,
                 allow_recovery=allow_recovery,
+                allow_expired_payment=allow_expired_payment,
             )
     except Exception as exc:
         logger.error("Background finalize order %s gagal: %s", order_id, exc, exc_info=True)
@@ -1257,7 +1279,9 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except Exception as ans_err:
                 logger.debug("query.answer error: %s", ans_err)
 
-            asyncio.create_task(_run_finalize_background(order.order_id, context.bot))
+            asyncio.create_task(_run_finalize_background(
+                order.order_id, context.bot, allow_expired_payment=True,
+            ))
             return
 
         # Jika belum terdeteksi otomatis (misal delay sync mutasi GoPay)

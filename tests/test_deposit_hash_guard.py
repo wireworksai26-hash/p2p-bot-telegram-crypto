@@ -51,7 +51,14 @@ class UserHashGuard(unittest.IsolatedAsyncioTestCase):
         self.db.add(mine)
         self.db.commit()
         self.assertEqual(self._reason(mine, 10.0), "")
-        self.assertEqual(self._reason(mine, 10.04), "")  # pembulatan ke atas <= 0,5%
+
+    def test_overpay_goes_to_admin(self):
+        # K2: dulu lebih bayar <= 0,5% auto — penyerang memasang order sedikit di bawah
+        # transfer orang lain (isi ulang stok) lalu menempel hash-nya.
+        mine = _order("ORD-MINE", 10)
+        self.db.add(mine)
+        self.db.commit()
+        self.assertIn("tidak sesuai", self._reason(mine, 10.04))
 
     def test_big_victim_transfer_cannot_close_small_order(self):
         attacker = _order("ORD-ATTACKER", 1)
@@ -73,12 +80,13 @@ class UserHashGuard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ORD-VICTIM", self._reason(attacker, 25.0))
 
     def test_near_amount_trick_is_ambiguous_too(self):
-        # Penyerang memilih nominal sedikit di bawah deposit korban (masih <= 0,5%).
+        # Penyerang memilih nominal sedikit di bawah deposit korban: kini selalu
+        # dicek admin (nominal harus persis), apa pun alasannya.
         victim = _order("ORD-VICTIM", 25, telegram_id=1)
         attacker = _order("ORD-ATTACKER", "24.9", telegram_id=2)
         self.db.add_all([victim, attacker])
         self.db.commit()
-        self.assertIn("ORD-VICTIM", self._reason(attacker, 25.0))
+        self.assertNotEqual(self._reason(attacker, 25.0), "")
 
     async def test_escalation_notifies_admin_once(self):
         order = _order("ORD-X", 1)

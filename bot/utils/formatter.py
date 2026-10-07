@@ -5,7 +5,7 @@ Berisi fungsi-fungsi format angka Rupiah, format jumlah cryptocurrency,
 format tanggal/waktu ke timezone WIB, dan pembuatan ID Order unik.
 """
 
-import random
+import secrets
 import string
 from datetime import datetime, timezone, timedelta
 
@@ -46,9 +46,9 @@ def format_crypto(amount: float, symbol: str) -> str:
         sym = symbol.upper()
         if sym in ["USDT", "USDG", "TON"]:
             precision = 4
-        elif sym in ["BNB", "SOL", "AVAX", "POLYGON", "MATIC"]:
+        elif sym in ["SOL", "AVAX", "POLYGON", "MATIC"]:
             precision = 6
-        else: # ETH, BASE, ARB
+        else: # ETH, BNB, BASE, ARB (BNB 8: nominal deposit berkode unik 8 desimal)
             precision = 8
             
         formatted_amount = f"{amount:.{precision}f}"
@@ -92,9 +92,10 @@ def format_datetime(dt: datetime) -> str:
 def generate_order_id() -> str:
     """
     Generate ID order acak yang unik.
-    Format: ORD-YYYYMMDD-XYZ (3 karakter alfanumerik acak di belakang).
-    Contoh: ORD-20260526-A3B
+    Format: ORD-YYYYMMDD-XXXXXXXX (8 karakter acak kriptografis, 36^8 kombinasi/hari).
+    Contoh: ORD-20260526-A3B9K2QZ
     """
     date_str = datetime.now().strftime("%Y%m%d")
-    random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=3))
+    alphabet = string.ascii_uppercase + string.digits
+    random_str = ''.join(secrets.choice(alphabet) for _ in range(8))
     return f"ORD-{date_str}-{random_str}"

@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 class GopayGatewayService:
     def __init__(self):
         self.base_url = (settings.GOPAY_GATEWAY_URL or "http://127.0.0.1:3005").rstrip("/")
-        self.api_key = settings.GOPAY_API_KEY or "RAHASIA"
+        self.api_key = settings.GOPAY_API_KEY
+
+    def _headers(self) -> dict:
+        # Key di header, bukan URL: query string tercatat di log/proxy.
+        return {"X-Api-Key": self.api_key}
 
     async def check_payment(self, amount: int, trx_id: str, start_time=None) -> Optional[Dict[str, Any]]:
         """
@@ -37,22 +41,25 @@ class GopayGatewayService:
             params = {
                 "amount": amount,
                 "trx_id": trx_id,
-                "api_key": self.api_key
             }
             if start_time is not None:
                 params["startTime"] = _iso_utc(start_time)
             async with httpx.AsyncClient(timeout=8.0) as client:
-                res = await client.get(url, params=params)
+                res = await client.get(url, params=params, headers=self._headers())
                 if res.status_code == 200:
                     json_res = res.json()
+                    if json_res.get("success") is False:
+                        return {"paid": False, "transaction": None, "available": False}
                     return {
                         "paid": bool(json_res.get("paid")),
-                        "transaction": json_res.get("transaction")
+                        "transaction": json_res.get("transaction"),
+                        "available": True,
                     }
-                return {"paid": False, "transaction": None}
+                logger.warning("GopayGatewayService check_payment HTTP %s (%s)", res.status_code, trx_id)
+                return {"paid": False, "transaction": None, "available": False}
         except Exception as e:
             logger.warning(f"GopayGatewayService check_payment error ({trx_id}): {e}")
-            return {"paid": False, "transaction": None}
+            return {"paid": False, "transaction": None, "available": False}
 
     async def get_recent_transactions(
         self,
@@ -73,7 +80,7 @@ class GopayGatewayService:
             list: Daftar transaksi (dict) atau [] jika gagal/tidak ada.
         """
         try:
-            params = {"api_key": self.api_key, "pageSize": page_size}
+            params = {"pageSize": page_size}
             if start_time is not None:
                 params["startTime"] = start_time
             if end_time is not None:
@@ -81,7 +88,7 @@ class GopayGatewayService:
 
             url = f"{self.base_url}/transactions"
             async with httpx.AsyncClient(timeout=8.0) as client:
-                res = await client.get(url, params=params)
+                res = await client.get(url, params=params, headers=self._headers())
                 if res.status_code != 200:
                     logger.warning(f"GET /transactions HTTP {res.status_code}")
                     return []
@@ -107,23 +114,27 @@ class GopayGatewayService:
             return []
 
 
-    async def confirm_payment(self, db, *, amount: int, ref_id: str, kind: str, created_at) -> bool:
+    async def confirm_payment(self, db, *, amount: int, ref_id: str, kind: str, created_at) -> Optional[bool]:
         """Satu pintu verifikasi QRIS: cek gateway (sejak order dibuat) + klaim tx di DB.
 
         True hanya bila ada pembayaran setelah `created_at` yang BELUM dipakai
         order/topup lain. Dipakai tombol "Saya Sudah Transfer", bukti foto,
-        poller topup, dan final-check sebelum expire.
+        poller topup, dan final-check sebelum expire. False berarti gateway berhasil
+        memeriksa dan pembayaran belum cocok; None berarti gateway tidak dapat
+        memastikan hasilnya, jadi pemanggil tidak boleh meng-expire order.
         """
         from database.crud import claim_qris_payment
 
         res = await self.check_payment(int(amount), ref_id, start_time=payment_window_start(created_at))
-        if not (res and res.get("paid")):
+        if not res or res.get("available", True) is False:
+            return None
+        if not res.get("paid"):
             return False
         tx = res.get("transaction") or {}
         tx_id = tx.get("transaction_id") or tx.get("id") or tx.get("order_id")
         if not tx_id:
             logger.warning("Pembayaran %s terdeteksi tanpa transaction_id — tidak bisa diklaim, abaikan", ref_id)
-            return False
+            return None
         if not claim_qris_payment(db, str(tx_id), ref_id, kind, int(amount)):
             logger.warning("Transaksi %s sudah dipakai order/topup lain — tolak untuk %s", tx_id, ref_id)
             return False

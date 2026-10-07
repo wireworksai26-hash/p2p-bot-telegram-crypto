@@ -349,6 +349,15 @@ class TestCampaignHandlers(unittest.IsolatedAsyncioTestCase):
         u1 = self.db.query(User).filter_by(telegram_id=301).first()
         self.assertEqual(u1.balance_idr, Decimal("50000"))
 
+        # Callback lama yang sama tidak dapat mengulang pembayaran campaign.
+        mock_query.reset_mock()
+        mock_query.data = f"camp_confirm_exec_{camp.id}"
+        await campaign_callback_handler(update, context)
+        self.db.refresh(camp)
+        self.db.refresh(u1)
+        self.assertEqual(camp.status, "COMPLETED")
+        self.assertEqual(u1.balance_idr, Decimal("50000"))
+
     async def test_campaign_text_input_custom_budget(self):
         from bot.handlers.admin_campaign import campaign_text_input_handler
         update = SimpleNamespace(

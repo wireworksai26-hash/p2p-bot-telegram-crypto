@@ -134,6 +134,30 @@ class QrisPaymentClaim(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class AdminActionToken(Base):
+    """Token satu kali untuk callback admin yang mengubah saldo atau kas bot."""
+    __tablename__ = "admin_action_tokens"
+
+    token = Column(String(32), primary_key=True)
+    admin_id = Column(BigInteger, nullable=False, index=True)
+    action = Column(String(60), nullable=False, index=True)
+    payload = Column(String(250), nullable=False)
+    chat_id = Column(BigInteger, nullable=True)
+    message_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    consumed_at = Column(DateTime, nullable=True)
+
+
+class CampaignActionLock(Base):
+    """DB lock bersyarat untuk mencegah dua eksekusi campaign sejenis bersamaan."""
+    __tablename__ = "campaign_action_locks"
+
+    action = Column(String(40), primary_key=True)
+    locked_until = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class WalletBalance(Base):
     __tablename__ = 'wallet_balances'
     __table_args__ = (

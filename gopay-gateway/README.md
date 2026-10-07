@@ -258,7 +258,7 @@ Bagi kamu yang menggunakan **Pterodactyl Panel** (panel hosting yang umum diguna
 4. Buat file `.env` di File Manager Pterodactyl:
    ```env
    PORT=3000
-   API_KEY=API_KEY_RAHASIA_KAMU
+   API_KEY=<acak min 24 karakter, mis. hasil: openssl rand -hex 24>
    QRIS_STATIC=00020101021126...
    GOPAY_MERCHANT_ID=MERCHANT_ID_KAMU
    ```
@@ -288,7 +288,7 @@ Semua endpoint memerlukan autentikasi. Bisa lewat **Header** atau **Query Parame
 
 ```text
 Header   : X-Api-Key: <API_KEY>
-Query    : ?api_key=<API_KEY>
+Query    : (tidak didukung — key di URL tercatat di log/proxy)
 ```
 
 ---
@@ -296,7 +296,7 @@ Query    : ?api_key=<API_KEY>
 ### `GET /token-status` — Cek Status Sesi Token
 Memverifikasi apakah token GoPay Merchant masih aktif dan valid.
 ```http
-GET http://vps-ip:3000/token-status?api_key=RAHASIA
+GET http://vps-ip:3000/token-status
 ```
 **Respon Sukses:**
 ```json
@@ -314,12 +314,11 @@ GET http://vps-ip:3000/token-status?api_key=RAHASIA
 ### `GET /create-qris` — Buat QRIS Dinamis
 Membuat QRIS nominal custom dari QRIS statis secara *in-memory* (lokal). QR aktif selama **5 menit**.
 ```http
-GET http://vps-ip:3000/create-qris?amount=25000&api_key=RAHASIA
+GET http://vps-ip:3000/create-qris?amount=25000
 ```
 | Parameter | Tipe | Keterangan |
 |---|---|---|
 | `amount` | `number` | Nominal transaksi dalam Rupiah (wajib) |
-| `api_key` | `string` | API Key kamu |
 
 **Respon Sukses:**
 ```json
@@ -361,14 +360,13 @@ GET http://vps-ip:3000/api/qr-status/abc123xyz
 ### `GET /check-payment` — Cek Pembayaran Masuk (Backend / Server-to-Server)
 Mencari transaksi yang cocok berdasarkan nominal dan timestamp. Setiap transaksi hanya bisa diklaim 1x per `trx_id` (anti klaim ganda, termasuk untuk dua payment dengan nominal sama).
 ```http
-GET http://vps-ip:3000/check-payment?amount=25000&trx_id=TRX-A3F8K2M9&api_key=RAHASIA
+GET http://vps-ip:3000/check-payment?amount=25000&trx_id=TRX-A3F8K2M9
 ```
 | Parameter | Tipe | Default | Keterangan |
 |---|---|---|---|
 | `amount` | `number` | — | Nominal transaksi yang dicari (wajib) |
 | `trx_id` | `string` | — | TRX-ID dari `/create-qris` — scope klaim agar tidak tabrakan dengan payment nominal sama (sangat direkomendasikan) |
 | `startTime` | `string` | 24 jam lalu | Timestamp ISO awal pencarian |
-| `api_key` | `string` | — | API Key kamu |
 
 **Respon Sukses (Lunas):**
 ```json
@@ -390,7 +388,7 @@ GET http://vps-ip:3000/check-payment?amount=25000&trx_id=TRX-A3F8K2M9&api_key=RA
 
 ### `GET /transactions` — Riwayat Mutasi Transaksi
 ```http
-GET http://vps-ip:3000/transactions?api_key=RAHASIA
+GET http://vps-ip:3000/transactions
 ```
 | Parameter | Tipe | Default | Keterangan |
 |---|---|---|---|
@@ -402,7 +400,7 @@ GET http://vps-ip:3000/transactions?api_key=RAHASIA
 
 ### `GET /api/logs` — Log Aktivitas Gateway
 ```http
-GET http://vps-ip:3000/api/logs?api_key=RAHASIA
+GET http://vps-ip:3000/api/logs
 ```
 
 ---
@@ -413,7 +411,7 @@ Gateway ini sangat fleksibel untuk diintegrasikan ke sistem toko online (PHP, La
 
 | Metode | Contoh Pemanggilan |
 |---|---|
-| **GET (URL Query)** | `http://vps-ip:3000/create-qris?amount=25000&api_key=RAHASIA` |
+| **GET (URL Query)** | `http://vps-ip:3000/create-qris?amount=25000` + header `X-Api-Key` |
 | **POST (JSON Body)** | `POST /create-qris` dengan Body: `{"amount": 25000}` & Header `X-Api-Key` |
 
 ---

@@ -67,16 +67,18 @@ class TestValidasiQris(unittest.TestCase):
             self.assertIn(("01", "12"), tags)
 
     def test_stream_tidak_mengembalikan_qr_dari_payload_rusak(self):
+        from unittest.mock import patch
         os.environ["QRIS_STATIC"] = RUSAK
         try:
             from config.settings import settings
             settings.QRIS_STATIC = RUSAK
-            buf = get_qris_image_stream(5136)
+            # Tanpa gambar statis merchant (mis. checkout tanpa Git LFS) payload rusak
+            # tidak boleh dijadikan QR -> None. Dulu tes bergantung pada isi file repo.
+            with patch("services.qris_generator.get_qris_static_image_path", return_value=None):
+                buf = get_qris_image_stream(5136)
         finally:
             os.environ.pop("QRIS_STATIC", None)
             settings.QRIS_STATIC = ""
-        # fallback gambar statis repo adalah pointer LFS (131 byte) -> dilewati,
-        # dan payload rusak tidak boleh dijadikan QR -> None
         self.assertIsNone(buf)
 
 

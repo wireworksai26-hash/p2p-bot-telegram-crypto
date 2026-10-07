@@ -172,7 +172,7 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                     completed_at=now,
                 )
                 try:
-                    crud.release_order_inventory(db, order.order_id)
+                    crud.release_order_inventory(db, order.order_id, consumed=True)
                 except Exception as exc:
                     logger.warning("Gagal release inventory %s: %s", order.order_id, exc)
                 _alerted.discard(order.order_id)
@@ -200,7 +200,8 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                     # Referral reward trigger
                     try:
                         trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                        ref_result = crud.complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt)
+                        ref_result = crud.complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt,
+                                                            fee_idr=float(order.fee_idr or 0))
                         if ref_result:
                             ref = crud.get_referral_by_referee(db, order.telegram_id)
                             if ref:

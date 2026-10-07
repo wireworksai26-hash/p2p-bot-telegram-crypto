@@ -70,7 +70,7 @@ class TestAmountMatches(unittest.TestCase):
     """Predikat nominal deposit: >= (manual) vs exact (auto-scan)."""
 
     def test_underpay_ditolak_overpay_diterima(self):
-        self.assertTrue(_amount_matches(1.5, 1.0))
+        self.assertTrue(_amount_matches(1.004, 1.0))  # lebih bayar wajar (<= 0,5%)
         self.assertFalse(_amount_matches(0.99, 1.0))
         self.assertFalse(_amount_matches(1.0, 0))
         self.assertFalse(_amount_matches(float("inf"), 1.0))
@@ -80,7 +80,10 @@ class TestAmountMatches(unittest.TestCase):
         self.assertFalse(automatic_amount_matches(1.01, 1.0))
         self.assertFalse(automatic_amount_matches(0.99, 1.0))
 
-    @unittest.expectedFailure
+    def test_overpay_wajar_tetap_diterima(self):
+        self.assertTrue(_amount_matches(Decimal("10.04"), Decimal("10")))
+        self.assertFalse(_amount_matches(Decimal("10.1"), Decimal("10")))
+
     def test_overpay_besar_tidak_klaim_order_kecil(self):
         """Transfer jauh lebih besar (milik order/orang lain) menutup order kecil
         di jalur manual (admin/hash). Crossvalidation harus tolak overpay ekstrem."""
@@ -131,7 +134,6 @@ class TestIsHashUsed(unittest.TestCase):
         self.db.commit()
         self.assertTrue(DepositDetector._is_hash_used(self.db, HASH_A, exclude_order="ORD-B"))
 
-    @unittest.expectedFailure
     def test_hash_sama_beda_format_terdeteksi(self):
         """Order A menyimpan '0xAB..' (case/prefix apa pun) — hash yang sama harus
         terdeteksi sudah dipakai, bukan hanya cocok string mentah."""
@@ -180,14 +182,28 @@ class TestAdminReverifyReplay(unittest.IsolatedAsyncioTestCase):
 class TestRoundingTampilanVsExpected(unittest.TestCase):
     """User membayar persis angka yang ditampilkan bot — apakah diterima?"""
 
-    @unittest.expectedFailure
     def test_bayar_sesuai_tampilan_tidak_macet(self):
-        expected = 10.111111
-        tampil = float(format_crypto(expected, "USDT").split()[0])  # "10.1111"
-        self.assertTrue(
-            _amount_matches(tampil, expected),
-            f"bayar persis angka tampilan ({tampil}) tidak boleh underpay dari expected ({expected})",
-        )
+        """B5: nominal order = nominal yang ditampilkan, untuk semua aset yang bisa dijual.
+
+        Dulu input 10.111111 disimpan apa adanya tetapi tampil "10.1111" -> user yang
+        mengirim sesuai layar dianggap kurang bayar. Kini nominal dibulatkan ke presisi
+        deposit dan diberi kode unik; tampilan menampilkan seluruh digitnya.
+        """
+        from config.assets import STOCK_ASSETS
+        from services.deposit_amount import assign_deposit_amount, format_deposit_amount
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        try:
+            for symbol, network in STOCK_ASSETS:
+                with self.subTest(symbol=symbol, network=network):
+                    amount = assign_deposit_amount(db, network, symbol, "0x" + "1" * 40, "10.111111111")
+                    for shown in (format_deposit_amount(amount, symbol),
+                                  format_crypto(float(amount), symbol).split()[0]):
+                        self.assertTrue(_amount_matches(Decimal(shown), amount), (shown, amount))
+                        self.assertTrue(automatic_amount_matches(Decimal(shown), amount), (shown, amount))
+        finally:
+            db.close()
+            Base.metadata.drop_all(bind=engine)
 
 
 class TestCancelSellStateGuard(unittest.IsolatedAsyncioTestCase):

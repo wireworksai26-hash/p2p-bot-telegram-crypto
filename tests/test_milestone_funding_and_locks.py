@@ -84,10 +84,15 @@ class TopSpenderFromTreasury(DB):
         for i in range(n):
             make_order(self.db, 11 + i, "buy", 1_000_000 - i * 100_000)
 
+    def _token(self, period=30):
+        return crud.issue_admin_action_token(self.db, ADMIN, "top_spender", str(period))
+
     async def test_short_treasury_blocks_payout_and_changes_nothing(self):
         self._seed()
         crud.topup_bot_treasury(self.db, 200_000, admin_id=ADMIN)         # butuh 300.000
-        result = await cs.execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+        result = await cs.execute_top_spender_campaign(
+            self.db, self.bot, ADMIN, period_days=30, action_token=self._token(),
+        )
         self.assertIn("Kas Bot kurang Rp 100.000", result["error"])
         self.assertEqual(result["treasury_shortfall"], 100_000)
         self.assertEqual([self.balance(t) for t in (11, 12, 13)], [0, 0, 0])
@@ -98,7 +103,9 @@ class TopSpenderFromTreasury(DB):
     async def test_payout_deducts_exactly_the_rewards(self):
         self._seed()
         crud.topup_bot_treasury(self.db, 1_000_000, admin_id=ADMIN)
-        result = await cs.execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+        result = await cs.execute_top_spender_campaign(
+            self.db, self.bot, ADMIN, period_days=30, action_token=self._token(),
+        )
         self.assertIsNone(result["error"])
         self.assertEqual(result["total_amount"], 300_000)                 # 150k + 100k + 50k
         self.assertEqual(crud.get_bot_treasury_balance(self.db), 700_000)
@@ -109,7 +116,9 @@ class TopSpenderFromTreasury(DB):
         crud.topup_bot_treasury(self.db, 1_000_000, admin_id=ADMIN)
         with patch.object(database.models, "AuditLog", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
-                await cs.execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+                await cs.execute_top_spender_campaign(
+                    self.db, self.bot, ADMIN, period_days=30, action_token=self._token(),
+                )
         self.assertEqual(crud.get_bot_treasury_balance(self.db), 1_000_000)   # utuh kembali
         self.assertEqual([self.balance(t) for t in (11, 12, 13)], [0, 0, 0])
 
@@ -117,7 +126,9 @@ class TopSpenderFromTreasury(DB):
         self._seed()
         crud.add_milestone_exclusion(self.db, 11, created_by=ADMIN)
         crud.topup_bot_treasury(self.db, 1_000_000, admin_id=ADMIN)
-        result = await cs.execute_top_spender_campaign(self.db, self.bot, ADMIN, period_days=30)
+        result = await cs.execute_top_spender_campaign(
+            self.db, self.bot, ADMIN, period_days=30, action_token=self._token(),
+        )
         self.assertEqual([w["telegram_id"] for w in result["winners"]], [12, 13])
         self.assertEqual(crud.get_bot_treasury_balance(self.db), 1_000_000 - 250_000)   # 150k + 100k
 

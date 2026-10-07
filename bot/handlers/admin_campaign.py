@@ -186,7 +186,10 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
         # Dompet & Kas Bot
         if data in ("camp_treasury_view", "admin_panel_treasury"):
             from bot.handlers.admin import build_admin_treasury_view
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             return
 
@@ -200,7 +203,11 @@ async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 except Exception:
                     period = 30
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
+            markup = build_admin_top_spenders_keyboard(
+                period_days=period, shortfall=top_spender_funding(db, period)[2],
+                db=db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             return
 

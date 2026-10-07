@@ -197,7 +197,7 @@ class TestTonAwaitDeliveryJettonRetry(unittest.IsolatedAsyncioTestCase):
             return 2.0 if panggilan["n"] == 3 else 2.6
 
         fake._jetton_balance_of = _jb
-        fake._recent_out_tx_hash = AsyncMock(return_value="a" * 64)
+        fake._recent_out_tx_hash = AsyncMock(return_value=("a" * 64, False))
 
         with patch("services.crypto_sender.ton_sender.asyncio.sleep", new=AsyncMock()):
             hasil = await TonSender._await_delivery(

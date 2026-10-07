@@ -25,6 +25,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from config.settings import settings
 from database.connection import SessionLocal
 from database.models import Order, AuditLog, DepositClaim
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from services import tx_verifier
 from bot.keyboards.main_menu import get_owner_button
@@ -34,9 +35,6 @@ from bot.utils.telegram_utils import safe_send_message, notify_admins
 # Alasan verifikasi yang permanen: hash tidak akan pernah jadi deposit sah.
 # Hash seperti ini dilepas dari order (sekali) agar tidak diverifikasi ulang
 # terus-menerus oleh scan 20 detik.
-# Kelebihan bayar yang masih dianggap pembulatan wajar pada hash kiriman user.
-USER_HASH_OVERPAY_TOLERANCE = Decimal("0.005")
-
 ALASAN_HASH_BATAL = (
     "Transfer ke diri sendiri bukan deposit.",
     "Penerima tidak cocok.",
@@ -46,6 +44,10 @@ ALASAN_HASH_BATAL = (
 )
 
 logger = logging.getLogger(__name__)
+
+# Payout dianggap macet hanya setelah melewati semua tunggu sender. Dulu 120 dtk: TRON menunggu
+# solid sampai 150 dtk, sehingga payout yang masih berjalan dipindah ke manual_review.
+PAYOUT_INFLIGHT_SECONDS = 900
 
 _payout_locks = WeakValueDictionary()
 
@@ -157,7 +159,7 @@ class DepositDetector:
         # Order yang payout-nya pernah gagal/crash (PAYOUT_QUEUED tanpa hash) -> retry langsung.
         if order.status == "PAYOUT_QUEUED":
             # A crashed worker may already have broadcast. Never blindly resend.
-            if order.updated_at and (datetime.utcnow() - order.updated_at).total_seconds() > 120:
+            if order.updated_at and (datetime.utcnow() - order.updated_at).total_seconds() > PAYOUT_INFLIGHT_SECONDS:
                 order.status = "manual_review"
                 order.failure_reason = "Payout terputus; periksa receipt sebelum mengirim ulang."
                 db.commit()
@@ -207,6 +209,26 @@ class DepositDetector:
                 tx_hash = ""
                 verified = None
 
+        # 1a. User mengirim nominal dasar tanpa kode unik: jangan diam saja, minta admin cek.
+        if (not trusted and tx_hash and verified and not verified.get("verified")
+                and str(verified.get("reason") or "").startswith("Nominal deposit kurang")):
+            from services.deposit_amount import base_amount, deposit_code_of
+            if deposit_code_of(order.crypto_amount, order.crypto_symbol):
+                base_check = await tx_verifier.verify_deposit(
+                    network=order.network, symbol=order.crypto_symbol, tx_hash=tx_hash,
+                    expected_wallet=expected_wallet,
+                    expected_amount=float(base_amount(order.crypto_symbol, order.crypto_amount)),
+                    not_before=order.created_at, not_after=self.deposit_deadline(order),
+                )
+                if base_check.get("verified"):
+                    await self.escalate_user_hash(
+                        db, order, tx_hash,
+                        f"Deposit {base_check.get('amount')} {order.crypto_symbol} tanpa kode unik "
+                        f"(order meminta {order.crypto_amount}). Pastikan pengirimnya user ini.",
+                        bot_app,
+                    )
+                    return
+
         # 1b. Hash kiriman user lolos on-chain — pastikan memang deposit order ini.
         if not trusted and verified and verified.get("verified"):
             review = self.user_hash_review_reason(db, order, verified)
@@ -226,16 +248,12 @@ class DepositDetector:
                     not_before=order.created_at,
                     not_after=self.deposit_deadline(order),
                 )
-                # Equal quotes on a shared address cannot be attributed safely.
-                competing = db.query(Order).filter(
-                    Order.order_id != order.order_id,
-                    Order.status == "WAITING_CRYPTO_DEPOSIT",
-                    Order.network == order.network,
-                    Order.crypto_symbol == order.crypto_symbol,
-                    Order.deposit_wallet == expected_wallet,
-                    Order.crypto_amount == order.crypto_amount,
-                ).first()
-                if competing:
+                # Equal quotes on a shared address cannot be attributed safely —
+                # termasuk order expired yang depositnya masih bisa masuk (deposit telat).
+                from services.deposit_amount import active_deposit_orders
+                if any(tx_verifier.automatic_amount_matches(o.crypto_amount, order.crypto_amount)
+                       for o in active_deposit_orders(db, order.network, order.crypto_symbol,
+                                                      expected_wallet, exclude_order=order.order_id)):
                     return
                 for txn in incoming:
                     if not txn.get("tx_hash"):
@@ -457,7 +475,7 @@ class DepositDetector:
                     details=f"Payout sukses. Hash: {result.get('tx_hash')}",
                 ))
                 db.commit()
-                release_order_inventory(db, order.order_id)
+                release_order_inventory(db, order.order_id, consumed=True)
                 from database.crud import auto_save_order_accounts
                 auto_save_order_accounts(db, order)
 
@@ -496,7 +514,8 @@ class DepositDetector:
                     try:
                         from database.crud import complete_referral, get_referral_by_referee
                         trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                        ref_result = complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt)
+                        ref_result = complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt,
+                                                       fee_idr=float(order.fee_idr or 0))
                         if ref_result:
                             ref = get_referral_by_referee(db, order.telegram_id)
                             if ref:
@@ -544,14 +563,19 @@ class DepositDetector:
     # ---------------- Guard hash kiriman user ----------------
     @staticmethod
     def _deposit_fits(received, expected) -> bool:
-        """Deposit cocok untuk order: tidak kurang, dan lebih paling banyak 0,5% (pembulatan)."""
+        """Deposit cocok untuk order: nominal PERSIS (nominal order sudah berkode unik).
+
+        Dulu lebih bayar s/d 0,5% diterima — penyerang cukup membuat order sedikit
+        di bawah transfer orang lain (mis. isi ulang stok) lalu menempel hash-nya.
+        Kurang/lebih bayar kini selalu dicek admin.
+        """
         try:
             received, expected = Decimal(str(received)), Decimal(str(expected))
         except Exception:
             return False
         if not (received.is_finite() and expected.is_finite()) or expected <= 0:
             return False
-        return expected <= received <= expected * (1 + USER_HASH_OVERPAY_TOLERANCE)
+        return tx_verifier.automatic_amount_matches(received, expected)
 
     def user_hash_review_reason(self, db, order, verified) -> str:
         """Alasan hash kiriman user TIDAK boleh dikonfirmasi otomatis ('' = aman).
@@ -564,13 +588,9 @@ class DepositDetector:
         if not self._deposit_fits(received, order.crypto_amount):
             return (f"Nominal deposit {received} {order.crypto_symbol} tidak sesuai order "
                     f"({float(order.crypto_amount):g}).")
-        others = db.query(Order).filter(
-            Order.order_id != order.order_id,
-            Order.status == "WAITING_CRYPTO_DEPOSIT",
-            Order.network == order.network,
-            Order.crypto_symbol == order.crypto_symbol,
-            Order.deposit_wallet == order.deposit_wallet,
-        ).all()
+        from services.deposit_amount import active_deposit_orders
+        others = active_deposit_orders(db, order.network, order.crypto_symbol,
+                                       order.deposit_wallet, exclude_order=order.order_id)
         for other in others:
             if self._deposit_fits(received, other.crypto_amount):
                 return (f"Deposit juga cocok dengan order lain yang menunggu ({other.order_id}) — "
@@ -599,7 +619,8 @@ class DepositDetector:
         if order.order_type == "swap":
             button = InlineKeyboardButton("✅ Proses Convert (sudah dicek)", callback_data=f"admin_approve_swap_{order.order_id}")
         else:
-            button = InlineKeyboardButton("✅ Konfirmasi Deposit (sudah dicek)", callback_data=f"admin_force_sell_{order.order_id}")
+            # Hanya menandai deposit sah; Rupiah tetap lewat tombol "Sudah Ditransfer" sesudahnya.
+            button = InlineKeyboardButton("✅ Konfirmasi Deposit (sudah dicek)", callback_data=f"admin_verify_sell_deposit_{order.order_id}")
         await notify_admins(
             bot_app,
             f"🕵️ <b>HASH DEPOSIT PERLU DICEK MANUAL</b>\n\n"
@@ -616,18 +637,45 @@ class DepositDetector:
     # ---------------- Helpers ----------------
     @staticmethod
     def _is_hash_used(db, tx_hash, exclude_order):
+        """True bila hash ini sudah DITERIMA sebagai deposit order lain.
+
+        Dibandingkan tanpa peduli format (huruf besar/kecil, prefix 0x, URL explorer),
+        karena hash yang sama dulu bisa lolos dua kali lewat format berbeda (B6).
+        Hash yang hanya ditempel ke order yang tidak pernah terkonfirmasi (menunggu,
+        expired, cancelled) tidak dihitung — penyerang tidak bisa memblokir deposit
+        korban dengan menempelkan hash-nya (B7).
+        """
         if not tx_hash:
             return True
-        if db.query(DepositClaim).filter(DepositClaim.tx_hash == tx_hash,
-                                       DepositClaim.order_id != exclude_order).first():
+        keys = _hash_keys(tx_hash)
+        if db.query(DepositClaim).filter(func.lower(DepositClaim.tx_hash).in_(keys),
+                                         DepositClaim.order_id != exclude_order).first():
             return True
         existing = (
             db.query(Order)
-            .filter(Order.deposit_tx_hash == tx_hash)
+            .filter(func.lower(Order.deposit_tx_hash).in_(keys))
             .filter(Order.order_id != exclude_order)
-            .filter(Order.status != "WAITING_CRYPTO_DEPOSIT")
+            .filter(Order.status.in_(HASH_ACCEPTED_STATUSES))
             .first()
         )
         return existing is not None
+
+
+# Status order yang berarti deposit-nya pernah diterima (hash terpakai).
+HASH_ACCEPTED_STATUSES = ("CRYPTO_CONFIRMED", "PAYOUT_QUEUED", "completed", "COMPLETED",
+                          "manual_review", "payout_processing", "paid", "failed")
+
+
+def _hash_keys(tx_hash: str) -> list:
+    """Semua bentuk huruf-kecil yang mungkin dipakai untuk menyimpan hash yang sama."""
+    from urllib.parse import urlparse, unquote
+    value = (tx_hash or "").strip()
+    if "://" in value:
+        value = unquote(urlparse(value).path.rstrip("/").split("/")[-1])
+    bare = value.lower()
+    if bare.startswith("0x"):
+        bare = bare[2:]
+    return list({value.lower(), bare, "0x" + bare})
+
 
 deposit_detector = DepositDetector()

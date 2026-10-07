@@ -1,11 +1,12 @@
 const express = require('express');
 const axios = require('axios');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 const sessionManager = require('./sessionManager');
 const dbSession = require('./dbSession');
+const { txAmountIdr, amountMatches } = require('./amount');
+const { makeApiKeyAuth, assertStrongApiKey } = require('./auth');
 
 // Inisialisasi sinkronisasi sesi database PostgreSQL
 (async () => {
@@ -187,17 +188,11 @@ function generateDynamicQRIS(staticTemplate, amount) {
     return result + checksum;
 }
 
-// Middleware Proteksi API Key
-const apiKeyAuth = (req, res, next) => {
-    const apiKey = req.headers['x-api-key'] || req.query.api_key || req.query.apikey;
-    if (!apiKey || apiKey !== process.env.API_KEY) {
-        return res.status(401).json({ success: false, message: 'Autentikasi Gagal: API Key tidak valid' });
-    }
-    next();
-};
+// Middleware Proteksi API Key (header saja, constant-time; key lemah = gateway tidak start)
+const apiKeyAuth = makeApiKeyAuth(assertStrongApiKey(process.env.API_KEY));
 
 const app = express();
-app.use(cors());
+// Tanpa CORS global: hanya bot (server-side) yang memanggil API; halaman /qr same-origin.
 app.use(express.json());
 
 app.get('/', (req, res) => {
@@ -593,10 +588,8 @@ app.get('/transactions', apiKeyAuth, async (req, res) => {
         );
 
         const formattedTransactions = rawTransactions.map(tx => {
-            const rawAmt = parseInt(tx.gross_amount || tx.real_gross_amount || 0, 10);
-            const amtInIdr = (rawAmt > 0 && rawAmt % 100 === 0) ? Math.round(rawAmt / 100) : rawAmt;
             return {
-                amount: amtInIdr,
+                amount: txAmountIdr(tx),
                 status: tx.transaction_status ? tx.transaction_status.toLowerCase() : 'success',
                 time: tx.transaction_time || tx.settlement_time,
                 issuer: tx.qris_provider_aspi_issuer || 'GoPay / Bank',
@@ -643,8 +636,7 @@ async function verifyPayment(amount, startTime, merchantIdOverride = null, userA
 
 
     for (const tx of rawTransactions) {
-        const rawAmt = parseInt(tx.gross_amount || tx.real_gross_amount || tx.amount?.value || tx.amount || 0, 10);
-        const txAmount = (rawAmt > 0 && rawAmt % 100 === 0) ? Math.round(rawAmt / 100) : rawAmt;
+        const txAmount = txAmountIdr(tx);
         const txTimestamp = new Date(tx.transaction_time || tx.created_at || tx.settlement_time || 0).getTime();
         const txId = tx.id || tx.order_id || tx.wallstreet_transaction_id;
         // Refund / partial refund bukan pembayaran masuk — jangan pernah dianggap lunas.
@@ -652,7 +644,7 @@ async function verifyPayment(amount, startTime, merchantIdOverride = null, userA
             continue;
         }
 
-        if ((txAmount === targetAmount || rawAmt === targetAmount) && txTimestamp >= filterStartTimeMs) {
+        if (amountMatches(tx, targetAmount) && txTimestamp >= filterStartTimeMs) {
             const currentScope = qrisId || 'default';
             const existingClaim = claimedTransactions.get(txId);
 
@@ -771,7 +763,10 @@ app.get('/api/logs', apiKeyAuth, (req, res) => {
     res.json({ success: true, logs: activityLogs });
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+// Default hanya loopback: bot berjalan di container yang sama. Set GOPAY_BIND_HOST=0.0.0.0
+// hanya bila gateway memang harus diakses dari host lain (dan lindungi dengan firewall).
+const BIND_HOST = process.env.GOPAY_BIND_HOST || '127.0.0.1';
+const server = app.listen(PORT, BIND_HOST, () => {
     logActivity('SYSTEM', `GoPay Partner Gateway berjalan pada port ${PORT}`);
 });
 

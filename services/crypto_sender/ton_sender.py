@@ -45,6 +45,8 @@ class TonBroadcastUncertain(RuntimeError):
 
 
 class TonSender(BaseCryptoSender):
+    _claimed_hashes: set = set()
+
     def __init__(self):
         self.network = "TON"
         self.rpc_url = settings.TON_RPC or "https://toncenter.com/api/v2/jsonRPC"
@@ -324,16 +326,26 @@ class TonSender(BaseCryptoSender):
 
         raise TonBroadcastRejected(f"Broadcast TON ditolak. {tonapi_error} | {toncenter_error}")
 
-    async def _recent_out_tx_hash(self, dest_address: str, since_ts: int, value_nano: int = 0) -> str:
-        """Hash transaksi kita yang mengirim pesan keluar ke alamat tujuan (opsional nominal tertentu)."""
+    async def _recent_out_tx_hash(self, dest_address: str, since_ts: int, value_nano: int = 0):
+        """Hash tx KITA yang mengirim pesan keluar ke alamat tujuan sejak `since_ts`.
+
+        Mengembalikan (hash, bounced). Hash yang sudah dipakai payout lain di proses ini
+        dilewati; tx sebelum broadcast diabaikan (toleransi jam 10 dtk); bila pesan itu
+        kembali sebagai bounce dari tujuan, payout dianggap gagal (dana kembali ke kita).
+        """
         from services.tx_verifier import ton_address
 
         data = await self._tonapi_get(
-            f"blockchain/accounts/{self.wallet_address}/transactions", {"limit": 12}
+            f"blockchain/accounts/{self.wallet_address}/transactions", {"limit": 20}
         )
+        txs = data.get("transactions") or []
         target = ton_address(dest_address)
-        for tx in data.get("transactions") or []:
-            if not tx.get("success") or int(tx.get("utime") or 0) < since_ts - 60:
+
+        found_hash, found_time = "", 0
+        for tx in txs:
+            tx_hash = str(tx.get("hash") or "")
+            utime = int(tx.get("utime") or 0)
+            if not tx.get("success") or utime < since_ts - 10 or tx_hash in self._claimed_hashes:
                 continue
             for msg in tx.get("out_msgs") or []:
                 dest = (msg.get("destination") or {}).get("address", "")
@@ -341,8 +353,19 @@ class TonSender(BaseCryptoSender):
                     continue
                 if value_nano and int(msg.get("value") or 0) != value_nano:
                     continue
-                return str(tx.get("hash") or "")
-        return ""
+                found_hash, found_time = tx_hash, utime
+                break
+            if found_hash:
+                break
+        if not found_hash:
+            return "", False
+
+        for tx in txs:
+            in_msg = tx.get("in_msg") or {}
+            if (in_msg.get("bounced") and int(tx.get("utime") or 0) >= found_time
+                    and ton_address((in_msg.get("source") or {}).get("address", "")) == target):
+                return found_hash, True
+        return found_hash, False
 
     async def _await_delivery(
         self, recipient, amount, symbol, since_ts, reference, jetton_wallet=""
@@ -350,11 +373,11 @@ class TonSender(BaseCryptoSender):
         """
         Tunggu bukti on-chain dari pesan yang sudah dibroadcast.
 
-        Native: ada pesan keluar ke penerima dengan nominal tepat.
-        USDT: saldo jetton penerima bertambah minimal sebesar nominal.
+        Native: ada tx keluar kita ke penerima dengan nominal tepat, baru (sesudah broadcast),
+        belum dipakai payout lain, dan tidak di-bounce.
+        USDT: saldo jetton penerima naik minimal sebesar nominal DAN ada tx keluar kita ke jetton
+        wallet kita. Saldo naik saja tidak cukup — pihak lain bisa mengirim ke penerima yang sama.
         """
-        from services.tx_verifier import ton_address
-
         amount_float = float(Decimal(str(amount)))
         native_nano = int(Decimal(str(amount)) * NANO)
         jetton_before = None
@@ -376,18 +399,26 @@ class TonSender(BaseCryptoSender):
                             jetton_before = None
                     if jetton_before is not None:
                         current = await self._jetton_balance_of(recipient)
-                        if current >= jetton_before + amount_float - 1e-9:
-                            tx_hash = ""
-                            if jetton_wallet:
-                                tx_hash = await self._recent_out_tx_hash(jetton_wallet, since_ts)
-                            return SendResult(
-                                True,
-                                tx_hash or reference,
-                                explorer_url=f"{self.explorer_base}/transaction/{tx_hash}" if tx_hash else "",
-                            )
+                        if current >= jetton_before + amount_float - 1e-9 and jetton_wallet:
+                            res = await self._recent_out_tx_hash(jetton_wallet, since_ts)
+                            tx_hash, bounced = res if isinstance(res, (tuple, list)) else (res, False)
+                            if bounced:
+                                return SendResult(False, tx_hash or reference,
+                                                  "MANUAL_REVIEW: Transfer jetton TON di-bounce; periksa sebelum kirim ulang.", "")
+                            if tx_hash:
+                                self._claimed_hashes.add(tx_hash)
+                                return SendResult(
+                                    True, tx_hash,
+                                    explorer_url=f"{self.explorer_base}/transaction/{tx_hash}",
+                                )
                 else:
-                    tx_hash = await self._recent_out_tx_hash(recipient, since_ts, native_nano)
+                    res = await self._recent_out_tx_hash(recipient, since_ts, native_nano)
+                    tx_hash, bounced = res if isinstance(res, (tuple, list)) else (res, False)
+                    if bounced:
+                        return SendResult(False, tx_hash or reference,
+                                          "MANUAL_REVIEW: Transfer TON di-bounce (dana kembali); periksa sebelum kirim ulang.", "")
                     if tx_hash:
+                        self._claimed_hashes.add(tx_hash)
                         return SendResult(
                             True, tx_hash, explorer_url=f"{self.explorer_base}/transaction/{tx_hash}"
                         )

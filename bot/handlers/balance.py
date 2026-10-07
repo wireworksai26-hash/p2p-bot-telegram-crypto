@@ -9,6 +9,7 @@ Menangani fitur:
 
 import logging
 import os
+import secrets
 from datetime import datetime, timedelta
 from html import escape as _esc
 
@@ -23,6 +24,7 @@ from telegram.ext import (
 )
 
 from database.connection import SessionLocal
+from database.models import TopupOrder
 from database.crud import (
     get_user_balance,
     credit_user_balance,
@@ -192,13 +194,50 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
     else:
         status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice pembayaran...</i>", parse_mode="HTML")
 
-    topup_id = f"TOPUP-{int(datetime.utcnow().timestamp())}"
-    expires_at = datetime.utcnow() + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES)
+    now = datetime.utcnow()
+    topup_id = f"TOPUP-{int(now.timestamp())}-{secrets.token_hex(3).upper()}"
+    expires_at = now + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES)
 
     db = SessionLocal()
     try:
-        unique_code = generate_unique_payment_code(db)
+        # Satu topup PENDING per user: invoice beruntun menghabiskan kode unik
+        # sehingga nominal tagihan bisa kembar dengan tagihan user lain.
+        active = db.query(TopupOrder).filter(
+            TopupOrder.telegram_id == user.id,
+            TopupOrder.status == "PENDING",
+            (TopupOrder.expires_at.is_(None)) | (TopupOrder.expires_at > now),
+        ).first()
+        if active:
+            await status_msg.edit_text(
+                f"⚠️ Anda masih punya invoice topup aktif <code>{_esc(active.topup_id)}</code> "
+                f"sebesar <b>{format_idr(active.amount_idr)}</b>.\n\n"
+                "Selesaikan pembayarannya atau batalkan dulu sebelum membuat topup baru.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Saya Sudah Transfer", callback_data=f"check_topup_{active.topup_id}")],
+                    [InlineKeyboardButton("Batalkan Topup", callback_data=f"cancel_topup_{active.topup_id}")],
+                ]),
+            )
+            return ConversationHandler.END
+
+        from services.fee_service import qris_max_nominal
+        if amount > qris_max_nominal():
+            await status_msg.edit_text(
+                f"❌ Nominal topup QRIS maksimal <b>{format_idr(qris_max_nominal())}</b> "
+                "(total + pajak QRIS + kode unik tidak boleh melewati batas QRIS Rp 10.000.000). "
+                "Untuk nominal lebih besar, bagi menjadi beberapa topup.",
+                parse_mode="HTML",
+            )
+            return ConversationHandler.END
         mdr_idr = calculate_qris_mdr(amount)
+        unique_code = generate_unique_payment_code(db, base_amount=amount + mdr_idr)
+        if unique_code is None:
+            await status_msg.edit_text(
+                "⏳ Antrean pembayaran QRIS sedang penuh. Silakan coba lagi beberapa menit lagi "
+                "atau gunakan nominal lain.",
+                parse_mode="HTML",
+            )
+            return ConversationHandler.END
         final_amount = amount + mdr_idr + unique_code
         topup_order = create_topup_order(
             db=db,

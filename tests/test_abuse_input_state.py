@@ -111,13 +111,17 @@ class TestUpdateOrderStatusTransisi(unittest.TestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    @unittest.expectedFailure
     def test_completed_tidak_bisa_dibatalkan(self):
         hasil = crud.update_order_status(self.db, "ORD-STATE-1", new_status="cancelled")
         self.assertIsNone(
             hasil,
             "transisi completed → cancelled harus ditolak oleh state machine",
         )
+        self.db.expire_all()
+        self.assertEqual(self.db.query(Order).filter(Order.order_id == "ORD-STATE-1").one().status, "completed")
+
+    def test_completed_ke_completed_tetap_boleh(self):
+        self.assertIsNotNone(crud.update_order_status(self.db, "ORD-STATE-1", new_status="completed"))
 
 
 class TestBannedUserTrading(unittest.IsolatedAsyncioTestCase):
@@ -131,21 +135,22 @@ class TestBannedUserTrading(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
 
-    @unittest.expectedFailure
     async def test_user_banned_tidak_bisa_mulai_jual(self):
+        """Gerbang global (group -1) menghentikan update user banned sebelum handler jual."""
+        from telegram import Update
+        from telegram.ext import ApplicationHandlerStop
+        from bot.utils.ban_guard import ban_gate
         self.db.add(User(telegram_id=777, username="banned", full_name="Banned", is_banned=True))
         self.db.commit()
-        query = AsyncMock()
-        query.from_user = SimpleNamespace(id=777, first_name="Banned")
-        update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
-        context = SimpleNamespace(user_data={})
-        with patch("bot.handlers.sell.safe_edit_message", new=AsyncMock()) as sem:
-            await start_sell_callback(update, context)
-        teks = sem.call_args.kwargs.get("text", "") if sem.call_args else ""
-        self.assertIn(
-            "blokir", teks.lower(),
-            "user banned harus ditolak di entry trading (is_banned tidak pernah dicek)",
-        )
+        update = Update.de_json({"update_id": 1, "callback_query": {
+            "id": "1", "chat_instance": "ci", "data": "menu_sell",
+            "from": {"id": 777, "is_bot": False, "first_name": "Banned"}}}, None)
+        bot = AsyncMock()
+        context = SimpleNamespace(user_data={"sell_order_id": "X"}, bot=bot)
+        with patch.object(type(update.callback_query), "answer", new=AsyncMock()) as ans,              self.assertRaises(ApplicationHandlerStop):
+            await ban_gate(update, context)
+        self.assertIn("blokir", ans.call_args.args[0].lower())
+        self.assertEqual(context.user_data, {})
 
 
 class TestBankInfoFreeText(unittest.IsolatedAsyncioTestCase):

@@ -114,24 +114,18 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return WAITING_NOMINAL
 
-    try:
-        fee_usd = calculate_fee_idr(nominal_idr, "USD") if nominal_idr <= 1015000 else "N/A"
-    except Exception:
-        fee_usd = "N/A"
-        
-    try:
-        fee_alt = calculate_fee_idr(nominal_idr, "ALTCOIN") if nominal_idr <= 1010000 else "N/A"
-    except Exception:
-        fee_alt = "N/A"
+    # Sama persis dengan fee saat transaksi (tier fixed + tier persen di atas Rp 1,01 jt).
+    def _fee(category):
+        try:
+            return calculate_fee_idr(nominal_idr, category)
+        except Exception:
+            return "N/A"
 
-    try:
-        fee_conv = calculate_fee_idr(nominal_idr, "CONVERT") if nominal_idr <= 1010000 else "N/A"
-    except Exception:
-        fee_conv = "N/A"
+    fee_usd, fee_alt, fee_conv = _fee("USD"), _fee("ALTCOIN"), _fee("CONVERT")
 
     # Build response breakdown
     def fmt_fee(v):
-        return "N/A (di atas batas)" if v == "N/A" else format_idr(v)
+        return "N/A (di bawah minimum)" if v == "N/A" else format_idr(v)
 
     breakdown_text = (
         f"{E_CHART()} <b>RINCIAN SIMULASI BIAYA (FEE)</b>\n\n"
@@ -142,7 +136,7 @@ async def process_nominal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"{E_COIN()} <b>Altcoin Tier:</b> {fmt_fee(fee_alt)}\n"
         f"{E_SWAP()} <b>Convert Tier:</b> {fmt_fee(fee_conv)}\n"
         f"────────────────────\n"
-        f"<i>Catatan: Nominal transaksi di atas batas list resmi silakan hubungi admin.</i>"
+        f"<i>Catatan: pasangan gas mahal (ETH-ETH, TRX-TRON, USDT/USDC-ETH) dikenai tambahan biaya kirim.</i>"
     )
 
     keyboard = [

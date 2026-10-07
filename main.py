@@ -14,6 +14,7 @@ Startup sequence:
 """
 
 import asyncio
+import html
 import logging
 import re
 import signal
@@ -100,6 +101,9 @@ def _cleanup_matched_tx_ids(tx_dict: dict, max_age_seconds: int = 86400) -> None
 # =============================================================
 # 1. DATABASE INITIALISATION & SEEDING
 # =============================================================
+QRIS_EXPIRY_GRACE_SECONDS = 120
+
+
 def init_database():
     """
     Create all SQLAlchemy tables (no-op if they already exist)
@@ -115,6 +119,8 @@ def init_database():
             f"⚠️ [DATABASE] Gagal DDL create_all pada engine aktif: {ddl_err}. "
             "Melakukan fallback ke SQLite lokal..."
         )
+        if db_conn.engine.url.drivername != "sqlite":
+            db_conn.DB_DEGRADED = True  # transaksi user dinonaktifkan (maintenance_guard)
         db_conn.engine = db_conn._create_sqlite_engine("sqlite:///./p2p_bot.db")
         db_conn.SessionLocal.configure(bind=db_conn.engine)
         Base.metadata.create_all(bind=db_conn.engine)
@@ -441,6 +447,18 @@ BOT_COMMAND_MENU = [
 async def set_bot_commands(application: Application) -> None:
     """Daftarkan menu command (tombol Menu di Telegram) — idempotent tiap startup."""
     import asyncio
+    from database import connection as db_conn
+    if db_conn.DB_DEGRADED:
+        from bot.utils.telegram_utils import notify_admins
+        try:
+            await notify_admins(
+                application.bot,
+                "🚨 <b>DATABASE UTAMA TIDAK TERJANGKAU</b>\n\n"
+                "Bot berjalan di SQLite sementara dalam <b>MODE DARURAT</b>: semua transaksi user "
+                "ditolak. Periksa DATABASE_URL / layanan Postgres lalu restart bot.",
+                kind="error", butuh_tindakan=True)
+        except Exception as exc:
+            logger.error("Gagal kirim peringatan mode darurat DB: %s", exc)
     for attempt in (1, 2, 3):
         try:
             await application.bot.set_my_commands(
@@ -477,6 +495,13 @@ def build_bot_application() -> Application:
         .post_init(set_bot_commands)
         .build()
     )
+
+    # --- Gerbang user banned (sebelum semua handler) ---
+    from telegram.ext import TypeHandler
+    from bot.utils.ban_guard import ban_gate
+    from bot.utils.maintenance_guard import maintenance_gate
+    application.add_handler(TypeHandler(Update, maintenance_gate), group=-2)
+    application.add_handler(TypeHandler(Update, ban_gate), group=-1)
 
     # --- Command Handlers ---
     application.add_handler(CommandHandler("start", start_handler))
@@ -663,7 +688,7 @@ async def error_handler(update: object, context) -> None:
         await notify_admins(
             context.bot,
             kind="error", butuh_tindakan=True,
-            text=f"🚨 <b>Bot Error</b>\n\n<code>{context.error}</code>",
+            text=f"🚨 <b>Bot Error</b>\n\n<code>{html.escape(str(context.error)[:3500])}</code>",
         )
     except Exception:
         pass
@@ -791,11 +816,10 @@ def setup_scheduler():
             coalesce=True,
         )
 
-    # --- Monthly Financial Report (hari terakhir bulan, 09:00 WIB) ---
-    from apscheduler.triggers.cron import CronTrigger
+    # --- Monthly Financial Report (tanggal 1, 00:05 WIB, untuk bulan yang baru selesai) ---
     scheduler.add_job(
         _job_send_monthly_report,
-        CronTrigger(day="last", hour=9, minute=0),
+        _monthly_report_trigger(),
         id="monthly_report",
         name="Send monthly financial report to admins",
         max_instances=1,
@@ -862,19 +886,36 @@ async def _job_expire_orders():
                 )
                 .all()
             )
+            gateway_unknown_order_ids = set()
             for order in stale_gopay:
                 try:
-                    if await gopay_service.confirm_payment(
+                    payment_state = await gopay_service.confirm_payment(
                         db, amount=int(order.total_idr), ref_id=order.order_id,
                         kind="buy", created_at=order.created_at,
-                    ):
+                    )
+                    if payment_state is True:
                         # [FIX MEDIUM-1] Pass bot_app agar notifikasi Telegram terkirim
                         from services.bot_runtime import bot_app as _bot_app
-                        await finalize_gopay_buy_payment(db, order, bot=_bot_app)
+                        await finalize_gopay_buy_payment(
+                            db, order, bot=_bot_app, allow_expired_payment=True,
+                        )
+                    elif payment_state is None:
+                        gateway_unknown_order_ids.add(order.order_id)
+                    elif datetime.utcnow() <= (
+                        order.created_at
+                        + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES)
+                        + timedelta(seconds=QRIS_EXPIRY_GRACE_SECONDS)
+                    ):
+                        gateway_unknown_order_ids.add(order.order_id)
                 except Exception as exc:
                     logger.warning("Final check order %s gagal: %s", order.order_id, exc)
+                    gateway_unknown_order_ids.add(order.order_id)
 
-            expired_count = expire_stale_orders(db, minutes=settings.ORDER_EXPIRE_MINUTES)
+            expired_count = expire_stale_orders(
+                db,
+                minutes=settings.ORDER_EXPIRE_MINUTES,
+                exclude_order_ids=gateway_unknown_order_ids,
+            )
             if expired_count > 0:
                 logger.info("Expired %d stale orders", expired_count)
         finally:
@@ -940,7 +981,7 @@ async def _complete_topup(db, topup):
     from bot.utils.formatter import format_idr
     from bot.utils.emojis import tg_emoji
 
-    if not claim_topup_success(db, topup.topup_id):
+    if not claim_topup_success(db, topup.topup_id, allow_expired=True):
         return
 
     topup_mdr = int(topup.mdr_idr or 0)
@@ -1038,7 +1079,7 @@ async def _job_check_pending_topups():
     """Poll GoPay API gateway for pending QRIS topup orders and auto-credit balances."""
     global _topup_last_transactions_fetch, _topup_matched_tx_ids
     from services.gopay_service import gopay_service
-    from database.crud import get_pending_topup_orders, update_topup_status, claim_qris_payment
+    from database.crud import get_pending_topup_orders, expire_topup_if_pending, claim_qris_payment
 
     db = SessionLocal()
     try:
@@ -1053,14 +1094,19 @@ async def _job_check_pending_topups():
             async with sem:
                 # Cek pembayaran DULU, baru expire: user yang bayar di menit
                 # terakhir tetap dikredit (dulu di-expire sebelum dicek).
-                if await gopay_service.confirm_payment(
+                payment_state = await gopay_service.confirm_payment(
                     db, amount=topup.amount_idr, ref_id=topup.topup_id,
                     kind="topup", created_at=topup.created_at,
-                ):
+                )
+                if payment_state is True:
                     await _complete_topup(db, topup)
                     return None
-                if topup.expires_at and datetime.utcnow() > topup.expires_at:
-                    update_topup_status(db, topup.topup_id, "EXPIRED")
+                if payment_state is None:
+                    return topup
+                if topup.expires_at and datetime.utcnow() > (
+                    topup.expires_at + timedelta(seconds=QRIS_EXPIRY_GRACE_SECONDS)
+                ):
+                    expire_topup_if_pending(db, topup.topup_id)
                     return None
                 return topup
 
@@ -1127,7 +1173,9 @@ async def _job_check_pending_buy_payments():
 
         async def _finalize_one(order_id):
             async with sem:
-                await _run_finalize_background(order_id, allow_recovery=True)
+                await _run_finalize_background(
+                    order_id, allow_recovery=True, allow_expired_payment=True,
+                )
 
         if to_process:
             await asyncio.gather(*(_finalize_one(oid) for oid in to_process))
@@ -1137,9 +1185,30 @@ async def _job_check_pending_buy_payments():
         db.close()
 
 
+WIB = timezone(timedelta(hours=7))
+
+
+def _monthly_report_trigger():
+    """Tanggal 1 pukul 00:05 WIB, eksplisit Asia/Jakarta.
+
+    Dulu "hari terakhir 09:00" dalam zona container (UTC = 16:00 WIB) melaporkan bulan
+    berjalan, sehingga transaksi jam-jam terakhir bulan tidak pernah tercatat.
+    """
+    from apscheduler.triggers.cron import CronTrigger
+    return CronTrigger(day=1, hour=0, minute=5, timezone="Asia/Jakarta")
+
+
+def _monthly_report_period(now_utc: datetime) -> tuple[int, int]:
+    """(tahun, bulan) WIB yang baru saja selesai relatif terhadap `now_utc`."""
+    now_wib = now_utc.astimezone(WIB)
+    if now_wib.month == 1:
+        return now_wib.year - 1, 12
+    return now_wib.year, now_wib.month - 1
+
+
 async def _job_send_monthly_report():
     """
-    Kirim laporan keuangan bulanan ke admin di hari terakhir bulan (09:00 WIB).
+    Kirim laporan keuangan bulan yang baru selesai ke admin (tanggal 1, 00:05 WIB).
     Laporan disimpan ke tabel monthly_reports; guard anti-ganda per period.
     """
     try:
@@ -1147,8 +1216,8 @@ async def _job_send_monthly_report():
         from bot.utils.telegram_utils import notify_admins
         from bot.utils.formatter import format_idr
 
-        now = datetime.now()  # waktu lokal (WIB)
-        period = f"{now.year:04d}-{now.month:02d}"
+        year, month = _monthly_report_period(datetime.now(timezone.utc))
+        period = f"{year:04d}-{month:02d}"
 
         db = SessionLocal()
         try:
@@ -1156,7 +1225,7 @@ async def _job_send_monthly_report():
                 logger.info("Laporan %s sudah tercatat — skip (anti ganda).", period)
                 return
 
-            report = build_monthly_report(db, now.year, now.month)
+            report = build_monthly_report(db, year, month)
             db.add(report)
             db.commit()
             db.refresh(report)
@@ -1164,7 +1233,7 @@ async def _job_send_monthly_report():
                         period, report.order_count, format_idr(report.fee_idr))
 
             msg = (
-                f"📊 <b>LAPORAN KEUANGAN: {now.strftime('%B %Y')}</b>\n\n"
+                f"📊 <b>LAPORAN KEUANGAN: {datetime(year, month, 1).strftime('%B %Y')}</b>\n\n"
                 f"✅ <b>Order Berhasil:</b> {report.order_count} "
                 f"(Beli {report.order_buy} · Jual {report.order_sell} · Swap {report.order_swap})\n"
                 f"💰 <b>Volume IDR:</b> {format_idr(report.volume_idr)}\n"

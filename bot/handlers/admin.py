@@ -667,14 +667,30 @@ def top_spender_funding(db, period_days: int = 30) -> tuple[int, int, int]:
     return needed, balance, max(0, needed - balance)
 
 
-def build_admin_top_spenders_keyboard(period_days: int = 30, shortfall: int = 0) -> InlineKeyboardMarkup:
+def build_admin_top_spenders_keyboard(
+    period_days: int = 30,
+    shortfall: int = 0,
+    *,
+    db=None,
+    admin_id: int = None,
+    chat_id: int = None,
+    message_id: int = None,
+) -> InlineKeyboardMarkup:
     """Keyboard navigasi Top Spender. Kas Bot kurang -> tombol bagi diganti tombol isi Kas Bot (QRIS)."""
     if shortfall > 0:
         first_row = [InlineKeyboardButton("📲 Isi Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu")]
+    elif db is not None and admin_id is not None:
+        token = crud.issue_admin_action_token(
+            db, admin_id, "top_spender", str(int(period_days)),
+            chat_id=chat_id, message_id=message_id,
+        )
+        first_row = [InlineKeyboardButton(
+            "💰 Eksekusi & Bagikan Hadiah ke Top 10",
+            callback_data=f"admin_top_spender_exec_{period_days}_{token}",
+        )]
     else:
-        first_row = [InlineKeyboardButton("💰 Eksekusi & Bagikan Hadiah ke Top 10", callback_data=f"admin_top_spender_exec_{period_days}")]
+        first_row = None
     buttons = [
-        first_row,
         [
             InlineKeyboardButton("📅 7 Hari", callback_data="admin_top_spender_p_7"),
             InlineKeyboardButton("📅 30 Hari", callback_data="admin_top_spender_p_30"),
@@ -692,6 +708,8 @@ def build_admin_top_spenders_keyboard(period_days: int = 30, shortfall: int = 0)
             InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
+    if first_row:
+        buttons.insert(0, first_row)
     return InlineKeyboardMarkup(buttons)
 
 
@@ -718,7 +736,14 @@ def build_admin_random_draw_view(db, pool_segment: str = "ACTIVE_30D") -> str:
     return text
 
 
-def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> InlineKeyboardMarkup:
+def build_admin_random_draw_keyboard(
+    pool_segment: str = "ACTIVE_30D",
+    *,
+    db=None,
+    admin_id: int = None,
+    chat_id: int = None,
+    message_id: int = None,
+) -> InlineKeyboardMarkup:
     """Keyboard navigasi Undi Pemenang Acak."""
     buttons = [
         [
@@ -736,18 +761,6 @@ def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> Inline
             ),
         ],
         [
-            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 25.000", callback_data=f"admin_draw_exec_{pool_segment}_5_25000"),
-        ],
-        [
-            InlineKeyboardButton("🎲 Undi 5 Orang @ Rp 50.000", callback_data=f"admin_draw_exec_{pool_segment}_5_50000"),
-        ],
-        [
-            InlineKeyboardButton("🎲 Undi 10 Orang @ Rp 20.000", callback_data=f"admin_draw_exec_{pool_segment}_10_20000"),
-        ],
-        [
-            InlineKeyboardButton("🎲 Undi 20 Orang @ Rp 10.000", callback_data=f"admin_draw_exec_{pool_segment}_20_10000"),
-        ],
-        [
             InlineKeyboardButton("🔄 Refresh Pool", callback_data=f"admin_draw_pool_{pool_segment}"),
         ],
         [
@@ -757,6 +770,25 @@ def build_admin_random_draw_keyboard(pool_segment: str = "ACTIVE_30D") -> Inline
             InlineKeyboardButton("🏠 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
+    if db is not None and admin_id is not None:
+        presets = (
+            (5, 25_000, "🎲 Undi 5 Orang @ Rp 25.000"),
+            (5, 50_000, "🎲 Undi 5 Orang @ Rp 50.000"),
+            (10, 20_000, "🎲 Undi 10 Orang @ Rp 20.000"),
+            (20, 10_000, "🎲 Undi 20 Orang @ Rp 10.000"),
+        )
+        exec_rows = []
+        for winner_count, reward, label in presets:
+            payload = f"{pool_segment}|{winner_count}|{reward}"
+            token = crud.issue_admin_action_token(
+                db, admin_id, "random_draw", payload,
+                chat_id=chat_id, message_id=message_id,
+            )
+            exec_rows.append([InlineKeyboardButton(
+                label,
+                callback_data=f"admin_draw_exec_{pool_segment}_{winner_count}_{reward}_{token}",
+            )])
+        buttons[1:1] = exec_rows
     return InlineKeyboardMarkup(buttons)
 
 
@@ -980,7 +1012,20 @@ def build_admin_send_balance_amount_view(user: User) -> tuple[str, InlineKeyboar
     return text, InlineKeyboardMarkup(buttons)
 
 
-def build_admin_send_balance_confirm_view(user: User, amount: int) -> tuple[str, InlineKeyboardMarkup]:
+def _callback_chat_id(update) -> int | None:
+    chat = getattr(update, "effective_chat", None)
+    return getattr(chat, "id", None) if chat is not None else None
+
+
+def build_admin_send_balance_confirm_view(
+    user: User,
+    amount: int,
+    *,
+    db=None,
+    admin_id: int = None,
+    chat_id: int = None,
+    message_id: int = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Tampilan konfirmasi eksekusi transfer saldo admin."""
     uname = f"@{user.username}" if user.username else f"User_{user.telegram_id}"
     old_bal = int(user.balance_idr or 0)
@@ -996,18 +1041,30 @@ def build_admin_send_balance_confirm_view(user: User, amount: int) -> tuple[str,
         f"Apakah Anda yakin ingin memproses transfer saldo ini sekarang?"
     )
 
-    buttons = [
-        [
-            InlineKeyboardButton("🚀 Ya, Kirim Saldo Sekarang!", callback_data=f"admin_send_bal_confirm_{user.telegram_id}_{amount}"),
-        ],
-        [
-            InlineKeyboardButton("🔙 Batal / Ganti Nominal", callback_data=f"admin_send_bal_user_{user.telegram_id}"),
-        ],
-    ]
+    token = ""
+    if db is not None and admin_id is not None:
+        token = crud.issue_admin_action_token(
+            db, admin_id, "send_balance", f"{int(user.telegram_id)}:{int(amount)}",
+            chat_id=chat_id, message_id=message_id,
+        )
+    buttons = []
+    if token:
+        buttons.append([
+            InlineKeyboardButton("🚀 Ya, Kirim Saldo Sekarang!", callback_data=f"admin_send_bal_confirm_{token}"),
+        ])
+    buttons.append([
+        InlineKeyboardButton("🔙 Batal / Ganti Nominal", callback_data=f"admin_send_bal_user_{user.telegram_id}"),
+    ])
     return text, InlineKeyboardMarkup(buttons)
 
 
-def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
+def build_admin_treasury_view(
+    db,
+    *,
+    admin_id: int = None,
+    chat_id: int = None,
+    message_id: int = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Tampilan manajemen Kas & Dompet Bot (Campaign Pool)."""
     treasury_bal = crud.get_bot_treasury_balance(db)
 
@@ -1026,18 +1083,6 @@ def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("📲 Top-Up Kas Bot via QRIS (Uang Asli)", callback_data="admin_treasury_qris_menu"),
         ],
         [
-            InlineKeyboardButton("+Rp 100.000", callback_data="admin_treasury_topup_100000"),
-            InlineKeyboardButton("+Rp 250.000", callback_data="admin_treasury_topup_250000"),
-        ],
-        [
-            InlineKeyboardButton("+Rp 500.000", callback_data="admin_treasury_topup_500000"),
-            InlineKeyboardButton("+Rp 1.000.000", callback_data="admin_treasury_topup_1000000"),
-        ],
-        [
-            InlineKeyboardButton("+Rp 2.500.000", callback_data="admin_treasury_topup_2500000"),
-            InlineKeyboardButton("+Rp 5.000.000", callback_data="admin_treasury_topup_5000000"),
-        ],
-        [
             InlineKeyboardButton("✏️ Top Up Nominal Kustom", callback_data="admin_treasury_custom"),
             InlineKeyboardButton("🔄 Atur Saldo Manual", callback_data="admin_treasury_set_manual"),
         ],
@@ -1046,6 +1091,19 @@ def build_admin_treasury_view(db) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main"),
         ],
     ]
+    if admin_id is not None:
+        presets = (100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000)
+        preset_buttons = [
+            InlineKeyboardButton(
+                f"+{format_idr(amount)}",
+                callback_data=(
+                    f"admin_treasury_topup_{amount}_"
+                    f"{crud.issue_admin_action_token(db, admin_id, 'treasury_preset', str(amount), chat_id=chat_id, message_id=message_id)}"
+                ),
+            )
+            for amount in presets
+        ]
+        buttons[1:1] = [preset_buttons[i:i + 2] for i in range(0, len(preset_buttons), 2)]
     return text, InlineKeyboardMarkup(buttons)
 
 
@@ -1092,15 +1150,31 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
     else:
         status_msg = await update.message.reply_text("⏳ <i>Menyiapkan invoice QRIS Kas Bot...</i>", parse_mode="HTML")
 
-    topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}"
+    import secrets
+    topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}-{secrets.token_hex(3).upper()}"
     expires_at = datetime.utcnow() + timedelta(minutes=30)
 
     db = SessionLocal()
     try:
         from database.crud import generate_unique_payment_code, create_topup_order
         from services.fee_service import calculate_qris_mdr
-        unique_code = generate_unique_payment_code(db)
         mdr_idr = calculate_qris_mdr(amount)
+        from services.fee_service import qris_max_nominal
+        if amount > qris_max_nominal():
+            await status_msg.edit_text(
+                f"❌ Top-up Kas Bot via QRIS maksimal {format_idr(qris_max_nominal())} per invoice "
+                "(batas QRIS Rp 10.000.000 termasuk pajak & kode unik). Bagi menjadi beberapa invoice.",
+                parse_mode="HTML",
+            )
+            return
+        unique_code = generate_unique_payment_code(db, base_amount=amount + mdr_idr)
+        if unique_code is None:
+            await status_msg.edit_text(
+                "⏳ Antrean QRIS sedang penuh (nominal bentrok dengan tagihan lain). "
+                "Coba lagi beberapa menit lagi atau ubah nominal.",
+                parse_mode="HTML",
+            )
+            return
         final_amount = amount + mdr_idr + unique_code
         topup_order = create_topup_order(
             db=db,
@@ -1553,7 +1627,10 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             if not target_user:
                 await query.answer("User tidak ditemukan di DB.", show_alert=True)
                 return
-            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            text, markup = build_admin_send_balance_confirm_view(
+                target_user, amount, db=db, admin_id=user_id,
+                chat_id=query.message.chat_id, message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer()
 
@@ -1572,17 +1649,34 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             )
 
         elif data.startswith("admin_send_bal_confirm_"):
-            parts = data.replace("admin_send_bal_confirm_", "").split("_")
-            target_id = int(parts[0])
-            amount = int(parts[1])
+            token = data.removeprefix("admin_send_bal_confirm_")
+            payload = crud.claim_admin_action_token(
+                db, token, user_id, "send_balance",
+                chat_id=query.message.chat_id, message_id=query.message.message_id,
+            )
+            if payload is None:
+                await query.answer("ℹ️ Konfirmasi ini sudah diproses, bukan milik admin ini, atau kedaluwarsa.", show_alert=True)
+                return
+            try:
+                target_text, amount_text = payload.split(":", 1)
+                target_id, amount = int(target_text), int(amount_text)
+            except (TypeError, ValueError):
+                db.rollback()
+                await query.answer("Tombol tidak valid. Ulangi dari menu Kirim Saldo.", show_alert=True)
+                return
+            if not (1_000 <= amount <= 10_000_000):
+                db.rollback()
+                await query.answer("Nominal di luar batas Rp 1.000 – Rp 10.000.000.", show_alert=True)
+                return
 
             target_user = db.query(User).filter(User.telegram_id == target_id).first()
             if not target_user:
+                db.rollback()
                 await query.answer("User tidak ditemukan.", show_alert=True)
                 return
 
             old_bal = float(target_user.balance_idr or 0)
-            new_bal = crud.credit_user_balance(db, target_id, float(amount))
+            new_bal = crud.credit_user_balance(db, target_id, amount)
 
             # Audit log
             db.add(AuditLog(
@@ -1635,15 +1729,35 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data == "admin_panel_treasury" or data == "camp_treasury_view":
             context.user_data.pop("admin_awaiting_treasury_custom", None)
             context.user_data.pop("admin_awaiting_treasury_set_manual", None)
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Kas bot dimuat.")
 
         elif data.startswith("admin_treasury_topup_"):
-            amount = int(data.replace("admin_treasury_topup_", ""))
+            try:
+                amount_text, token = data.removeprefix("admin_treasury_topup_").rsplit("_", 1)
+                amount = int(amount_text)
+            except (TypeError, ValueError):
+                await query.answer("Tombol topup tidak valid. Buka ulang menu Kas Bot.", show_alert=True)
+                return
+            if amount not in {100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000}:
+                await query.answer("Nominal preset tidak valid.", show_alert=True)
+                return
+            if crud.claim_admin_action_token(
+                db, token, user_id, "treasury_preset", str(amount),
+                chat_id=query.message.chat_id, message_id=query.message.message_id,
+            ) is None:
+                await query.answer("Tombol ini sudah diproses atau kedaluwarsa.", show_alert=True)
+                return
             new_bal = crud.topup_bot_treasury(db, amount, admin_id=user_id, note="Admin Panel Preset Topup")
             await query.answer(f"✅ Kas bot berhasil di-topup +{format_idr(amount)}!\nSaldo sekarang: {format_idr(new_bal)}", show_alert=True)
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
 
         elif data == "admin_treasury_custom":
@@ -1957,16 +2071,24 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception:
                     period = 30
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
+            markup = build_admin_top_spenders_keyboard(
+                period_days=period, shortfall=top_spender_funding(db, period)[2],
+                db=db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer(f"Top Spender ({period} hari) dimuat.")
 
         elif data.startswith("admin_top_spender_exec_"):
-            period = 30
             try:
-                period = int(data.replace("admin_top_spender_exec_", ""))
-            except Exception:
-                period = 30
+                period_text, token = data.removeprefix("admin_top_spender_exec_").rsplit("_", 1)
+                period = int(period_text)
+            except (TypeError, ValueError):
+                await query.answer("Tombol Top Spender tidak valid. Buka ulang menunya.", show_alert=True)
+                return
+            if period not in {0, 7, 30, 90}:
+                await query.answer("Periode Top Spender tidak valid.", show_alert=True)
+                return
 
             await query.answer("⏳ Sedang memproses pembagian reward Top Spender...", show_alert=False)
             from services.campaign_service import execute_top_spender_campaign
@@ -1979,6 +2101,9 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 admin_id=user_id,
                 period_days=period,
                 bot_username=bot_username,
+                action_token=token,
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
             )
 
             if result.get("error"):
@@ -1993,7 +2118,11 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             text = build_admin_top_spenders_view(db, period_days=period)
-            markup = build_admin_top_spenders_keyboard(period_days=period, shortfall=top_spender_funding(db, period)[2])
+            markup = build_admin_top_spenders_keyboard(
+                period_days=period, shortfall=top_spender_funding(db, period)[2],
+                db=db, admin_id=user_id, chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
 
         # ─── RANDOM DRAW / UNDI PEMENANG (Phase 7) ───────────
@@ -2002,47 +2131,63 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             if data.startswith("admin_draw_pool_"):
                 pool_seg = data.replace("admin_draw_pool_", "")
             text = build_admin_random_draw_view(db, pool_segment=pool_seg)
-            markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
+            markup = build_admin_random_draw_keyboard(
+                pool_segment=pool_seg, db=db, admin_id=user_id,
+                chat_id=query.message.chat_id, message_id=query.message.message_id,
+            )
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer(f"Pool {pool_seg} dimuat.")
 
         elif data.startswith("admin_draw_exec_"):
-            # format: admin_draw_exec_{pool_segment}_{winner_count}_{reward_per_winner}
-            parts = data.replace("admin_draw_exec_", "").split("_")
-            if len(parts) >= 3:
-                pool_seg = parts[0]
-                winner_cnt = int(parts[1])
-                reward_amt = int(parts[2])
+            try:
+                pool_seg, winner_text, reward_text, token = data.removeprefix("admin_draw_exec_").rsplit("_", 3)
+                winner_cnt = int(winner_text)
+                reward_amt = int(reward_text)
+            except (TypeError, ValueError):
+                await query.answer("Tombol undian tidak valid. Buka ulang menu undian.", show_alert=True)
+                return
+            if pool_seg not in {"ALL", "BUYERS", "ACTIVE_30D"}:
+                await query.answer("Pool undian tidak valid.", show_alert=True)
+                return
+            if not (1 <= winner_cnt <= 100 and 1 <= reward_amt <= 10_000_000):
+                await query.answer("Jumlah pemenang atau nominal hadiah tidak valid.", show_alert=True)
+                return
 
-                await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
-                from services.campaign_service import execute_random_winner_campaign
-                bot_me = await context.bot.get_me() if context.bot else None
-                bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+            await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
+            from services.campaign_service import execute_random_winner_campaign
+            bot_me = await context.bot.get_me() if context.bot else None
+            bot_username = bot_me.username if bot_me else "Hsnpro_bot"
 
-                res = await execute_random_winner_campaign(
-                    db=db,
-                    bot=context.bot,
-                    admin_id=user_id,
-                    pool_segment=pool_seg,
-                    winner_count=winner_cnt,
-                    reward_per_winner=reward_amt,
-                    bot_username=bot_username,
+            res = await execute_random_winner_campaign(
+                db=db,
+                bot=context.bot,
+                admin_id=user_id,
+                pool_segment=pool_seg,
+                winner_count=winner_cnt,
+                reward_per_winner=reward_amt,
+                bot_username=bot_username,
+                action_token=token,
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id,
+            )
+
+            if res.get("error"):
+                await query.answer(f"⚠️ {res['error']}", show_alert=True)
+            else:
+                cnt = res.get("distributed_count", 0)
+                tot = res.get("total_amount", 0)
+                ns = res.get("notif_success", 0)
+                await query.answer(
+                    f"🎉 {cnt} pemenang acak terpilih! Total: {format_idr(tot)}. Notif: {ns}/{cnt}",
+                    show_alert=True,
                 )
 
-                if res.get("error"):
-                    await query.answer(f"⚠️ {res['error']}", show_alert=True)
-                else:
-                    cnt = res.get("distributed_count", 0)
-                    tot = res.get("total_amount", 0)
-                    ns = res.get("notif_success", 0)
-                    await query.answer(
-                        f"🎉 {cnt} pemenang acak terpilih! Total: {format_idr(tot)}. Notif: {ns}/{cnt}",
-                        show_alert=True,
-                    )
-
-                text = build_admin_random_draw_view(db, pool_segment=pool_seg)
-                markup = build_admin_random_draw_keyboard(pool_segment=pool_seg)
-                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            text = build_admin_random_draw_view(db, pool_segment=pool_seg)
+            markup = build_admin_random_draw_keyboard(
+                pool_segment=pool_seg, db=db, admin_id=user_id,
+                chat_id=query.message.chat_id, message_id=query.message.message_id,
+            )
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
 
         # ─── LOYALTY CONFIG (Phase 7) ─────────────────────────
         elif data == "admin_panel_loyalty":
@@ -2689,6 +2834,20 @@ async def orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         db.close()
 
 
+def _confirmable_payout_order(order) -> bool:
+    """Order Beli/Convert yang user-nya SUDAH membayar, sehingga admin boleh menyelesaikannya
+    setelah mengirim koin manual. Belum bayar/expired/cancelled tidak termasuk."""
+    status = (order.status or "").lower()
+    if status == "completed":
+        return True
+    if status in ("paid", "payout_processing", "manual_review", "failed",
+                  "crypto_confirmed", "payout_queued"):
+        return True
+    # Beli pakai Saldo Bot: status tetap "pending" tetapi saldo sudah dipotong (paid_at terisi).
+    return (status == "pending" and order.order_type == "buy"
+            and order.payment_method == "BOT_BALANCE" and order.paid_at is not None)
+
+
 async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Mengonfirmasi penyelesaian order secara manual oleh admin.
@@ -2720,6 +2879,12 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if order.order_type == "sell" and order.status not in ("CRYPTO_CONFIRMED", "completed", "COMPLETED"):
             await update.message.reply_text("⚠️ Deposit belum terverifikasi. Jangan transfer Rupiah/selesaikan order dahulu.")
             return
+        if order.order_type != "sell" and not _confirmable_payout_order(order):
+            await update.message.reply_text(
+                f"⛔ Order <code>{html.escape(order_id)}</code> berstatus <b>{html.escape(order.status)}</b> — "
+                "pembayaran/deposit user belum diterima, jadi tidak bisa diselesaikan manual.",
+                parse_mode="HTML")
+            return
         was_already_completed = order.status.lower() == "completed"
 
         if not was_already_completed:
@@ -2730,7 +2895,7 @@ async def confirm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 new_status="completed", 
                 completed_at=datetime.utcnow()
             )
-            crud.release_order_inventory(db, order_id)
+            crud.release_order_inventory(db, order_id, consumed=True)
         
         # Kirim notifikasi sukses ke user
         from bot.utils.telegram_utils import safe_send_message
@@ -2917,6 +3082,98 @@ async def admin_force_sell_callback(update: Update, context: ContextTypes.DEFAUL
         db.close()
 
 
+async def admin_verify_sell_deposit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol eskalasi hash: admin menyatakan deposit sell sah — BUKAN Rupiah sudah dikirim.
+
+    Order menjadi CRYPTO_CONFIRMED (hash dikunci ke order ini), user diberi tahu deposit
+    masuk, dan admin menerima langkah berikutnya: transfer Rupiah lalu "Sudah Ditransfer".
+    """
+    from html import escape as _esc
+    from sqlalchemy.exc import IntegrityError
+    from database.models import DepositClaim
+    from services import tx_verifier
+    from services.detector import DepositDetector
+    from bot.utils.telegram_utils import safe_send_message
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+
+    order_id = query.data.replace("admin_verify_sell_deposit_", "").strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order or order.order_type != "sell":
+            await query.answer("❌ Order jual tidak ditemukan.", show_alert=True)
+            return
+        if order.status.lower() in ("completed", "cancelled", "rejected"):
+            await query.answer(f"ℹ️ Order sudah {order.status}. Tidak ada yang diubah.", show_alert=True)
+            return
+
+        if order.status != "CRYPTO_CONFIRMED":
+            raw_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
+            tx_hash = ""
+            if raw_hash and not raw_hash.startswith("PHOTO:"):
+                try:
+                    tx_hash = tx_verifier.normalize_tx_hash(order.network, raw_hash)
+                except ValueError:
+                    tx_hash = raw_hash
+            if tx_hash and DepositDetector._is_hash_used(db, tx_hash, exclude_order=order_id):
+                await query.answer("⛔ Hash ini sudah dipakai order lain. Periksa manual.", show_alert=True)
+                return
+            old_status = order.status
+            try:
+                if tx_hash and not db.query(DepositClaim).filter(
+                        DepositClaim.tx_hash == tx_hash, DepositClaim.order_id == order_id).first():
+                    db.add(DepositClaim(network=order.network.upper(), tx_hash=tx_hash, order_id=order_id))
+                    db.flush()
+                changed = db.query(Order).filter(
+                    Order.order_id == order_id, Order.status == old_status,
+                ).update({"status": "CRYPTO_CONFIRMED", "deposit_tx_hash": tx_hash or order.deposit_tx_hash},
+                         synchronize_session=False)
+                if changed != 1:
+                    db.rollback()
+                    await query.answer("ℹ️ Status order berubah, coba muat ulang.", show_alert=True)
+                    return
+                db.add(AuditLog(
+                    telegram_id=order.telegram_id, action="SELL_DEPOSIT_MANUAL_VERIFIED",
+                    order_id=order_id, from_status=old_status, to_status="CRYPTO_CONFIRMED",
+                    details=f"Admin {user_id} memverifikasi deposit manual. Hash: {tx_hash or '-'}",
+                ))
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                await query.answer("⛔ Hash ini sudah dipakai order lain. Periksa manual.", show_alert=True)
+                return
+            db.refresh(order)
+            await safe_send_message(
+                context.bot, order.telegram_id,
+                f"✅ <b>Deposit Order <code>{_esc(order_id)}</code> Terverifikasi</b>\n\n"
+                "Admin akan segera memproses pembayaran Rupiah ke rekeningmu.")
+
+        await query.answer("✅ Deposit ditandai terverifikasi. Lanjutkan transfer Rupiah.", show_alert=False)
+        await query.message.reply_text(
+            f"💰 <b>DEPOSIT SELL TERVERIFIKASI (MANUAL)</b>\n\n"
+            f"Order: <code>{_esc(order_id)}</code>\n"
+            f"User ID: <code>{order.telegram_id}</code>\n"
+            f"‼️ <b>TRANSFER RUPIAH:</b> <b>{format_idr(order.total_idr)}</b> ke rekening:\n"
+            f"<code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
+            f"Setelah transfer, tekan tombol di bawah.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_confirm_sell_{order_id}"),
+                InlineKeyboardButton("📸 Upload Bukti Transfer", callback_data=f"admin_upload_proof_{order_id}"),
+            ]]),
+        )
+    except Exception as e:
+        logger.error(f"Error admin_verify_sell_deposit_callback {order_id}: {e}", exc_info=True)
+        await query.answer("❌ Gagal memproses verifikasi deposit.", show_alert=True)
+    finally:
+        db.close()
+
+
 async def verifysell_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Command /verifysell <order_id>: verifikasi ulang deposit order jual (admin)."""
     if not is_admin(update.effective_user.id):
@@ -3033,7 +3290,7 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
             new_status="completed",
             completed_at=datetime.utcnow(),
         )
-        crud.release_order_inventory(db, order_id)
+        crud.release_order_inventory(db, order_id, consumed=True)
 
         # Buat caption menarik untuk user
         from bot.utils.messages import format_sell_bank_info
@@ -3602,8 +3859,63 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
     db = SessionLocal()
     try:
         order = crud.get_order_by_id(db, order_id)
-        if order:
-            crud.update_order_status(db, order_id, new_status="rejected", failure_reason="Ditolak oleh admin")
+        if not order or order.order_type != "buy":
+            await query.answer("❌ Order beli tidak ditemukan.", show_alert=True)
+            return
+
+        # Order yang sedang atau sudah payout tidak boleh ditolak dari sini
+        if order.status in ("paid", "payout_processing", "completed"):
+            await query.answer(
+                f"⛔ Order berstatus {order.status} dan sedang/sudah diproses — tidak bisa ditolak.",
+                show_alert=True,
+            )
+            return
+
+        # B9: Order bertipe Saldo Bot yang ditolak admin -> otomatis refund ke saldo bot user
+        if order.payment_method == "BOT_BALANCE":
+            refund = crud.reject_and_refund_bot_balance_order(db, order_id, user_id)
+            if not refund.get("refunded"):
+                reason = refund.get("reason")
+                if reason == "debit_not_confirmed":
+                    message = "⛔ Debit saldo order ini tidak tercatat. Tidak dilakukan refund otomatis agar saldo tidak bertambah tanpa dasar."
+                elif reason == "invalid_refund_amount":
+                    message = "⛔ Nominal refund tidak valid. Order tidak diubah; periksa data order."
+                else:
+                    message = f"ℹ️ Order tidak dapat ditolak otomatis (status: {refund.get('status', order.status)})."
+                await query.answer(message, show_alert=True)
+                return
+
+            refund_amount = int(refund["amount"])
+            db.refresh(order)
+            crud.release_order_inventory(db, order_id)
+
+            from bot.utils.telegram_utils import safe_send_message
+            await safe_send_message(
+                context.bot, order.telegram_id,
+                f"❌ <b>Order {order_id} Ditolak</b>\n\n"
+                f"Order beli Anda ditolak oleh admin.\n"
+                f"Dana sebesar <b>{format_idr(refund_amount)}</b> telah otomatis dikembalikan ke <b>Saldo Bot</b> Anda.",
+            )
+            await query.answer("Order ditolak & Saldo Bot berhasil di-refund ke user.")
+            caption_now = query.message.caption or ""
+            await query.edit_message_caption(
+                caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN (SALDO DI-REFUND)</b>",
+                parse_mode="HTML",
+            )
+            return
+
+        if order.payment_method == "GOPAY_QRIS":
+            if order.status != "pending" or order.paid_at:
+                await query.answer(
+                    f"⛔ Order berstatus {order.status} ({order.payment_method or '-'}) dan sudah dibayar/diproses — "
+                    "tidak bisa ditolak dari sini.", show_alert=True)
+                return
+            changed = db.query(Order).filter(Order.order_id == order_id, Order.status == "pending").update(
+                {"status": "rejected", "failure_reason": "Ditolak oleh admin"}, synchronize_session=False)
+            db.commit()
+            if changed != 1:
+                await query.answer("ℹ️ Status order sudah berubah.", show_alert=True)
+                return
             crud.release_order_inventory(db, order_id)
             from bot.utils.telegram_utils import safe_send_message
             await safe_send_message(
@@ -3611,12 +3923,24 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 f"❌ <b>Order {order_id} Ditolak</b>\n"
                 f"Bukti pembayaran Anda tidak dapat diverifikasi oleh admin. Silakan hubungi admin jika ada kendala."
             )
-        await query.answer("Order berhasil ditolak.")
-        caption_now = query.message.caption or ""
-        await query.edit_message_caption(
-            caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
-            parse_mode="HTML"
+            await query.answer("Order berhasil ditolak.")
+            caption_now = query.message.caption or ""
+            await query.edit_message_caption(
+                caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
+                parse_mode="HTML"
+            )
+            return
+
+        await query.answer(
+            f"⛔ Order berstatus {order.status} ({order.payment_method or '-'}) tidak dapat ditolak dari sini.",
+            show_alert=True,
         )
+    except Exception as e:
+        logger.error(f"Error admin_reject_buy_callback {order_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Terjadi kesalahan saat memproses penolakan order.", show_alert=True)
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -3641,7 +3965,8 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
             await query.answer("ℹ️ Topup ini sudah LUNAS.", show_alert=True)
             return
 
-        if not crud.claim_topup_success(db, topup_id):
+        # Admin sudah memeriksa bukti: topup EXPIRED (bayar di menit terakhir) tetap bisa dikredit.
+        if not crud.claim_topup_success(db, topup_id, allow_expired=True):
             await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
             return
 
@@ -3665,6 +3990,12 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
             caption=f"{caption_now}\n\n✅ <b>APPROVED & SALDO DITAMBAHKAN OLEH ADMIN</b>",
             parse_mode="HTML"
         )
+    except Exception as e:
+        logger.error(f"Error admin_approve_topup_callback {topup_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Gagal memproses approval topup.", show_alert=True)
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -3680,7 +4011,14 @@ async def admin_reject_topup_callback(update: Update, context: ContextTypes.DEFA
     topup_id = query.data.replace("admin_reject_topup_", "")
     db = SessionLocal()
     try:
-        crud.update_topup_status(db, topup_id, "CANCELLED")
+        # Hanya topup yang masih menunggu; topup SUCCESS (saldo sudah masuk) tidak boleh dibatalkan.
+        changed = db.query(TopupOrder).filter(
+            TopupOrder.topup_id == topup_id, TopupOrder.status.in_(["PENDING", "EXPIRED"]),
+        ).update({"status": "CANCELLED"}, synchronize_session=False)
+        db.commit()
+        if changed != 1:
+            await query.answer("⛔ Topup sudah diproses/lunas — tidak bisa ditolak.", show_alert=True)
+            return
         topup = crud.get_topup_order_by_id(db, topup_id)
         if topup:
             from bot.utils.telegram_utils import safe_send_message
@@ -3695,6 +4033,12 @@ async def admin_reject_topup_callback(update: Update, context: ContextTypes.DEFA
             caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
             parse_mode="HTML"
         )
+    except Exception as e:
+        logger.error(f"Error admin_reject_topup_callback {topup_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Gagal memproses penolakan topup.", show_alert=True)
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -3749,7 +4093,16 @@ async def admin_reject_swap_callback(update: Update, context: ContextTypes.DEFAU
     order_id = query.data.replace("admin_reject_swap_", "")
     db = SessionLocal()
     try:
-        crud.update_order_status(db, order_id, "CANCELLED")
+        # Deposit yang sudah terkonfirmasi/sedang dibayar tidak boleh dibatalkan — koin user tertahan.
+        changed = db.query(Order).filter(
+            Order.order_id == order_id, Order.order_type == "swap",
+            Order.status.in_(["WAITING_CRYPTO_DEPOSIT", "expired"]),
+        ).update({"status": "CANCELLED"}, synchronize_session=False)
+        db.commit()
+        if changed != 1:
+            await query.answer("⛔ Deposit convert sudah terkonfirmasi/diproses — tidak bisa ditolak. "
+                               "Gunakan Approve atau proses manual.", show_alert=True)
+            return
         order = crud.get_order_by_id(db, order_id)
         if order:
             from bot.utils.telegram_utils import safe_send_message
@@ -4023,13 +4376,18 @@ async def bulkcredit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_ids = []
     for arg in context.args[1:]:
         try:
-            target_ids.append(int(arg))
+            tid = int(arg)
+            if tid not in target_ids:  # ID ganda dikredit sekali saja
+                target_ids.append(tid)
         except ValueError:
             await update.message.reply_text(f"❌ ID <code>{arg}</code> bukan angka valid.", parse_mode="HTML")
             return
 
     if not target_ids:
         await update.message.reply_text("❌ Tidak ada user ID yang diberikan.")
+        return
+    if len(target_ids) > 50:
+        await update.message.reply_text("❌ Maksimal 50 user per bulk credit.")
         return
 
     await update.message.reply_text(
@@ -4350,7 +4708,10 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
                 return True
 
             context.user_data.pop("admin_awaiting_send_bal_custom_amt", None)
-            text, markup = build_admin_send_balance_confirm_view(target_user, amount)
+            text, markup = build_admin_send_balance_confirm_view(
+                target_user, amount, db=db, admin_id=user_id,
+                chat_id=_callback_chat_id(update),
+            )
             await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
             return True
 
@@ -4372,7 +4733,9 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
                 f"<i>Saldo siap digunakan untuk alokasi campaign, giveaway, dan reward loyalitas.</i>",
                 parse_mode="HTML"
             )
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=_callback_chat_id(update),
+            )
             await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
             return True
 
@@ -4392,7 +4755,9 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
                 f"🏦 <b>Saldo Kas Baru:</b> <b>{format_idr(new_bal)}</b>",
                 parse_mode="HTML"
             )
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=_callback_chat_id(update),
+            )
             await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
             return True
 
@@ -4486,7 +4851,9 @@ async def topup_bot_command_handler(update: Update, context: ContextTypes.DEFAUL
     db = SessionLocal()
     try:
         if not context.args:
-            text, markup = build_admin_treasury_view(db)
+            text, markup = build_admin_treasury_view(
+                db, admin_id=user_id, chat_id=_callback_chat_id(update),
+            )
             await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
             return
 
