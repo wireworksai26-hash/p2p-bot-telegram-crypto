@@ -12,6 +12,7 @@ import html
 import asyncio
 import logging
 from types import SimpleNamespace
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Any
 
@@ -151,6 +152,42 @@ def format_testimony_message(
     return msg
 
 
+def _resolve_bot(sender):
+    """
+    Kembalikan objek yang punya send_message. Modul detector/watchdog/buy meneruskan
+    telegram Application (services.bot_runtime.bot_app), yang tidak punya send_message
+    sendiri — objek Bot-nya ada di `.bot`. Tanpa ini testimoni gagal diam-diam.
+    """
+    if sender is None:
+        return None
+    if callable(getattr(sender, "send_message", None)):
+        return sender
+    inner = getattr(sender, "bot", None)
+    if inner is not None and callable(getattr(inner, "send_message", None)):
+        return inner
+    return None
+
+
+def _mark_posted(order_id: Optional[str]) -> None:
+    """Tandai di DB bahwa testimoni order sudah terkirim (dipakai sweeper agar tidak dobel)."""
+    if not order_id:
+        return
+    try:
+        from database.connection import SessionLocal
+        from database.models import Order
+        db = SessionLocal()
+        try:
+            db.query(Order).filter(Order.order_id == order_id).update(
+                {"testimony_posted_at": datetime.utcnow(), "updated_at": Order.updated_at},
+                synchronize_session=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Gagal menandai testimoni terkirim untuk order {order_id}: {e}")
+
+
 async def post_transaction_testimony(
     bot,
     order,
@@ -162,6 +199,7 @@ async def post_transaction_testimony(
     Kirim log transaksi ke channel testimoni Telegram secara asinkron.
     Tidak akan melempar exception agar alur order utama tidak pernah terganggu.
     """
+    bot = _resolve_bot(bot)
     if not bot or not order:
         return False
 
@@ -213,6 +251,7 @@ async def post_transaction_testimony(
             disable_web_page_preview=True,
         )
         logger.info(f"Testimoni transaksi {order.order_id} berhasil dikirim ke {target_channel}")
+        _mark_posted(getattr(order, "order_id", None))
         return True
 
     except Exception as e:
@@ -227,6 +266,75 @@ _TESTIMONY_FIELDS = (
 )
 _scheduled_order_ids: set = set()
 
+# Sweeper: jaring pengaman untuk order COMPLETED yang testimoninya belum terkirim
+# (gagal kirim, bot restart, jalur completion yang lupa memicu testimoni).
+_SWEEP_LOOKBACK_DAYS = 3
+_SWEEP_BATCH = 10
+_SWEEP_MAX_ATTEMPTS = 5
+_sweep_attempts: dict = {}
+
+
+def _snapshot_order(order, db=None) -> SimpleNamespace:
+    """Salin field yang dibutuhkan testimoni (+ username dari tabel User bila belum ada)."""
+    snap = SimpleNamespace(**{f: getattr(order, f, None) for f in _TESTIMONY_FIELDS})
+    if not snap.user_username and db and snap.telegram_id:
+        from database.models import User
+        user_obj = db.query(User).filter(User.telegram_id == int(snap.telegram_id)).first()
+        if user_obj and user_obj.username:
+            snap.user_username = user_obj.username
+    return snap
+
+
+async def sweep_unposted_testimonies(bot) -> int:
+    """
+    Posting testimoni untuk order COMPLETED yang belum pernah terkirim ke channel
+    (testimony_posted_at kosong). Dipanggil periodik oleh scheduler. Return jumlah terkirim.
+    """
+    if not _resolve_bot(bot):
+        return 0
+
+    from sqlalchemy import func
+    from database.connection import SessionLocal
+    from database.models import Order
+
+    cutoff = datetime.utcnow() - timedelta(days=_SWEEP_LOOKBACK_DAYS)
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Order)
+            .filter(
+                func.lower(Order.status) == "completed",
+                Order.testimony_posted_at.is_(None),
+                func.coalesce(Order.completed_at, Order.updated_at) >= cutoff,
+            )
+            .order_by(Order.id.asc())
+            .limit(_SWEEP_BATCH * 3)
+            .all()
+        )
+        pending = [
+            _snapshot_order(o, db) for o in rows
+            if o.order_id not in _scheduled_order_ids
+            and _sweep_attempts.get(o.order_id, 0) < _SWEEP_MAX_ATTEMPTS
+        ][:_SWEEP_BATCH]
+    finally:
+        db.close()
+
+    sent = 0
+    for snap in pending:
+        if snap.order_id in _scheduled_order_ids:
+            continue
+        _scheduled_order_ids.add(snap.order_id)
+        if await post_transaction_testimony(bot, snap):
+            sent += 1
+            _sweep_attempts.pop(snap.order_id, None)
+        else:
+            _scheduled_order_ids.discard(snap.order_id)
+            _sweep_attempts[snap.order_id] = _sweep_attempts.get(snap.order_id, 0) + 1
+        await asyncio.sleep(0.5)
+    if sent:
+        logger.info(f"Sweeper testimoni: {sent} testimoni tertunda berhasil dikirim.")
+    return sent
+
 
 def schedule_transaction_testimony(bot, order, db=None) -> bool:
     """
@@ -240,12 +348,7 @@ def schedule_transaction_testimony(bot, order, db=None) -> bool:
         if not bot or not order_id or order_id in _scheduled_order_ids:
             return False
 
-        snap = SimpleNamespace(**{f: getattr(order, f, None) for f in _TESTIMONY_FIELDS})
-        if not snap.user_username and db and snap.telegram_id:
-            from database.models import User
-            user_obj = db.query(User).filter(User.telegram_id == int(snap.telegram_id)).first()
-            if user_obj and user_obj.username:
-                snap.user_username = user_obj.username
+        snap = _snapshot_order(order, db)
 
         _scheduled_order_ids.add(order_id)
 

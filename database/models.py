@@ -101,6 +101,7 @@ class Order(Base):
     paid_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     expired_at = Column(DateTime, nullable=True)
+    testimony_posted_at = Column(DateTime, nullable=True)  # Terisi saat testimoni channel terkirim
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

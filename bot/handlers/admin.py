@@ -2494,8 +2494,15 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 except Exception:
                     days = 7
             text, markup = build_admin_weekly_report_view(db, days=days)
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
-            await query.answer(f"Rekap transaksi {days} hari dimuat.")
+            try:
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            except BadRequest as exc:
+                # Refresh dengan data identik: Telegram menolak edit, tapi file tetap harus dikirim.
+                if "not modified" not in str(exc).lower():
+                    raise
+            await query.answer(f"Rekap {days} hari dimuat, file .CSV dikirim di bawah.")
+            # File langsung muncul di bawah pesan rekap, tanpa perlu klik tombol download.
+            await _send_weekly_report_csv(context.bot, query.message.chat_id, db, days)
 
         elif data.startswith("admin_export_csv_"):
             days = 7
@@ -2505,26 +2512,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 days = 7
 
             await query.answer("⏳ Menyiapkan file spreadsheet (.CSV)...", show_alert=False)
-            from services.report_service import (
-                get_weekly_transactions_data,
-                generate_weekly_report_csv_buffer,
-            )
-            transactions = get_weekly_transactions_data(db, days=days)
-            csv_buf = generate_weekly_report_csv_buffer(transactions)
-            filename = f"laporan_transaksi_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-            caption = (
-                f"📑 <b>File Laporan Transaksi ({days} Hari Terakhir)</b>\n"
-                f"Total: <b>{len(transactions)} baris data transaksi</b>.\n\n"
-                f"💡 <i>Dapat langsung di-import ke Google Sheets atau dibuka di Microsoft Excel.</i>"
-            )
-            await context.bot.send_document(
-                chat_id=user_id,
-                document=csv_buf,
-                filename=filename,
-                caption=caption,
-                parse_mode="HTML",
-            )
-            await query.answer("✅ File laporan .CSV berhasil dikirim!", show_alert=True)
+            await _send_weekly_report_csv(context.bot, query.message.chat_id, db, days)
 
         elif data == "admin_panel_guide" or data.startswith("admin_panel_guide_"):
             from bot.utils.admin_guide import guide_index, guide_topic
@@ -2545,6 +2533,31 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer(f"❌ Error: {exc}", show_alert=True)
     finally:
         db.close()
+
+
+async def _send_weekly_report_csv(bot, chat_id, db, days: int) -> None:
+    """Kirim file rekap transaksi .CSV sebagai pesan baru di chat (muncul di bawah rekap)."""
+    from services.report_service import (
+        get_weekly_transactions_data,
+        generate_weekly_report_csv_buffer,
+    )
+    transactions = get_weekly_transactions_data(db, days=days)
+    csv_buf = generate_weekly_report_csv_buffer(transactions)
+    now_wib = datetime.utcnow() + timedelta(hours=7)
+    filename = f"laporan_transaksi_{days}hari_{now_wib.strftime('%Y%m%d_%H%M%S')}.csv"
+    caption = (
+        f"📑 <b>File Laporan Transaksi ({days} Hari Terakhir)</b>\n"
+        f"Total: <b>{len(transactions)} baris data transaksi</b>.\n\n"
+        f"💡 <i>Dapat langsung di-import ke Google Sheets atau dibuka di Microsoft Excel. "
+        f"Semua waktu dalam WIB.</i>"
+    )
+    await bot.send_document(
+        chat_id=chat_id,
+        document=csv_buf,
+        filename=filename,
+        caption=caption,
+        parse_mode="HTML",
+    )
 
 
 async def weekly_report_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

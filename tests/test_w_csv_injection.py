@@ -29,21 +29,28 @@ def _row(**over):
 
 
 class CsvInjection(unittest.TestCase):
-    def _cells(self, rows):
+    def _table(self, rows):
         text = generate_weekly_report_csv_buffer(rows).getvalue().decode("utf-8-sig")
-        return list(csv.reader(io.StringIO(text)))[1:]
+        return list(csv.reader(io.StringIO(text)))
+
+    def _cells(self, rows):
+        return self._table(rows)[1:]
+
+    def _col(self, name):
+        return self._table([])[0].index(name)
 
     def test_isian_user_tidak_jadi_formula(self):
         rows = [_row(full_name=e, username=e, destination=e) for e in EVIL]
+        idxs = [self._col(n) for n in ("Username Telegram", "Nama Pengguna", "Tujuan (Wallet / Rekening)")]
         for cells in self._cells(rows):
-            for idx in (5, 7, 12):  # username, nama, tujuan
+            for idx in idxs:
                 self.assertFalse(cells[idx][:1] in ("=", "+", "-", "@", "\t", "\r"), cells[idx])
 
     def test_angka_tetap_angka(self):
         cells = self._cells([_row()])[0]
-        self.assertEqual(cells[8], "10000")
-        self.assertEqual(cells[9], "1.5")
-        self.assertEqual(cells[7], "Budi")
+        self.assertEqual(cells[self._col("Nominal IDR")], "10000")
+        self.assertEqual(cells[self._col("Jumlah Koin")], "1.5")
+        self.assertEqual(cells[self._col("Nama Pengguna")], "Budi")
 
 
 if __name__ == "__main__":

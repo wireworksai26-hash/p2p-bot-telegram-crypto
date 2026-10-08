@@ -298,6 +298,16 @@ def _migrate_orders_schema():
                         conn.exec_driver_sql(f"ALTER TABLE orders ADD COLUMN {col} {dtype}")
                         logger.info("Migrasi orders: kolom %s ditambahkan.", col)
 
+                # Kolom pelacak testimoni channel. Order COMPLETED yang sudah ada dianggap
+                # terkirim agar sweeper tidak membanjiri channel dengan transaksi lama.
+                if "testimony_posted_at" not in existing_orders:
+                    conn.exec_driver_sql("ALTER TABLE orders ADD COLUMN testimony_posted_at TIMESTAMP")
+                    conn.exec_driver_sql(
+                        "UPDATE orders SET testimony_posted_at = CURRENT_TIMESTAMP "
+                        "WHERE LOWER(status) = 'completed'"
+                    )
+                    logger.info("Migrasi orders: kolom testimony_posted_at ditambahkan.")
+
         if "topup_orders" in table_names:
             existing_topups = {c["name"] for c in inspector.get_columns("topup_orders")}
             if "unique_code" not in existing_topups:
@@ -791,6 +801,20 @@ def setup_scheduler():
         coalesce=True,
     )
 
+    # --- Testimony Sweeper (every 30s) ---
+    # Jaring pengaman: order COMPLETED yang testimoninya belum masuk channel
+    # (gagal kirim / restart) diposting ulang otomatis tanpa perlu /postlasttesti.
+    scheduler.add_job(
+        _job_sweep_testimonies,
+        "interval",
+        seconds=30,
+        id="testimony_sweeper",
+        name="Post pending completed-order testimonies to channel",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
     # --- QRIS Topup Polling Job (every 20s) ---
     scheduler.add_job(
         _job_check_pending_topups,
@@ -906,6 +930,16 @@ async def _job_reconcile_payouts():
             logger.info("Payout watchdog: %s order direkonsiliasi COMPLETED", jumlah)
     except Exception as exc:
         logger.error("Payout watchdog job failed: %s", exc, exc_info=True)
+
+
+async def _job_sweep_testimonies():
+    """Posting testimoni tertunda ke channel untuk order COMPLETED."""
+    try:
+        from services.testimony_service import sweep_unposted_testimonies
+        from services.bot_runtime import bot_app
+        await sweep_unposted_testimonies(bot_app)
+    except Exception as exc:
+        logger.error("Testimony sweeper job failed: %s", exc, exc_info=True)
 
 
 async def _job_expire_orders():

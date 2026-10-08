@@ -25,6 +25,17 @@ from services.testimony_service import get_explorer_url_for_tx
 logger = logging.getLogger(__name__)
 
 
+def _format_wib(utc_dt: Optional[datetime]) -> str:
+    """
+    UTC (naive, seperti disimpan di DB) -> teks WIB, mis. '2026-10-08 14:30:05 WIB'.
+    Akhiran ' WIB' sengaja ada: tanpa itu Excel/Sheets menganggapnya tanggal-waktu dan
+    menampilkan '#####' bila kolom sempit. Sebagai teks, nilai selalu terbaca penuh.
+    """
+    if not utc_dt:
+        return "-"
+    return (utc_dt + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S") + " WIB"
+
+
 def get_weekly_transactions_data(db: Session, days: int = 7) -> list[dict[str, Any]]:
     """
     Mengambil seluruh data transaksi selama N hari terakhir (default: 7 hari).
@@ -46,10 +57,10 @@ def get_weekly_transactions_data(db: Session, days: int = 7) -> list[dict[str, A
 
     transactions = []
     for order, uname, fname in rows:
-        created_utc = order.created_at or datetime.utcnow()
-        # Konversi ke WIB (UTC+7)
-        created_wib = created_utc + timedelta(hours=7)
-        created_str = created_wib.strftime("%Y-%m-%d %H:%M:%S")
+        created_str = _format_wib(order.created_at or datetime.utcnow())
+        # Waktu transaksi berhasil diselesaikan; order lama bisa belum punya completed_at.
+        is_done = str(order.status or "").lower() == "completed"
+        completed_str = _format_wib(order.completed_at or (order.updated_at if is_done else None))
 
         ot = (order.order_type or "buy").upper()
         if ot in ("BUY", "BELI"):
@@ -79,6 +90,7 @@ def get_weekly_transactions_data(db: Session, days: int = 7) -> list[dict[str, A
         transactions.append({
             "order_id": order.order_id,
             "created_at": created_str,
+            "completed_at": completed_str,
             "order_type": type_label,
             "status": status_str,
             "telegram_id": order.telegram_id,
@@ -155,7 +167,8 @@ def generate_weekly_report_csv_buffer(transactions: list[dict[str, Any]]) -> io.
     headers = [
         "No",
         "ID Order",
-        "Waktu Transaksi (WIB)",
+        "Waktu Order Dibuat (WIB)",
+        "Waktu Transaksi Selesai (WIB)",
         "Jenis Transaksi",
         "Status",
         "Username Telegram",
@@ -178,6 +191,7 @@ def generate_weekly_report_csv_buffer(transactions: list[dict[str, Any]]) -> io.
             idx,
             _csv_text(t["order_id"]),
             t["created_at"],
+            t.get("completed_at", "-"),
             t["order_type"],
             t["status"],
             _csv_text(t["username"]),
