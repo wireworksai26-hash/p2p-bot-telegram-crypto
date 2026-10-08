@@ -553,6 +553,10 @@ def build_bot_application() -> Application:
         .build()
     )
 
+    # Emoji animasi (3D) otomatis untuk pesan ke chat admin; user biasa tidak terpengaruh.
+    from bot.utils.animated import install_animated_bot
+    install_animated_bot(application)
+
     # --- Gerbang user banned (sebelum semua handler) ---
     from telegram.ext import TypeHandler
     from bot.utils.ban_guard import ban_gate

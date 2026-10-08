@@ -11,7 +11,8 @@ from datetime import datetime
 from decimal import Decimal
 from html import escape as _esc
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup
+from bot.utils.animated import AnimatedButton as InlineKeyboardButton  # emoji di label jadi icon animasi
 from telegram.ext import ContextTypes
 
 from config.settings import settings

@@ -11,7 +11,8 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from telegram import Update, InlineKeyboardMarkup, ForceReply
+from bot.utils.animated import AnimatedButton as InlineKeyboardButton  # emoji di label jadi icon animasi
 from telegram.error import RetryAfter, BadRequest
 from telegram.ext import ContextTypes
 from sqlalchemy import func
