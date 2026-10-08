@@ -22,15 +22,55 @@ CUSTOM_EMOJIS_FILE = os.path.join(DATA_DIR, "custom_emojis.json")
 
 # ============================================================================
 # Pemetaan Default ID Custom Emoji Telegram (Animated 3D Built-in Packs)
-# Catatan: Hanya aset koin & campaign terverifikasi yang menggunakan <tg-emoji>.
-# Elemen UI umum (wave, chart, money, cart, dsb) memakai emoji Unicode universal
-# agar tidak merender placeholder rusak/pecah [🖼️] di klien Telegram.
 # ============================================================================
 DEFAULT_EMOJI_IDS = {
-    # --- Campaign & Status Assets ---
-    "GIFT":       "5438647000851543789",  # 🎁
-    "TROPHY":     "5465465407748972580",  # 🏆
-    "BANK":       "5348227245599105972",  # 🏦
+    # --- Greeting & Status ---
+    "WAVE":       "5368324170671202286",  # 👍 (HandEmoji — animated wave/thumbs)
+    "CALENDAR":   "5433614043006903194",  # 📆 (Forum — animated calendar)
+    "BOT":        "5309832892262654231",  # 🤖 (Forum — animated robot)
+    "USER":       "5357107601584693888",  # 👑 (Forum — animated crown as user badge)
+    "CROWN":      "5357107601584693888",  # 👑 (Forum — animated crown)
+    "VERIFIED":   "5237699328843200968",  # ✅ (Forum — animated checkmark shield)
+
+    # --- Chart & Analytics ---
+    "CHART":      "5350305691942788490",  # 📈 (Forum — animated chart up)
+    "CHART_UP":   "5350305691942788490",  # 📈 (Forum — animated chart up)
+
+    # --- Money & Finance ---
+    "MONEY_BAG":  "5350452584119279096",  # 💰 (Forum — animated money bag)
+    "DOLLAR":     "5309929258443874898",  # 💸 (Forum — animated flying money)
+    "CARD":       "5348227245599105972",  # 💼 (Forum — animated briefcase/wallet)
+    "COIN":       "5377690785674175481",  # 🪙 (Forum — animated coin)
+
+    # --- Shopping & Orders ---
+    "CART":       "5431492767249342908",  # 🛒 (Forum — animated shopping cart)
+    "BOX":        "5350699789551935589",  # 🛍 (Forum — animated shopping bag)
+    "SWAP":       "5310107765874632305",  # 💱 (Forum — animated currency exchange)
+
+    # --- Status Indicators ---
+    "CHECK":      "5237699328843200968",  # ✅ (Forum — animated green check)
+    "CROSS":      "5462882007451185227",  # 🚫 (GameEmoji — animated cross/ban)
+    "WARNING":    "5447644880824181073",  # ⚠️ (NewsEmoji — animated warning)
+
+    # --- Communication & Identity ---
+    "PHONE":      "5409357944619802453",  # 📱 (Forum — animated phone)
+    "CHAT":       "5417915203100613993",  # 💬 (Forum — animated chat bubble)
+    "HISTORY":    "5373251851074415873",  # 📝 (Forum — animated notepad/history)
+    "TAG":        "5298877105000439431",  # 🏷️ (TonEmoji — animated tag / username)
+    "ID_BADGE":   "5237699328843200968",  # 🆔 (Forum — animated shield / ID badge)
+    "BACK":       "5202123071053381850",  # 🔙 (Emoji666D — animated back / cancel)
+    "PLUS":       "5204256218100547827",  # ➕ (Emoji666D — animated plus)
+
+    # --- Effects & Flair ---
+    "FIRE":       "5312241539987020022",  # 🔥 (Forum — animated fire)
+    "ROCKET":     "5203966320692969547",  # 🚀 (Emoji666D — animated rocket)
+    "DIAMOND":    "5309958691854754293",  # 💎 (Forum — animated diamond)
+    "SPARKLES":   "5472164874886846699",  # ✨ (RestrictedEmoji — animated sparkles)
+    "STAR":       "5235579393115438657",  # ⭐️ (Forum — animated star)
+    "PARTY":      "5310228579009699834",  # 🎉 (Forum — animated party)
+    "GIFT":       "5199749070830197566",  # gift (RestrictedEmoji, animated, verified)
+    "TROPHY":     "5312315739842026755",  # trophy (Topics, animated, verified)
+    "BANK":       "5348227245599105972",  # 🏦 (Forum — animated bank/treasury)
 
     # Dollar emoji verified through Telegram metadata. Other assets use a
     # universal coin until an admin selects a visually verified custom logo.
@@ -74,21 +114,21 @@ DEFAULT_EMOJI_IDS = {
 }
 
 DEFAULT_EMOJI_ALTS = {
-    "WAVE": "👋",
+    "WAVE": "👍",
     "CALENDAR": "📆",
     "BOT": "🤖",
-    "USER": "👥",
+    "USER": "👑",
     "CROWN": "👑",
     "VERIFIED": "✅",
-    "CHART": "📊",
+    "CHART": "📈",
     "CHART_UP": "📈",
     "MONEY_BAG": "💰",
     "DOLLAR": "💵",
     "CARD": "💼",
     "COIN": "🪙",
     "CART": "🛒",
-    "BOX": "📦",
-    "SWAP": "🔄",
+    "BOX": "🛍",
+    "SWAP": "💱",
     "CHECK": "✅",
     "CROSS": "🚫",
     "WARNING": "⚠️",
@@ -108,7 +148,6 @@ DEFAULT_EMOJI_ALTS = {
     "GIFT": "🎁",
     "TROPHY": "🏆",
     "BANK": "🏦",
-    "LINK": "👥",
 
     # Coins
     "COIN_USDT": "🟢",
@@ -158,29 +197,8 @@ LEGACY_ASSET_IDS = {
     "5341683880103527632", "5978561005351865286",
 }
 
-class EmojiIdDict(dict):
-    """
-    Subclass dict untuk mengontrol pembacaan custom emoji ID.
-    Jika key tidak terdaftar di konfigurasi aktif, .get() selalu
-    mengembalikan None (mengabaikan fallback string ID hardcoded yang tidak valid),
-    sehingga icon_custom_emoji_id pada InlineKeyboardButton otomatis bernilai None
-    dan tidak merender placeholder rusak/pecah [🖼️] di Telegram client.
-    """
-    def get(self, key, default=None):
-        val = super().get(key)
-        if val is None or val == "":
-            return None
-        return val
-
-    def __getitem__(self, key):
-        val = super().get(key)
-        if val is None or val == "":
-            return None
-        return val
-
-
 # In-memory working copies
-CUSTOM_EMOJI_IDS = EmojiIdDict(DEFAULT_EMOJI_IDS)
+CUSTOM_EMOJI_IDS = dict(DEFAULT_EMOJI_IDS)
 CUSTOM_EMOJI_ALTS = dict(DEFAULT_EMOJI_ALTS)
 
 
@@ -346,8 +364,8 @@ def tg_emoji(key: str, fallback: str = "") -> str:
     Menghasilkan tag <tg-emoji emoji-id="...">alt</tg-emoji> jika custom_emoji_id terdaftar,
     atau fallback unicode emoji jika belum ada ID.
     """
-    emoji_id = (CUSTOM_EMOJI_IDS.get(key) or "").strip()
-    alt_char = (CUSTOM_EMOJI_ALTS.get(key) or "").strip() or fallback or "✨"
+    emoji_id = CUSTOM_EMOJI_IDS.get(key, "").strip()
+    alt_char = CUSTOM_EMOJI_ALTS.get(key, "").strip() or fallback or "✨"
     if emoji_id:
         return f'<tg-emoji emoji-id="{emoji_id}">{escape(alt_char)}</tg-emoji>'
     if key.startswith(("COIN_", "NET_")):
@@ -356,22 +374,22 @@ def tg_emoji(key: str, fallback: str = "") -> str:
 
 
 # Shortcut siap pakai untuk tampilan pesan
-E_WAVE = lambda: tg_emoji("WAVE", "👋")
+E_WAVE = lambda: tg_emoji("WAVE", "👍")
 E_CALENDAR = lambda: tg_emoji("CALENDAR", "📆")
 E_BOT = lambda: tg_emoji("BOT", "🤖")
-E_USER = lambda: tg_emoji("USER", "👥")
+E_USER = lambda: tg_emoji("USER", "👑")
 E_CROWN = lambda: tg_emoji("CROWN", "👑")
 E_VERIFIED = lambda: tg_emoji("VERIFIED", "✅")
-E_CHART = lambda: tg_emoji("CHART", "📊")
+E_CHART = lambda: tg_emoji("CHART", "📈")
 E_CHART_UP = lambda: tg_emoji("CHART_UP", "📈")
 E_MONEY = lambda: tg_emoji("MONEY_BAG", "💰")
 E_MONEY_BAG = lambda: tg_emoji("MONEY_BAG", "💰")
-E_DOLLAR = lambda: tg_emoji("DOLLAR", "💵")
+E_DOLLAR = lambda: tg_emoji("DOLLAR", "💸")
 E_CARD = lambda: tg_emoji("CARD", "💼")
 E_COIN = lambda: tg_emoji("COIN", "🪙")
 E_CART = lambda: tg_emoji("CART", "🛒")
-E_BOX = lambda: tg_emoji("BOX", "📦")
-E_SWAP = lambda: tg_emoji("SWAP", "🔄")
+E_BOX = lambda: tg_emoji("BOX", "🛍")
+E_SWAP = lambda: tg_emoji("SWAP", "💱")
 E_CHECK = lambda: tg_emoji("CHECK", "✅")
 E_CROSS = lambda: tg_emoji("CROSS", "🚫")
 E_WARN = lambda: tg_emoji("WARNING", "⚠️")

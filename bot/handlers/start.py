@@ -46,6 +46,7 @@ def get_wib_datetime_info() -> tuple[str, str]:
 
 def build_welcome_message(user, db_user, total_users: int, total_success: int) -> str:
     import html
+    from bot.utils.emojis import E_WAVE, E_CALENDAR, E_CHART, E_MONEY, E_CART, E_USER, E_CHECK
     from bot.utils.formatter import format_idr
 
     greeting, time_str = get_wib_datetime_info()
@@ -54,15 +55,15 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
     user_orders = int(getattr(db_user, "total_orders", 0) or 0) if db_user else 0
 
     return (
-        f"👋 <b>Selamat {greeting}, {user_name}!</b>\n"
-        f"📆 <i>{time_str}</i>\n\n"
+        f"{E_WAVE()} <b>Selamat {greeting}, {user_name}!</b>\n"
+        f"{E_CALENDAR()} <i>{time_str}</i>\n\n"
         f"Selamat Datang di <b>TokoKoin ID</b> , Platform Jual Beli Koin terpercaya di Telegram. ☑️\n\n"
-        f"📊 <b>STATISTIK AKUN</b>\n"
-        f"├── 💰 <b>Saldo Aktif</b>   : <b>{format_idr(user_bal)}</b>\n"
-        f"└── 🛒 <b>Total Order</b>   : <b>{user_orders} Transaksi</b>\n\n"
-        f"🤖 <b>STATISTIK BOT</b>\n"
-        f"├── 👥 <b>Total Pengguna</b> : <b>{total_users:,} Member</b>\n"
-        f"└── ✅ <b>Total Transaksi</b>: <b>{total_success:,}x Berhasil</b>\n\n"
+        f"{E_CHART()} <b>STATISTIK AKUN</b>\n"
+        f"├── {E_MONEY()} <b>Saldo Aktif</b>   : <b>{format_idr(user_bal)}</b>\n"
+        f"└── {E_CART()} <b>Total Order</b>   : <b>{user_orders} Transaksi</b>\n\n"
+        f"{E_CHART()} <b>STATISTIK BOT</b>\n"
+        f"├── {E_USER()} <b>Total Pengguna</b> : <b>{total_users:,} Member</b>\n"
+        f"└── {E_CHECK()} <b>Total Transaksi</b>: <b>{total_success:,}x Berhasil</b>\n\n"
         f"Silahkan pilih menu di bawah untuk memulai transaksi:"
     )
 
@@ -273,7 +274,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         # Tampilkan Syarat & Ketentuan
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         keyboard = [
-            [InlineKeyboardButton("🔙 Kembali ke Menu", callback_data="menu_back")],
+            [InlineKeyboardButton("Kembali ke Menu", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]
         await query.edit_message_text(
@@ -532,7 +533,8 @@ NO_ACTIVE_FLOW_TEXT = "ℹ️ Tidak ada proses yang sedang berjalan."
 def _back_to_menu_markup():
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔙 Menu Utama", callback_data="menu_back")
+        InlineKeyboardButton("Menu Utama", callback_data="menu_back",
+                             icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
     ]])
 
 
