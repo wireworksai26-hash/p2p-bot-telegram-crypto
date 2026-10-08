@@ -518,25 +518,9 @@ class DepositDetector:
                     except Exception as exc:
                         logger.warning("Gagal notif admin convert sukses: %s", exc)
 
-                    # Referral reward trigger on completion
-                    try:
-                        from database.crud import complete_referral, get_referral_by_referee
-                        trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                        ref_result = complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt,
-                                                       fee_idr=float(order.fee_idr or 0))
-                        if ref_result:
-                            ref = get_referral_by_referee(db, order.telegram_id)
-                            if ref:
-                                reward = ref.reward_idr or 0
-                                await safe_send_message(
-                                    bot_app,
-                                    ref.referrer_id,
-                                    f"🎉 <b>Referral Reward!</b>\n\n"
-                                    f"User yang Anda ajak telah menyelesaikan transaksi.\n"
-                                    f"Saldo Anda bertambah <b>Rp {reward:,}</b>!",
-                                )
-                    except Exception as exc:
-                        logger.warning("Gagal proses referral reward user %s: %s", order.telegram_id, exc)
+                # Referral: hitung reward untuk transaksi selesai (notifikasi oleh sweeper referral)
+                from database.crud import process_referral_rewards_for_user
+                process_referral_rewards_for_user(db, order.telegram_id)
             else:
                 order.status = "manual_review"
                 if result.get("tx_hash"):

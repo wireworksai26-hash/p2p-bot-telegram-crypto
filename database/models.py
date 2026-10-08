@@ -262,6 +262,35 @@ class Referral(Base):
     # PENDING = referee belum transaksi, COMPLETED = reward sudah diberikan
     reward_idr = Column(BigInteger, default=0)
     completed_at = Column(DateTime, nullable=True)
+    notified_at = Column(DateTime, nullable=True)  # (lama) pengundang sudah diberi tahu reward-nya
+    # Program v2: jumlah transaksi teman yang sudah dihitung; order referral lama (sudah
+    # dibayar dengan skema lama) selesai <= legacy_until tidak dihitung ulang.
+    tx_count = Column(Integer, default=0, nullable=False)
+    legacy_until = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReferralEarning(Base):
+    """
+    Buku besar reward referral. Setiap baris = satu hak saldo untuk satu penerima.
+    HELD = masih masa tahan (reward pengundang), RELEASED = sudah masuk saldo bot.
+    dedupe_key unik menjamin satu hak hanya tercatat sekali walau diproses bersamaan.
+    """
+    __tablename__ = 'referral_earnings'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    referral_id = Column(Integer, ForeignKey('referrals.id'), nullable=False, index=True)
+    beneficiary_id = Column(BigInteger, nullable=False, index=True)  # penerima saldo
+    referee_id = Column(BigInteger, nullable=False)
+    order_id = Column(String(50), nullable=True, index=True)
+    # FIRST_TX, SECOND_TX, FEE_SHARE (pengundang) | REFEREE_BONUS (teman) | COUNTED (penanda 0 rupiah)
+    kind = Column(String(20), nullable=False)
+    amount_idr = Column(BigInteger, default=0, nullable=False)
+    status = Column(String(12), default='HELD', nullable=False, index=True)
+    dedupe_key = Column(String(80), unique=True, nullable=False)
+    release_at = Column(DateTime, nullable=True, index=True)
+    released_at = Column(DateTime, nullable=True)
+    notified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

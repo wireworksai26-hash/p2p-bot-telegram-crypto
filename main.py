@@ -308,6 +308,33 @@ def _migrate_orders_schema():
                     )
                     logger.info("Migrasi orders: kolom testimony_posted_at ditambahkan.")
 
+        if "referrals" in table_names:
+            existing_referrals = {c["name"] for c in inspector.get_columns("referrals")}
+            with engine.begin() as conn:
+                if "notified_at" not in existing_referrals:
+                    conn.exec_driver_sql("ALTER TABLE referrals ADD COLUMN notified_at TIMESTAMP")
+                    logger.info("Migrasi referrals: kolom notified_at ditambahkan.")
+                if "tx_count" not in existing_referrals:
+                    conn.exec_driver_sql("ALTER TABLE referrals ADD COLUMN tx_count INTEGER DEFAULT 0 NOT NULL")
+                    logger.info("Migrasi referrals: kolom tx_count ditambahkan.")
+                if "legacy_until" not in existing_referrals:
+                    conn.exec_driver_sql("ALTER TABLE referrals ADD COLUMN legacy_until TIMESTAMP")
+                    # Referral COMPLETED sebelum program v2 sudah dibayar dengan skema lama:
+                    # transaksi sampai saat ini tidak dihitung ulang, transaksi baru dihitung
+                    # lanjut dari jumlah transaksi yang sudah ada. Referral PENDING tetap
+                    # dibayar penuh (termasuk transaksi lamanya) oleh sweeper.
+                    from sqlalchemy import text as _sql_text
+                    conn.execute(
+                        _sql_text(
+                            "UPDATE referrals SET legacy_until = :now, "
+                            "tx_count = (SELECT COUNT(*) FROM orders o WHERE o.telegram_id = referrals.referee_id "
+                            "AND LOWER(o.status) = 'completed') "
+                            "WHERE status = 'COMPLETED'"
+                        ),
+                        {"now": datetime.utcnow()},  # UTC, sama dengan timestamp order
+                    )
+                    logger.info("Migrasi referrals: kolom legacy_until ditambahkan (program referral v2).")
+
         if "topup_orders" in table_names:
             existing_topups = {c["name"] for c in inspector.get_columns("topup_orders")}
             if "unique_code" not in existing_topups:
@@ -815,6 +842,19 @@ def setup_scheduler():
         coalesce=True,
     )
 
+    # --- Referral Sweeper (every 60s) ---
+    # Selesaikan referral yang referee-nya sudah transaksi & beri tahu pengundang.
+    scheduler.add_job(
+        _job_sweep_referrals,
+        "interval",
+        seconds=60,
+        id="referral_sweeper",
+        name="Complete pending referrals and notify referrers",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
     # --- QRIS Topup Polling Job (every 20s) ---
     scheduler.add_job(
         _job_check_pending_topups,
@@ -930,6 +970,19 @@ async def _job_reconcile_payouts():
             logger.info("Payout watchdog: %s order direkonsiliasi COMPLETED", jumlah)
     except Exception as exc:
         logger.error("Payout watchdog job failed: %s", exc, exc_info=True)
+
+
+async def _job_sweep_referrals():
+    """Jaring pengaman referral: selesaikan yang tertahan dan notifikasi pengundang."""
+    try:
+        from services.referral_service import process_referral_rewards
+        from services.bot_runtime import bot_app
+        hasil = await process_referral_rewards(bot_app)
+        if hasil["accrued"] or hasil["released"]:
+            logger.info("Referral sweeper: %s hak reward baru, Rp %s dirilis ke saldo",
+                        hasil["accrued"], f"{hasil['released']:,}")
+    except Exception as exc:
+        logger.error("Referral sweeper job failed: %s", exc, exc_info=True)
 
 
 async def _job_sweep_testimonies():

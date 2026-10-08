@@ -186,28 +186,26 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 try:
                     referrer_id = int(context.args[0].replace("ref_", ""))
                     if referrer_id != user.id:  # Tidak bisa refer diri sendiri
-                        from database.crud import create_referral, get_referral_by_referee, get_referral_config
+                        from database.crud import create_referral, get_referral_by_referee
+                        from services.referral_rewards import get_referral_settings
                         existing_ref = get_referral_by_referee(db, user.id)
                         if not existing_ref:
                             ref = create_referral(db, referrer_id, user.id)
                             if ref:
-                                reward_cfg = get_referral_config(db, "reward_per_referral")
-                                reward_idr = int(reward_cfg) if reward_cfg else 5000
-                                bonus_cfg = get_referral_config(db, "referee_discount_idr")
-                                bonus_idr = int(bonus_cfg) if bonus_cfg else 0
-                                min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
-                                min_trade_idr = int(min_trade_cfg) if min_trade_cfg else 0
+                                cfg = get_referral_settings(db)
+                                min_trade_note = (
+                                    f" minimal <b>Rp {cfg['min_trade']:,}</b>" if cfg["min_trade"] > 0 else ""
+                                )
 
-                                min_trade_note = f" minimal <b>Rp {min_trade_idr:,}</b>" if min_trade_idr > 0 else ""
-
-                                # Notifikasi ke referee (user baru) jika ada potongan/bonus
-                                if bonus_idr > 0:
+                                # Notifikasi ke referee (user baru): diskon fee transaksi pertama
+                                if cfg["bonus"] > 0:
                                     try:
                                         await update.message.reply_text(
                                             f"🎁 <b>Selamat Datang!</b>\n\n"
                                             f"Anda bergabung lewat link undangan teman.\n"
-                                            f"Dapatkan potongan / bonus cashback saldo sebesar <b>Rp {bonus_idr:,}</b> "
-                                            f"setelah Anda menyelesaikan transaksi pertama{min_trade_note} Anda!",
+                                            f"Dapatkan <b>diskon fee Rp {cfg['bonus']:,}</b> di transaksi pertama Anda "
+                                            f"(beli/jual/convert{min_trade_note}). Diskon masuk ke saldo bot "
+                                            f"setelah transaksi selesai.",
                                             parse_mode="HTML"
                                         )
                                     except Exception:
@@ -219,8 +217,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                                         referrer_id,
                                         f"🎉 <b>Referral Baru!</b>\n\n"
                                         f"Teman baru bergabung via link referral Anda.\n"
-                                        f"Reward <b>Rp {reward_idr:,}</b> akan otomatis masuk ke saldo Anda "
-                                        f"setelah mereka menyelesaikan transaksi pertama{min_trade_note}!",
+                                        f"Anda mendapat <b>Rp {cfg['reward']:,}</b> saat transaksi pertama mereka "
+                                        f"selesai{min_trade_note}, <b>Rp {cfg['reward2']:,}</b> di transaksi kedua, "
+                                        f"plus <b>{cfg['share']:g}%</b> dari fee transaksi mereka. "
+                                        f"Reward masuk ke saldo bot setelah masa tahan {cfg['hold']} jam.",
                                         parse_mode="HTML",
                                     )
                                 except Exception:

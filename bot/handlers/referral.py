@@ -20,8 +20,29 @@ from database.crud import (
 )
 from database.models import User
 from bot.utils.formatter import format_idr
+from database.crud import WITHDRAW_MIN_IDR
+from services.referral_rewards import get_referral_settings
 
 logger = logging.getLogger(__name__)
+
+
+def build_referral_rules_text(cfg: dict) -> str:
+    """Ketentuan program referral untuk user, diambil dari pengaturan admin (bukan teks tetap)."""
+    hold = f"melewati masa tahan {cfg['hold']} jam" if cfg["hold"] else "tanpa masa tahan"
+    return (
+        "👥 <b>Mengundang Teman</b>\n"
+        f"• {format_idr(cfg['reward'])} saat teman menyelesaikan transaksi pertama (beli/jual/convert)\n"
+        f"• {format_idr(cfg['reward2'])} saat teman menyelesaikan transaksi kedua\n\n"
+        "🎉 <b>Untuk Teman yang Diundang</b>\n"
+        f"• Diskon fee {format_idr(cfg['bonus'])} di transaksi pertama\n\n"
+        "💸 <b>Bonus dari Transaksi Teman</b>\n"
+        f"• {cfg['share']:g}% dari fee setiap transaksi temanmu masuk ke saldo bot kamu "
+        f"(maks. {cfg['sharemax']} transaksi teman)\n\n"
+        "💰 <b>Saldo Referral</b>\n"
+        "• Masuk ke saldo bot: bisa untuk transaksi atau ditarik ke rekening/e-wallet "
+        f"(min. {format_idr(WITHDRAW_MIN_IDR)})\n"
+        f"• Reward masuk setelah transaksi selesai dan {hold}"
+    )
 
 
 async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -32,6 +53,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
     db = SessionLocal()
     try:
         stats = get_referral_stats(db, user.id)
+        cfg = get_referral_settings(db)
         disc_info = get_referral_discount_info(db, user.id)
 
         # Build referral link
@@ -44,16 +66,16 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 f"🎁 <b>Status Diskon Transaksi Anda:</b>\n"
                 f"├── Status : ✅ <b>AKTIF</b>\n"
                 f"├── Diskon : <b>{disc_info['discount_pct']:.0f}%</b> dari biaya transaksi\n"
-                f"└── Sisa   : <b>{disc_info['remaining']} dari 10 transaksi</b>\n"
+                f"└── Sisa   : <b>{disc_info['remaining']} transaksi</b>\n"
                 f"💡 <i>Diskon otomatis diterapkan saat Anda membuat order.</i>\n\n"
             )
         else:
-            discount_status_text = (
-                f"🎁 <b>Status Diskon Transaksi:</b>\n"
-                f"├── Status : ⚪ <i>Belum Aktif</i>\n"
-                f"└── Info   : Undang teman & dapatkan diskon 7% untuk 10x transaksi!\n\n"
-            )
+            # Diskon 10x transaksi untuk pengundang sudah diganti bagi hasil fee (lihat ketentuan di bawah).
+            discount_status_text = ""
 
+        held_note = (
+            f" <i>({format_idr(stats['held_reward'])} menunggu masa tahan)</i>" if stats.get("held_reward") else ""
+        )
         text = (
             f"🔗 <b>PROGRAM REFERRAL HSN STORE</b>\n\n"
             f"🎁 <b>Link Referral Anda:</b>\n"
@@ -62,18 +84,9 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"├── 👥 Total Ajakan   : <b>{stats['total']} orang</b>\n"
             f"├── ✅ Selesai Trade   : <b>{stats['completed']} orang</b>\n"
             f"├── ⏳ Belum Selesai   : <b>{stats['pending']} orang</b>\n"
-            f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>\n\n"
+            f"└── 💰 Total Reward    : <b>{format_idr(stats['total_reward'])}</b>{held_note}\n\n"
             f"{discount_status_text}"
-            f"👥 <b>Mengundang Teman</b>\n"
-            f"• Rp 1.000 saat teman menyelesaikan transaksi pertama (beli/jual/convert)\n"
-            f"• Rp 500 saat teman menyelesaikan transaksi kedua\n\n"
-            f"🎉 <b>Untuk Teman yang Diundang</b>\n"
-            f"• Diskon fee Rp 1.000 di transaksi pertama\n\n"
-            f"💸 <b>Bonus dari Transaksi Teman</b>\n"
-            f"• 7% dari fee setiap transaksi temanmu masuk ke saldo bot kamu (maks. 10 transaksi teman)\n\n"
-            f"💰 <b>Saldo Referral</b>\n"
-            f"• Masuk ke saldo bot: bisa untuk transaksi atau ditarik ke rekening/e-wallet (min. Rp 10.000)\n"
-            f"• Reward masuk setelah transaksi selesai dan melewati masa tahan 24 jam"
+            f"{build_referral_rules_text(cfg)}"
         )
 
         share_text = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\n{ref_link}"

@@ -200,29 +200,6 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                     except Exception as exc:
                         logger.warning("Gagal notif admin %s: %s", order.order_id, exc)
 
-                    # Referral reward trigger
-                    try:
-                        trade_amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                        ref_result = crud.complete_referral(db, order.telegram_id, trade_amount_idr=trade_amt,
-                                                            fee_idr=float(order.fee_idr or 0))
-                        if ref_result:
-                            ref = crud.get_referral_by_referee(db, order.telegram_id)
-                            if ref:
-                                reward = ref.reward_idr or 0
-                                from bot.utils.formatter import format_idr as _fmt_idr
-                                # Aktifkan referral discount untuk referrer (Phase 7)
-                                from services.referral_discount_service import activate_discount_for_referrer
-                                await activate_discount_for_referrer(bot, ref.referrer_id, db)
-                                await bot.send_message(
-                                    ref.referrer_id,
-                                    f"🎉 <b>Referral Reward!</b>\n\n"
-                                    f"User yang Anda ajak telah menyelesaikan transaksi.\n"
-                                    f"Saldo Anda bertambah <b>{_fmt_idr(reward)}</b>!",
-                                    parse_mode="HTML",
-                                )
-                    except Exception as exc:
-                        logger.warning("Gagal proses referral reward user %s: %s", order.telegram_id, exc)
-
                     # Loyalty time-window tracking (Phase 7)
                     try:
                         from services.loyalty_service import process_loyalty_after_order

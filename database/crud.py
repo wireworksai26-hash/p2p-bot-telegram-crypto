@@ -339,12 +339,7 @@ def update_order_status(
 
         if new_status and str(new_status).lower() == "completed":
             auto_save_order_accounts(db, order)
-            try:
-                amt = float(getattr(order, "nominal_idr", 0) or getattr(order, "total_idr", 0) or 0)
-                complete_referral(db, order.telegram_id, trade_amount_idr=amt,
-                                  fee_idr=float(order.fee_idr or 0))
-            except Exception as ref_err:
-                logger.warning(f"Error completing referral on order {order_id}: {ref_err}")
+            process_referral_rewards_for_user(db, order.telegram_id)
 
         return order
 
@@ -1725,47 +1720,40 @@ def get_segment_count(db: Session, segment: str) -> int:
 # ============================================================
 
 def create_referral(db: Session, referrer_id: int, referee_id: int):
-    """Buat record referral baru. Return Referral atau None jika sudah ada."""
-    from database.models import Referral, ReferralConfig
+    """Buat record referral baru. Return Referral atau None jika sudah ada / ditolak aturan."""
+    from database.models import Referral
+    from services.referral_rewards import get_referral_settings
+
+    if referrer_id == referee_id:
+        return None
 
     # Cek apakah referral sudah ada untuk referee ini
     existing = db.query(Referral).filter(Referral.referee_id == referee_id).first()
     if existing:
         return None
 
-    # Cek apakah referral enabled
-    enabled = db.query(ReferralConfig).filter(
-        ReferralConfig.key == "referral_enabled"
-    ).first()
-    if enabled and enabled.value == "false":
+    settings_ = get_referral_settings(db)
+    if not settings_["enabled"]:
         return None
 
     # Cek max referrals per user
-    max_cfg = db.query(ReferralConfig).filter(
-        ReferralConfig.key == "max_referrals_per_user"
-    ).first()
-    max_referrals = int(max_cfg.value) if max_cfg else 100
     current_count = db.query(Referral).filter(Referral.referrer_id == referrer_id).count()
-    if current_count >= max_referrals:
-        logger.info(f"Referrer {referrer_id} sudah mencapai batas {max_referrals} referral.")
+    if current_count >= settings_["maxref"]:
+        logger.info(f"Referrer {referrer_id} sudah mencapai batas {settings_['maxref']} referral.")
         return None
 
-    # Get reward amount
-    reward_cfg = db.query(ReferralConfig).filter(
-        ReferralConfig.key == "reward_per_referral"
-    ).first()
-    reward_idr = int(reward_cfg.value) if reward_cfg else 5000
-
+    # reward_idr = total reward pengundang yang sudah dihitung dari teman ini (mulai 0;
+    # bertambah saat teman bertransaksi, lihat services/referral_rewards.py).
     ref = Referral(
         referrer_id=referrer_id,
         referee_id=referee_id,
         status="PENDING",
-        reward_idr=reward_idr,
+        reward_idr=0,
     )
     db.add(ref)
     db.commit()
     db.refresh(ref)
-    logger.info(f"Referral created: {referrer_id} → {referee_id} (reward Rp {reward_idr:,})")
+    logger.info(f"Referral created: {referrer_id} → {referee_id}")
     return ref
 
 
@@ -1775,110 +1763,42 @@ def get_referral_by_referee(db: Session, referee_id: int):
     return db.query(Referral).filter(Referral.referee_id == referee_id).first()
 
 
-def complete_referral(db: Session, referee_id: int, trade_amount_idr: float = 0.0,
-                      fee_idr: Optional[float] = None) -> bool:
-    """Mark referral COMPLETED dan credit reward ke referrer serta potongan/bonus ke referee.
-
-    Dipanggil saat referee menyelesaikan transaksi (detector, payout watchdog, dan
-    update_order_status bisa memanggil bersamaan). Status diklaim atomik
-    (PENDING -> COMPLETED dalam satu UPDATE) sebelum kredit, jadi reward hanya sekali.
-
-    Guard fee (default aktif, config `referral_fee_guard`): reward + bonus hanya dibayar
-    bila fee transaksi itu menutupinya — akun palsu yang belanja minimum tidak bisa
-    menjadi sumber untung. Referral tetap PENDING sampai ada transaksi yang memenuhi.
+def process_referral_rewards_for_user(db: Session, telegram_id: int) -> int:
     """
-    from database.models import Referral, AuditLog
-
-    ref = db.query(Referral).filter(
-        Referral.referee_id == referee_id,
-        Referral.status == "PENDING",
-    ).first()
-
-    if not ref:
-        return False
-
-    # Verifikasi syarat minimal transaksi (bila diatur oleh admin)
-    min_trade_cfg = get_referral_config(db, "min_trade_amount_idr")
-    min_trade = float(min_trade_cfg) if min_trade_cfg else 0.0
-    if min_trade > 0 and trade_amount_idr < min_trade:
-        logger.info(
-            f"Referral pending for referee {referee_id}: trade amount Rp {trade_amount_idr:,.0f} < minimum requirement Rp {min_trade:,.0f}"
-        )
-        return False
-
-    reward = int(ref.reward_idr or 0)
-    bonus_cfg = get_referral_config(db, "referee_discount_idr")
-    bonus_idr = int(bonus_cfg) if bonus_cfg else 0
-    guard_on = (get_referral_config(db, "referral_fee_guard") or "true").lower() != "false"
-    if guard_on and fee_idr is not None and float(fee_idr) < reward + bonus_idr:
-        logger.info(
-            f"Referral pending for referee {referee_id}: fee Rp {float(fee_idr):,.0f} "
-            f"< reward+bonus Rp {reward + bonus_idr:,}"
-        )
-        return False
-
+    Hitung reward referral untuk transaksi selesai milik user (bila ia diundang teman).
+    Dipanggil saat order selesai; tidak pernah melempar error agar order tidak terganggu.
+    Return jumlah hak reward yang baru dicatat.
+    """
     try:
-        claimed = db.query(Referral).filter(
-            Referral.id == ref.id, Referral.status == "PENDING",
-        ).update({"status": "COMPLETED", "completed_at": datetime.utcnow()}, synchronize_session=False)
-        db.commit()
-        db.refresh(ref)
-        if claimed != 1:
-            return False  # pemanggil lain sudah menyelesaikan referral ini
+        from services.referral_rewards import process_referral_for_referee
+        return process_referral_for_referee(db, telegram_id)
     except Exception as e:
         db.rollback()
-        logger.error(f"Error claiming referral for {referee_id}: {e}")
-        return False
-
-    # Status sudah COMPLETED: kegagalan kredit di bawah dicatat untuk admin, tidak diulang otomatis.
-    try:
-        if reward > 0:
-            credit_user_balance(db, ref.referrer_id, float(reward))
-            db.add(AuditLog(
-                telegram_id=ref.referrer_id,
-                action="REFERRAL_REWARD",
-                details=f"Reward referral dari transaksi user {referee_id}: +Rp {reward:,}",
-            ))
-        if bonus_idr > 0:
-            credit_user_balance(db, referee_id, float(bonus_idr))
-            db.add(AuditLog(
-                telegram_id=referee_id,
-                action="REFERRAL_BONUS",
-                details=f"Bonus/Potongan transaksi pertama referral (diajak oleh {ref.referrer_id}): +Rp {bonus_idr:,}",
-            ))
-        db.commit()
-        logger.info(
-            f"Referral completed: {ref.referrer_id} ← {referee_id}. "
-            f"Reward Rp {reward:,} (referrer), Bonus Rp {bonus_idr:,} (referee) credited."
-        )
-        return True
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Referral {referee_id} COMPLETED tetapi kredit gagal — perlu cek admin: {e}")
-        try:
-            db.add(AuditLog(telegram_id=ref.referrer_id, action="REFERRAL_CREDIT_FAILED",
-                            details=f"Referee {referee_id}: reward Rp {reward:,} / bonus Rp {bonus_idr:,} gagal dikredit: {e}"))
-            db.commit()
-        except Exception:
-            db.rollback()
-        return False
+        logger.error(f"Gagal memproses reward referral untuk {telegram_id}: {e}", exc_info=True)
+        return 0
 
 
 def get_referral_stats(db: Session, referrer_id: int) -> dict:
     """Ambil statistik referral untuk seorang referrer."""
-    from database.models import Referral
+    from database.models import Referral, ReferralEarning
 
     referrals = db.query(Referral).filter(Referral.referrer_id == referrer_id).all()
     total = len(referrals)
     completed = sum(1 for r in referrals if r.status == "COMPLETED")
     pending = sum(1 for r in referrals if r.status == "PENDING")
     total_reward = sum(r.reward_idr or 0 for r in referrals if r.status == "COMPLETED")
+    held_reward = int(
+        db.query(func.coalesce(func.sum(ReferralEarning.amount_idr), 0))
+        .filter(ReferralEarning.beneficiary_id == referrer_id, ReferralEarning.status == "HELD")
+        .scalar() or 0
+    )
 
     return {
         "total": total,
         "completed": completed,
         "pending": pending,
-        "total_reward": total_reward,
+        "total_reward": total_reward,   # total reward yang sudah dihitung (termasuk masa tahan)
+        "held_reward": held_reward,     # bagian yang masih menunggu masa tahan
     }
 
 

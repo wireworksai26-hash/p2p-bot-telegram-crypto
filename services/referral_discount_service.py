@@ -134,7 +134,7 @@ async def notify_discount_used(
         msg = (
             f"🎁 <b>Diskon Referral Digunakan!</b>\n\n"
             f"Transaksi Anda mendapat potongan biaya sebesar <b>{format_idr(discount_amount)}</b>.\n"
-            f"Kuota diskon referral Anda sudah habis (10/10 transaksi).\n\n"
+            f"Kuota diskon referral Anda sudah habis.\n\n"
             f"<i>Undang lebih banyak teman untuk mendapatkan diskon lagi!</i>"
         )
 

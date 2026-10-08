@@ -49,7 +49,6 @@ class TestReferralCRUD(unittest.TestCase):
         ])
         # Seed default config
         db.add_all([
-            ReferralConfig(key="reward_per_referral", value="5000"),
             ReferralConfig(key="referral_enabled", value="true"),
             ReferralConfig(key="max_referrals_per_user", value="100"),
         ])
@@ -67,7 +66,7 @@ class TestReferralCRUD(unittest.TestCase):
             self.assertEqual(ref.referrer_id, 100)
             self.assertEqual(ref.referee_id, 200)
             self.assertEqual(ref.status, "PENDING")
-            self.assertEqual(ref.reward_idr, 5000)
+            self.assertEqual(ref.reward_idr, 0)  # bertambah saat teman bertransaksi
         finally:
             db.close()
 
@@ -123,84 +122,6 @@ class TestReferralCRUD(unittest.TestCase):
         finally:
             db.close()
 
-    def test_complete_referral_credits_reward(self):
-        db = SessionLocal()
-        try:
-            crud.create_referral(db, referrer_id=100, referee_id=200)
-            result = crud.complete_referral(db, referee_id=200)
-            self.assertTrue(result)
-
-            # Check status
-            ref = crud.get_referral_by_referee(db, 200)
-            self.assertEqual(ref.status, "COMPLETED")
-            self.assertIsNotNone(ref.completed_at)
-
-            # Check referrer balance credited
-            bal = crud.get_user_balance(db, 100)
-            self.assertEqual(bal, 5000.0)
-        finally:
-            db.close()
-
-    def test_complete_referral_credits_reward_and_referee_bonus(self):
-        """When referee_discount_idr is set, referee also receives the bonus/discount credit."""
-        db = SessionLocal()
-        try:
-            crud.set_referral_config(db, "referee_discount_idr", "2500")
-            crud.create_referral(db, referrer_id=100, referee_id=200)
-            result = crud.complete_referral(db, referee_id=200)
-            self.assertTrue(result)
-
-            # Check referrer balance credited 5000
-            bal_referrer = crud.get_user_balance(db, 100)
-            self.assertEqual(bal_referrer, 5000.0)
-
-            # Check referee balance credited 2500
-            bal_referee = crud.get_user_balance(db, 200)
-            self.assertEqual(bal_referee, 2500.0)
-        finally:
-            db.close()
-
-    def test_complete_referral_min_trade_requirement(self):
-        """When min_trade_amount_idr is set, trade amount must be >= minimum."""
-        db = SessionLocal()
-        try:
-            crud.set_referral_config(db, "min_trade_amount_idr", "50000")
-            crud.create_referral(db, referrer_id=100, referee_id=200)
-
-            # 1. Trade below minimum (20.000) -> rejected, stays PENDING
-            res1 = crud.complete_referral(db, referee_id=200, trade_amount_idr=20000.0)
-            self.assertFalse(res1)
-            ref1 = crud.get_referral_by_referee(db, 200)
-            self.assertEqual(ref1.status, "PENDING")
-            self.assertEqual(crud.get_user_balance(db, 100), 0.0)
-
-            # 2. Next trade meeting minimum (50.000) -> completed, credited!
-            res2 = crud.complete_referral(db, referee_id=200, trade_amount_idr=50000.0)
-            self.assertTrue(res2)
-            ref2 = crud.get_referral_by_referee(db, 200)
-            self.assertEqual(ref2.status, "COMPLETED")
-            self.assertEqual(crud.get_user_balance(db, 100), 5000.0)
-        finally:
-            db.close()
-
-    def test_complete_referral_already_completed(self):
-        """Double-complete should return False."""
-        db = SessionLocal()
-        try:
-            crud.create_referral(db, referrer_id=100, referee_id=200)
-            self.assertTrue(crud.complete_referral(db, 200))
-            self.assertFalse(crud.complete_referral(db, 200))
-        finally:
-            db.close()
-
-    def test_complete_referral_no_referral(self):
-        db = SessionLocal()
-        try:
-            result = crud.complete_referral(db, referee_id=999)
-            self.assertFalse(result)
-        finally:
-            db.close()
-
 
 class TestReferralStats(unittest.TestCase):
     def setUp(self):
@@ -212,15 +133,21 @@ class TestReferralStats(unittest.TestCase):
             User(telegram_id=300, username="ref2", balance_idr=Decimal("0")),
             User(telegram_id=400, username="ref3", balance_idr=Decimal("0")),
         ])
-        db.add(ReferralConfig(key="reward_per_referral", value="5000"))
         db.commit()
 
-        # Create 3 referrals, complete 2
+        # Create 3 referrals, complete 2 (teman 200 & 300 sudah punya transaksi selesai)
+        from database.models import Order
+        from services.referral_rewards import process_referral_for_referee
         crud.create_referral(db, 100, 200)
         crud.create_referral(db, 100, 300)
         crud.create_referral(db, 100, 400)
-        crud.complete_referral(db, 200)
-        crud.complete_referral(db, 300)
+        for i, uid in enumerate((200, 300)):
+            db.add(Order(
+                order_id=f"ORD-STAT-{i}", telegram_id=uid, order_type="buy", crypto_symbol="USDT",
+                network="BSC", crypto_amount=Decimal("2"), price_per_unit=16000, nominal_idr=40000,
+                fee_idr=3000, total_idr=40000, status="completed"))
+            db.commit()
+            process_referral_for_referee(db, uid)
         db.close()
 
     def tearDown(self):
@@ -233,7 +160,9 @@ class TestReferralStats(unittest.TestCase):
             self.assertEqual(stats["total"], 3)
             self.assertEqual(stats["completed"], 2)
             self.assertEqual(stats["pending"], 1)
-            self.assertEqual(stats["total_reward"], 10000)
+            # Per teman: Rp 1.000 (transaksi ke-1) + 7% x fee Rp 3.000 (Rp 210), masih masa tahan
+            self.assertEqual(stats["total_reward"], 2 * 1210)
+            self.assertEqual(stats["held_reward"], 2 * 1210)
         finally:
             db.close()
 
@@ -258,8 +187,8 @@ class TestReferralConfig(unittest.TestCase):
     def test_set_and_get(self):
         db = SessionLocal()
         try:
-            crud.set_referral_config(db, "reward_per_referral", "10000")
-            val = crud.get_referral_config(db, "reward_per_referral")
+            crud.set_referral_config(db, "reward_first_tx_idr", "10000")
+            val = crud.get_referral_config(db, "reward_first_tx_idr")
             self.assertEqual(val, "10000")
         finally:
             db.close()
@@ -291,7 +220,6 @@ class TestStartDeepLink(unittest.IsolatedAsyncioTestCase):
         db = SessionLocal()
         db.add_all([
             User(telegram_id=100, username="referrer"),
-            ReferralConfig(key="reward_per_referral", value="5000"),
             ReferralConfig(key="referral_enabled", value="true"),
         ])
         db.commit()
@@ -426,7 +354,7 @@ class TestSetReferralHandler(unittest.IsolatedAsyncioTestCase):
 
         db = SessionLocal()
         try:
-            val = crud.get_referral_config(db, "reward_per_referral")
+            val = crud.get_referral_config(db, "reward_first_tx_idr")
             self.assertEqual(val, "10000")
         finally:
             db.close()
@@ -496,7 +424,7 @@ class TestSetReferralHandler(unittest.IsolatedAsyncioTestCase):
 
         db = SessionLocal()
         try:
-            val = crud.get_referral_config(db, "referee_discount_idr")
+            val = crud.get_referral_config(db, "referee_fee_discount_idr")
             self.assertEqual(val, "3000")
         finally:
             db.close()
@@ -550,8 +478,6 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
         db = SessionLocal()
         db.add_all([
             User(telegram_id=999, username="admin_boss", balance_idr=Decimal("0")),
-            ReferralConfig(key="reward_per_referral", value="5000"),
-            ReferralConfig(key="referee_discount_idr", value="2500"),
             ReferralConfig(key="referral_enabled", value="true"),
         ])
         db.commit()
@@ -580,8 +506,9 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
         update.callback_query.edit_message_text.assert_awaited_once()
         text = update.callback_query.edit_message_text.call_args.kwargs["text"]
         self.assertIn("MANAJEMEN PROGRAM REFERRAL", text)
-        self.assertIn("Reward Pengundang", text)
-        self.assertIn("Potongan/Bonus Teman", text)
+        self.assertIn("Transaksi ke-1 teman", text)
+        self.assertIn("Diskon fee transaksi pertama", text)
+        self.assertIn("Rp 1.000", text)  # default sesuai ketentuan tanpa setup admin
 
     async def test_admin_ref_toggle_enabled(self):
         from bot.handlers.admin import admin_panel_callback
@@ -626,7 +553,7 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
 
         db = SessionLocal()
         try:
-            val = crud.get_referral_config(db, "reward_per_referral")
+            val = crud.get_referral_config(db, "reward_first_tx_idr")
             self.assertEqual(val, "10000")
         finally:
             db.close()
@@ -650,7 +577,7 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
 
         db = SessionLocal()
         try:
-            val = crud.get_referral_config(db, "referee_discount_idr")
+            val = crud.get_referral_config(db, "referee_fee_discount_idr")
             self.assertEqual(val, "5000")
         finally:
             db.close()
@@ -666,7 +593,7 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
             ),
         )
         context = SimpleNamespace(
-            user_data={"admin_awaiting_ref_custom_reward": True}
+            user_data={"admin_awaiting_ref_cfg": "reward"}
         )
 
         with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
@@ -674,11 +601,11 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
                 handled = await admin_referral_text_handler(update, context)
 
         self.assertTrue(handled)
-        self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_reward"))
+        self.assertFalse(context.user_data.get("admin_awaiting_ref_cfg"))
 
         db = SessionLocal()
         try:
-            val = crud.get_referral_config(db, "reward_per_referral")
+            val = crud.get_referral_config(db, "reward_first_tx_idr")
             self.assertEqual(val, "15000")
         finally:
             db.close()
@@ -718,7 +645,7 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
             ),
         )
         context = SimpleNamespace(
-            user_data={"admin_awaiting_ref_custom_min_trade": True}
+            user_data={"admin_awaiting_ref_cfg": "min_trade"}
         )
 
         with patch("bot.handlers.admin.SessionLocal", side_effect=lambda: SessionLocal()):
@@ -726,7 +653,7 @@ class TestAdminReferralInteractive(unittest.IsolatedAsyncioTestCase):
                 handled = await admin_referral_text_handler(update, context)
 
         self.assertTrue(handled)
-        self.assertFalse(context.user_data.get("admin_awaiting_ref_custom_min_trade"))
+        self.assertFalse(context.user_data.get("admin_awaiting_ref_cfg"))
 
         db = SessionLocal()
         try:
