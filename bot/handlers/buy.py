@@ -1511,7 +1511,7 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
 buy_conversation_handler = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(start_buy_callback, pattern="^menu_buy$"),
-        CommandHandler("buy", start_buy_command)
+        CommandHandler(["buy", "beli"], start_buy_command)
     ],
     states={
         SELECT_SYMBOL: [

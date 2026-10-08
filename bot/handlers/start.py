@@ -57,14 +57,14 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
     return (
         f"{E_WAVE()} <b>Selamat {greeting}, {user_name}!</b>\n"
         f"{E_CALENDAR()} <i>{time_str}</i>\n\n"
-        f"Selamat Datang di <b>HSN STORE BOT</b>, P2P Crypto Trading Automation.\n\n"
+        f"Selamat Datang di <b>TokoKoin ID</b> , Platform Jual Beli Koin terpercaya di Telegram. ☑️\n\n"
         f"{E_CHART()} <b>STATISTIK AKUN</b>\n"
         f"├── {E_MONEY()} <b>Saldo Aktif</b>   : <b>{format_idr(user_bal)}</b>\n"
         f"└── {E_CART()} <b>Total Order</b>   : <b>{user_orders} Transaksi</b>\n\n"
         f"{E_CHART()} <b>STATISTIK BOT</b>\n"
         f"├── {E_USER()} <b>Total Pengguna</b> : <b>{total_users:,} Member</b>\n"
         f"└── {E_CHECK()} <b>Total Transaksi</b>: <b>{total_success:,}x Berhasil</b>\n\n"
-        f"Silakan gunakan menu di bawah untuk memulai transaksi:"
+        f"Silahkan pilih menu di bawah untuk memulai transaksi:"
     )
 
 

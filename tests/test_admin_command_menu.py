@@ -69,8 +69,8 @@ class TestFormatMenuAdmin(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertIn(name, registered, f"/{name} ada di menu tapi tidak punya handler")
 
-    def test_menu_user_biasa_tidak_berubah(self):
-        self.assertEqual([n for n, _ in BOT_COMMAND_MENU], ["start", "cancel"])
+    def test_menu_user_biasa(self):
+        self.assertEqual([n for n, _ in BOT_COMMAND_MENU], ["start", "beli", "jual", "convert", "cancel"])
 
 
 class TestPemasanganMenuAdmin(unittest.IsolatedAsyncioTestCase):

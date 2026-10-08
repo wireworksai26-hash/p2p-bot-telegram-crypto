@@ -909,7 +909,7 @@ async def cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 sell_conversation_handler = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(start_sell_callback, pattern="^menu_sell$"),
-        CommandHandler("sell", start_sell_command)
+        CommandHandler(["sell", "jual"], start_sell_command)
     ],
     states={
         SELECT_SYMBOL: [

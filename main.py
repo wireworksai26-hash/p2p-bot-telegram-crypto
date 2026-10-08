@@ -439,7 +439,10 @@ def _seed_price_configs(db):
 # 2. TELEGRAM BOT SETUP
 # =============================================================
 BOT_COMMAND_MENU = [
-    ("start", "Memulai bot"),
+    ("start", "Menu utama"),
+    ("beli", "Beli crypto"),
+    ("jual", "Jual crypto"),
+    ("convert", "Convert / Swap crypto"),
     ("cancel", "Membatalkan transaksi"),
 ]
 

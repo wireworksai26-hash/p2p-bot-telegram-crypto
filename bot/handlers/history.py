@@ -73,10 +73,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 
                 text_lines.append(
                     f"{idx}. <b>{order_type_str} | {order.order_id}</b>\n"
-                    f"   {E_COIN()} Aset: <code>{crypto_str} ({order.network})</code>\n"
-                    f"   {E_CARD()} Total: <code>{format_idr(order.total_idr)}</code>\n"
-                    f"   🚦 Status: <b>{status_str}</b>\n"
-                    f"   {E_CALENDAR()} Waktu: <i>{date_str}</i>\n"
+                    f"   Aset: <code>{crypto_str} ({order.network})</code>\n"
+                    f"   Total: <code>{format_idr(order.total_idr)}</code>\n"
+                    f"   Status: <b>{status_str}</b>\n"
+                    f"   Waktu: <i>{date_str}</i>\n"
                 )
                 
         message_text = "\n".join(text_lines)

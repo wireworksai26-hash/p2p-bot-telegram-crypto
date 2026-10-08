@@ -28,9 +28,12 @@ from main import BOT_COMMAND_MENU, set_bot_commands
 
 
 class TestCommandMenu(unittest.IsolatedAsyncioTestCase):
-    async def test_menu_hanya_start_dan_cancel(self):
+    async def test_menu_user_default(self):
         self.assertEqual(BOT_COMMAND_MENU, [
-            ("start", "Memulai bot"),
+            ("start", "Menu utama"),
+            ("beli", "Beli crypto"),
+            ("jual", "Jual crypto"),
+            ("convert", "Convert / Swap crypto"),
             ("cancel", "Membatalkan transaksi"),
         ])
 
