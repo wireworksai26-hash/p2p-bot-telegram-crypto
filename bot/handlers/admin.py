@@ -1643,7 +1643,11 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         elif data == "admin_panel_orders":
             text, markup = build_admin_orders_view(db)
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            try:
+                await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            except BadRequest as edit_err:
+                if "not modified" not in str(edit_err).lower():
+                    raise
             await query.answer("Antrean order dimuat.")
 
         elif data == "admin_panel_wallets":
@@ -4158,6 +4162,28 @@ async def refreshwallet_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("❌ Gagal menyinkronisasikan wallet.")
 
 
+async def _finish_admin_action(query, tag: str) -> None:
+    """Tandai pesan admin setelah approve/reject. Pesan foto -> caption, notifikasi teks -> teks;
+    bila pesannya Antrean Order, antrean dimuat ulang (bukan diganti satu order)."""
+    try:
+        msg = query.message
+        if msg is None:
+            return
+        if msg.caption is not None:
+            await query.edit_message_caption(caption=f"{msg.caption_html}\n\n{tag}", parse_mode="HTML")
+        elif "ANTREAN ORDER AKTIF" in (msg.text or ""):
+            db = SessionLocal()
+            try:
+                text, markup = build_admin_orders_view(db)
+            finally:
+                db.close()
+            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            await query.edit_message_text(text=f"{msg.text_html or ''}\n\n{tag}", parse_mode="HTML")
+    except Exception as edit_err:
+        logger.debug(f"Tandai pesan admin gagal (aksi tetap berjalan): {edit_err}")
+
+
 async def admin_approve_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Callback tombol Admin: Approve order Buy & trigger auto-send crypto."""
     query = update.callback_query
@@ -4191,14 +4217,7 @@ async def admin_approve_buy_callback(update: Update, context: ContextTypes.DEFAU
             _run_finalize_background(order.order_id, context.bot, allow_admin=True)
         )
 
-        stamp = "\n\n✅ <b>APPROVED &amp; DIESEKUSI OTOMATIS OLEH ADMIN</b>"
-        try:
-            if query.message.caption is not None:  # bukti foto
-                await query.edit_message_caption(caption=query.message.caption_html + stamp, parse_mode="HTML")
-            else:  # notifikasi teks (mis. payout terputus)
-                await query.edit_message_text(text=(query.message.text_html or "") + stamp, parse_mode="HTML")
-        except Exception as edit_err:
-            logger.debug(f"Tandai approve {order_id} gagal (payout tetap jalan): {edit_err}")
+        await _finish_admin_action(query, "✅ <b>APPROVED &amp; DIESEKUSI OTOMATIS OLEH ADMIN</b>")
     except Exception as e:
         logger.error(f"Error admin_approve_buy_callback {order_id}: {e}", exc_info=True)
         await query.answer("❌ Gagal memproses approval.", show_alert=True)
@@ -4256,11 +4275,7 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 f"Dana sebesar <b>{format_idr(refund_amount)}</b> telah otomatis dikembalikan ke <b>Saldo Bot</b> Anda.",
             )
             await query.answer("Order ditolak & Saldo Bot berhasil di-refund ke user.")
-            caption_now = query.message.caption or ""
-            await query.edit_message_caption(
-                caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN (SALDO DI-REFUND)</b>",
-                parse_mode="HTML",
-            )
+            await _finish_admin_action(query, "❌ <b>DITOLAK OLEH ADMIN (SALDO DI-REFUND)</b>")
             return
 
         if order.payment_method == "GOPAY_QRIS":
@@ -4283,11 +4298,7 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 f"Bukti pembayaran Anda tidak dapat diverifikasi oleh admin. Silakan hubungi admin jika ada kendala."
             )
             await query.answer("Order berhasil ditolak.")
-            caption_now = query.message.caption or ""
-            await query.edit_message_caption(
-                caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
-                parse_mode="HTML"
-            )
+            await _finish_admin_action(query, "❌ <b>DITOLAK OLEH ADMIN</b>")
             return
 
         await query.answer(
@@ -4472,18 +4483,7 @@ async def admin_reject_swap_callback(update: Update, context: ContextTypes.DEFAU
                 f"Silakan hubungi admin jika terdapat kekeliruan."
             )
         await query.answer("Swap berhasil ditolak/dibatalkan.")
-        caption_now = query.message.caption or ""
-        text_now = query.message.text or ""
-        if caption_now:
-            await query.edit_message_caption(
-                caption=f"{caption_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
-                parse_mode="HTML"
-            )
-        elif text_now:
-            await query.edit_message_text(
-                text=f"{text_now}\n\n❌ <b>DITOLAK OLEH ADMIN</b>",
-                parse_mode="HTML"
-            )
+        await _finish_admin_action(query, "❌ <b>DITOLAK OLEH ADMIN</b>")
     except Exception as e:
         logger.error(f"Error admin_reject_swap_callback {order_id}: {e}", exc_info=True)
     finally:
