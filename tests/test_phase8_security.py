@@ -368,6 +368,18 @@ class TestAnimatedCustomEmojisAndTestimony(unittest.TestCase):
         bsc_tag = get_network_emoji("BSC")
         self.assertIn("<tg-emoji", bsc_tag)
 
+    def test_ui_emojis_fallback_to_unicode(self):
+        """Elemen UI umum (wave, chart, money, bot, user) merender Unicode murni tanpa <tg-emoji>."""
+        from bot.utils.emojis import E_WAVE, E_CALENDAR, E_BOT, E_USER, E_CHART, E_MONEY, E_CART, E_CHECK
+        self.assertEqual(E_WAVE(), "👋")
+        self.assertEqual(E_CALENDAR(), "📆")
+        self.assertEqual(E_BOT(), "🤖")
+        self.assertEqual(E_USER(), "👥")
+        self.assertEqual(E_CHART(), "📊")
+        self.assertEqual(E_MONEY(), "💰")
+        self.assertEqual(E_CART(), "🛒")
+        self.assertEqual(E_CHECK(), "✅")
+
     def test_anonymize_username_privacy(self):
         """Username pengguna disensor secara aman untuk channel publik."""
         self.assertEqual(anonymize_username("hendra_crypto", 123456), "@he****to")
