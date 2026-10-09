@@ -164,8 +164,8 @@ class TestSavedAccountsUIViews(BaseDBSessionTest, unittest.TestCase):
         # Empty view matches Screenshot 1 text
         text_empty, markup_empty = build_saved_wallets_view(user.telegram_id, db_session)
         self.assertIn("Belum ada alamat tersimpan.", text_empty)
-        self.assertIn("Pilih tombol di bawah untuk menambahkan / mengubah Addres.", text_empty)
-        self.assertTrue(any(btn.text == "📌 Tambah / Simpan Addres" for row in markup_empty.inline_keyboard for btn in row))
+        self.assertIn("Pilih tombol di bawah untuk menambahkan / mengubah Address.", text_empty)
+        self.assertTrue(any(btn.text == "📌 Tambah / Simpan Address" for row in markup_empty.inline_keyboard for btn in row))
 
         # Add wallet
         save_user_wallet(db_session, user.telegram_id, "0x71C839556CB3250b716773B3aBE329a4a796c9c6", "BSC")

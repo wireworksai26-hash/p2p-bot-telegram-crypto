@@ -22,6 +22,25 @@ def format_idr(amount: int) -> str:
         return f"Rp {amount}"
 
 
+def mask_public_name(name) -> str:
+    """Sensor nama untuk tampilan publik (leaderboard): 2 karakter awal + *** + 2 karakter akhir.
+
+    @Oxhusnun -> Ox***un, @Nandaderak -> Na***ak. Karakter '@' dibuang total supaya nama tidak
+    jadi mention yang bisa diklik (cegah scraping dan DM penipuan). Nama pendek disensor lebih
+    ketat agar tidak terbaca utuh: 3-4 karakter -> a***d, 1-2 karakter -> a***, kosong -> User***.
+    """
+    cleaned = "".join(ch for ch in str(name or "") if ch.isprintable() and ch != "@").strip()
+    cleaned = " ".join(cleaned.split())
+    n = len(cleaned)
+    if n == 0:
+        return "User***"
+    if n >= 5:
+        return f"{cleaned[:2]}***{cleaned[-2:]}"
+    if n >= 3:
+        return f"{cleaned[0]}***{cleaned[-1]}"
+    return f"{cleaned[0]}***"
+
+
 # Token yang sudah rebrand resmi: tampilkan ticker pasar, simbol internal lama tetap dipakai
 # untuk harga, saldo, dan record order.
 DISPLAY_SYMBOLS = {"TON": "GRAM"}

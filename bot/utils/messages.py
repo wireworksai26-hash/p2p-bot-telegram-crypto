@@ -30,7 +30,7 @@ WELCOME_MESSAGE = (
     f"{E_CROWN()} <b>Member Ke:</b> #{{user_num}}\n"
     f"{E_USER()} <b>Total Pengguna:</b> {{total_users}} member\n"
     f"{E_CHECK()} <b>Total Transaksi Berhasil:</b> {{total_success}}\n\n"
-    f"Silahkan pilih menu di bawah untuk memulai transaksi:"
+    f"Silakan pilih menu di bawah untuk memulai transaksi:"
 )
 
 SNK_TEXT = (
@@ -161,8 +161,8 @@ def build_buy_completion_message(order) -> str:
 
 
 WALLET_DUPLICATE_WARNING = (
-    "⚠️ <b>Duplikat Addres, Addres ini sudah di simpan user lain.</b>\n\n"
-    "📥 Kirim ulang addres anda yang bener"
+    "⚠️ <b>Duplikat Address, Address ini sudah di simpan user lain.</b>\n\n"
+    "📥 Kirim ulang address Anda yang benar"
 )
 
 # Ditampilkan tepat sebelum tombol konfirmasi Beli/Convert (keputusan client):

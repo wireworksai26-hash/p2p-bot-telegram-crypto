@@ -16,10 +16,11 @@ from database.connection import SessionLocal
 from database.crud import (
     get_referral_stats,
     get_top_referrers,
+    get_referrer_rank,
     get_referral_discount_info,
 )
 from database.models import User
-from bot.utils.formatter import format_idr
+from bot.utils.formatter import format_idr, mask_public_name
 from database.crud import WITHDRAW_MIN_IDR
 from services.referral_rewards import get_referral_settings
 
@@ -138,23 +139,51 @@ async def referral_leaderboard_handler(update: Update, context: ContextTypes.DEF
 
     db = SessionLocal()
     try:
+        viewer_id = update.effective_user.id
         top = get_top_referrers(db, limit=10)
 
         lines = ["🏆 <b>LEADERBOARD REFERRAL</b>\n"]
         if top:
             for i, row in enumerate(top, 1):
                 user = db.query(User).filter(User.telegram_id == row.referrer_id).first()
-                name = f"@{user.username}" if user and user.username else str(row.referrer_id)
+                raw_name = (user.username or user.full_name) if user else None
+                # Nama publik disensor (Ox***un) tanpa '@' supaya tidak bisa diklik/di-scrape.
+                name = _esc(mask_public_name(raw_name or row.referrer_id))
                 total_reward = row.total_reward or 0
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                you = " 👈 <i>Kamu</i>" if row.referrer_id == viewer_id else ""
                 lines.append(
                     f"{medal} {name} — <b>{row.total}</b> referral "
-                    f"({format_idr(total_reward)})"
+                    f"({format_idr(total_reward)}){you}"
                 )
         else:
             lines.append("<i>Belum ada data referral.</i>")
 
-        keyboard = [
+        me = get_referrer_rank(db, viewer_id)
+        if me["rank"] is not None and me["rank"] <= 10:
+            rank_text = f"#{me['rank']}"
+        elif me["rank"] is not None:
+            rank_text = f"Belum Masuk Top 10 (#{me['rank']})"
+        else:
+            rank_text = "Belum Masuk Top 10"
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("📍 <b>Posisi Anda Saat Ini:</b>")
+        lines.append(
+            f"Peringkat: <b>{rank_text}</b> | Total: <b>{me['total']}</b> Referral "
+            f"({format_idr(me['total_reward'])})"
+        )
+        lines.append("\n📢 <i>Bagikan link referral Anda untuk mendaki leaderboard</i>")
+
+        keyboard = []
+        try:
+            bot_username = (await context.bot.get_me()).username
+            share_text = (f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! "
+                          f"Daftar lewat link ini ya:\nhttps://t.me/{bot_username}?start=ref_{viewer_id}")
+            keyboard.append([InlineKeyboardButton(
+                "📤 Bagikan Link ke Teman", url=f"https://t.me/share/url?url={quote(share_text)}")])
+        except Exception as exc:
+            logger.debug("Tombol bagikan leaderboard dilewati: %s", exc)
+        keyboard += [
             [InlineKeyboardButton("🔙 Kembali", callback_data="menu_referral")],
             [InlineKeyboardButton("🏠 Menu Utama", callback_data="menu_back")],
         ]

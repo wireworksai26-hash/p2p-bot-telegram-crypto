@@ -64,7 +64,7 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
         f"{E_CHART()} <b>STATISTIK BOT</b>\n"
         f"├── {E_USER()} <b>Total Pengguna</b> : <b>{total_users:,} Member</b>\n"
         f"└── {E_CHECK()} <b>Total Transaksi</b>: <b>{total_success:,}x Berhasil</b>\n\n"
-        f"Silahkan pilih menu di bawah untuk memulai transaksi:"
+        f"Silakan pilih menu di bawah untuk memulai transaksi:"
     )
 
 

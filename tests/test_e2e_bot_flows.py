@@ -204,7 +204,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
             db.close()
         await self.open_buy_amount_step(self.B)
         shown = await self.say(self.B, self.WALLET.lower())
-        self.assertIn("Duplikat Addres", shown)
+        self.assertIn("Duplikat Address", shown)
         # Masih di langkah input wallet: alamat lain diterima.
         shown = await self.say(self.B, "0x" + "b" * 40)
         self.assertIn("PILIH METODE PEMBAYARAN", shown)
@@ -247,7 +247,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         finally:
             db.close()
         await self._convert_to_target_wallet_step(self.A)
-        self.assertIn("Duplikat Addres", await self.say(self.A, self.WALLET.lower()))
+        self.assertIn("Duplikat Address", await self.say(self.A, self.WALLET.lower()))
 
     async def test_stale_buy_quote_rejected_when_price_moved(self):
         from services import quote_guard
@@ -582,7 +582,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
                    if (b.get("callback_data") or "").startswith("buy_saved_wallet_")]
         self.assertTrue(one_tap, "tombol 1-tap harus ada")
         shown = await self.tap(self.A, one_tap[0])
-        self.assertIn("Duplikat Addres", shown)
+        self.assertIn("Duplikat Address", shown)
         self.assertNotIn("PILIH METODE PEMBAYARAN", shown)
 
     async def test_sell_pipe_characters_in_bank_input_are_neutralised(self):

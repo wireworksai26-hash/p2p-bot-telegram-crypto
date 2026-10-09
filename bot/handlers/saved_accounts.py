@@ -80,10 +80,10 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
             "-------------------------------------\n\n"
             "<code>Belum ada alamat tersimpan.</code>\n\n"
             "💡 Simpan alamat wallet Anda agar proses Beli koin crypto lebih cepat (1-Tap checkout) tanpa perlu ketik ulang alamat.\n\n"
-            "✍️ <b>Pilih tombol di bawah untuk menambahkan / mengubah Addres.</b>"
+            "✍️ <b>Pilih tombol di bawah untuk menambahkan / mengubah Address.</b>"
         )
         keyboard = [
-            [InlineKeyboardButton("📌 Tambah / Simpan Addres", callback_data="act_add_saved_wallet")],
+            [InlineKeyboardButton("📌 Tambah / Simpan Address", callback_data="act_add_saved_wallet")],
             [
                 InlineKeyboardButton("➕ EVM (BSC/ETH)", callback_data="act_add_wallet_EVM"),
                 InlineKeyboardButton("➕ Solana", callback_data="act_add_wallet_SOLANA"),
@@ -127,7 +127,7 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
             "✍️ <b>Kelola alamat wallet Anda di bawah:</b>"
         )
         keyboard = [
-            [InlineKeyboardButton("📌 Tambah / Simpan Addres", callback_data="act_add_saved_wallet")],
+            [InlineKeyboardButton("📌 Tambah / Simpan Address", callback_data="act_add_saved_wallet")],
             [
                 InlineKeyboardButton("➕ EVM", callback_data="act_add_wallet_EVM"),
                 InlineKeyboardButton("➕ Solana", callback_data="act_add_wallet_SOLANA"),

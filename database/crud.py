@@ -2033,11 +2033,43 @@ def get_top_referrers(db: Session, limit: int = 10) -> list:
         )
         .filter(Referral.status == "COMPLETED")
         .group_by(Referral.referrer_id)
-        .order_by(func.count(Referral.id).desc())
+        # Urutan tetap (jumlah, lalu reward, lalu ID) supaya peringkat pribadi selalu cocok dengan daftar.
+        .order_by(func.count(Referral.id).desc(), func.sum(Referral.reward_idr).desc(), Referral.referrer_id.asc())
         .limit(limit)
         .all()
     )
     return results
+
+
+def get_referrer_rank(db: Session, referrer_id: int) -> dict:
+    """Peringkat pribadi di leaderboard referral (urutan sama dengan get_top_referrers).
+
+    Return {"rank": int | None, "total": jumlah referral selesai, "total_reward": rupiah}.
+    rank None bila belum punya referral yang selesai.
+    """
+    from database.models import Referral
+    from sqlalchemy import and_
+
+    agg = (
+        db.query(
+            Referral.referrer_id.label("referrer_id"),
+            func.count(Referral.id).label("n"),
+            func.coalesce(func.sum(Referral.reward_idr), 0).label("r"),
+        )
+        .filter(Referral.status == "COMPLETED")
+        .group_by(Referral.referrer_id)
+        .subquery()
+    )
+    mine = db.query(agg.c.n, agg.c.r).filter(agg.c.referrer_id == referrer_id).first()
+    if mine is None:
+        return {"rank": None, "total": 0, "total_reward": 0}
+    n, r = int(mine.n), int(mine.r or 0)
+    ahead = db.query(func.count()).select_from(agg).filter(or_(
+        agg.c.n > n,
+        and_(agg.c.n == n, agg.c.r > r),
+        and_(agg.c.n == n, agg.c.r == r, agg.c.referrer_id < referrer_id),
+    )).scalar() or 0
+    return {"rank": int(ahead) + 1, "total": n, "total_reward": r}
 
 
 def get_referral_config(db: Session, key: str) -> Optional[str]:

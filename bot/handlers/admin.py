@@ -4240,7 +4240,7 @@ async def admin_approve_buy_callback(update: Update, context: ContextTypes.DEFAU
             _run_finalize_background(order.order_id, context.bot, allow_admin=True)
         )
 
-        await _finish_admin_action(query, "✅ <b>APPROVED &amp; DIESEKUSI OTOMATIS OLEH ADMIN</b>")
+        await _finish_admin_action(query, "✅ <b>APPROVED &amp; DIEKSEKUSI OTOMATIS OLEH ADMIN</b>")
     except Exception as e:
         logger.error(f"Error admin_approve_buy_callback {order_id}: {e}", exc_info=True)
         await query.answer("❌ Gagal memproses approval.", show_alert=True)
