@@ -20,8 +20,43 @@ def _plain(text: str) -> str:
 
 
 class IsiCatatan(unittest.TestCase):
-    def test_catatan_kirim_menyebut_exchange_dan_cwallet(self):
+    def test_catatan_kirim_teks_sesuai_permintaan(self):
         text = _plain(exchange_send_note())
+        for fragment in (
+            "Jangan kirim dari akun Exchange seperti",
+            "Gate.io", "Bybit", "Bitget", "Cwallet", "dan sejenisnya",
+            "Jumlah yang sampai bisa kurang dan dikhawatirkan tidak terdeteksi oleh bot",
+            "Kirim dari Alamat Wallet Web3 Pribadi",
+        ):
+            self.assertIn(fragment, text)
+
+    def test_catatan_kirim_logo_exchange_tampil_bila_id_terdaftar(self):
+        from unittest.mock import patch
+        from bot.utils import wallet_notes
+        ids = {"EXCH_GATE": "111", "EXCH_BYBIT": "222", "EXCH_BITGET": "333", "EXCH_CWALLET": "444"}
+        with patch.dict(wallet_notes.CUSTOM_EMOJI_IDS, ids):
+            note = exchange_send_note()
+        for emoji_id, name in (("111", "Gate.io"), ("222", "Bybit"), ("333", "Bitget"), ("444", "Cwallet")):
+            self.assertRegex(note, rf'<tg-emoji emoji-id="{emoji_id}">[^<]*</tg-emoji> {name}')
+
+    def test_catatan_kirim_tanpa_id_logo_hanya_nama_tanpa_emoji_kosong(self):
+        from unittest.mock import patch
+        from bot.utils import wallet_notes
+        tanpa_logo = {k: v for k, v in wallet_notes.CUSTOM_EMOJI_IDS.items() if not k.startswith("EXCH_")}
+        with patch.object(wallet_notes, "CUSTOM_EMOJI_IDS", tanpa_logo):
+            note = exchange_send_note()
+        self.assertNotIn("<tg-emoji", note)
+        self.assertIn("Gate.io, Bybit, Bitget, Cwallet", note)
+
+    def test_logo_exchange_sudah_terdaftar_secara_bawaan(self):
+        note = exchange_send_note()
+        self.assertEqual(note.count("<tg-emoji"), 4)
+        from bot.utils.emojis import CUSTOM_EMOJI_IDS
+        for key in ("EXCH_GATE", "EXCH_BYBIT", "EXCH_BITGET", "EXCH_CWALLET"):
+            self.assertRegex(CUSTOM_EMOJI_IDS[key], r"^\d{15,}$")
+
+    def test_catatan_terima_menyebut_exchange_dan_cwallet(self):
+        text = _plain(exchange_receive_note())
         self.assertIn("Cwallet", text)
         self.assertIn("exchange", text.lower())
 
@@ -30,13 +65,12 @@ class IsiCatatan(unittest.TestCase):
         self.assertIn("Cwallet", text)
         self.assertIn("exchange", text.lower())
 
-    def test_ikon_jaringan_bsc_ada_sebelum_kata_cwallet(self):
-        for note in (exchange_send_note(), exchange_receive_note()):
-            before = note.split("Cwallet")[0]
-            self.assertTrue(
-                "<tg-emoji" in before or "🟡" in before,
-                "harus ada ikon BSC (emoji kustom atau 🟡) tepat sebelum kata Cwallet",
-            )
+    def test_catatan_terima_ikon_bsc_ada_sebelum_kata_cwallet(self):
+        before = exchange_receive_note().split("Cwallet")[0]
+        self.assertTrue(
+            "<tg-emoji" in before or "🟡" in before,
+            "harus ada ikon BSC (emoji kustom atau 🟡) tepat sebelum kata Cwallet",
+        )
 
     def test_tulisan_tidak_menyalin_kompetitor(self):
         for note in (exchange_send_note(), exchange_receive_note()):

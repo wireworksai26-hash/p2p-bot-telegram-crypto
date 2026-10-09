@@ -111,6 +111,13 @@ DEFAULT_EMOJI_IDS = {
     "NET_BASE": "6176933879622934017",
     "NET_OPTIMISM": "6177169656147619617",
     "NET_ROBINHOOD": "6177109603914883733",
+
+    # Logo exchange untuk catatan "jangan kirim dari exchange" (bot/utils/wallet_notes.py).
+    # Paket: https://t.me/addemoji/exchlogos_by_TokoKoinID_bot (diunggah 2026-10-09).
+    "EXCH_GATE": "6217761370587276510",
+    "EXCH_BYBIT": "6217626276685948093",
+    "EXCH_BITGET": "6217384912408814745",
+    "EXCH_CWALLET": "6217295293621215205",
 }
 
 DEFAULT_EMOJI_ALTS = {
