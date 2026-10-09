@@ -295,6 +295,7 @@ def _migrate_orders_schema():
                 ("unique_code", "INTEGER DEFAULT 0"),
                 ("deposit_proof_file_id", "VARCHAR(500)"),
                 ("mdr_idr", "BIGINT DEFAULT 0"),  # Pajak QRIS 0,3%
+                ("sender_wallet", "VARCHAR(250)"),
             ]
             with engine.begin() as conn:
                 for col, dtype in new_columns_orders:

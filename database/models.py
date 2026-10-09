@@ -72,6 +72,7 @@ class Order(Base):
     # Wallet / Bank info
     buyer_wallet = Column(String(250), nullable=True)   # Destination address for BUY / SWAP / info bank SELL
     deposit_wallet = Column(String(250), nullable=True) # Seller deposit address
+    sender_wallet = Column(String(250), nullable=True)  # Alamat wallet pengirim user (untuk SELL)
 
     # Payment info
     payment_method = Column(String(30), nullable=True)   # 'GOPAY_QRIS', 'BOT_BALANCE'

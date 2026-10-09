@@ -193,9 +193,11 @@ class DepositDetector:
                 expected_amount=expected_amount,
                 not_before=order.created_at,
                 not_after=self.deposit_deadline(order),
+                expected_sender=getattr(order, "sender_wallet", None),
             )
             if (verified and not verified.get("verified")
-                    and (verified.get("reason") or "") in ALASAN_HASH_BATAL):
+                    and ((verified.get("reason") or "") in ALASAN_HASH_BATAL
+                         or (verified.get("reason") or "").startswith("Alamat pengirim tidak sesuai"))):
                 alasan = verified.get("reason")
                 order.deposit_tx_hash = None
                 order.tx_hash = None

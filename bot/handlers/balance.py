@@ -82,7 +82,8 @@ async def show_balance_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E_TAG()} <b>Username</b>: @{user.username or 'N/A'}\n"
         f"{E_ID()} <b>ID User</b> : <code>{user.id}</code>\n"
         f"{E_CARD()} <b>Saldo IDR</b>: <b>{format_idr(int(balance))}</b>\n"
-        f"💸 <i>Minimal Withdraw 10k</i>\n\n"
+        f"💸 <i>Withdraw: min 10k, maks 100k/hari, gratis biaya (promo). "
+        f"Syarat: sudah menyelesaikan 1 transaksi beli/jual/convert.</i>\n\n"
         f"{E_SPARKLES()} <i>Saldo IDR dapat digunakan untuk membeli koin crypto secara instan (1-Tap) tanpa perlu transfer bank!</i>"
     )
 

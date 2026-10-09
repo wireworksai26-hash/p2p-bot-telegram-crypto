@@ -1508,10 +1508,73 @@ def topup_locked_amount(db: Session, telegram_id: int) -> int:
     return max(0, int(topups) - int(spent))
 
 
-def get_withdrawable_balance(db: Session, telegram_id: int) -> int:
-    """Saldo yang boleh ditarik = saldo - bagian topup yang belum dipakai belanja."""
+WITHDRAW_DAILY_MAX_IDR = 100_000
+
+
+def _wib_day_start_utc(now: Optional[datetime] = None) -> datetime:
+    """Awal hari ini WIB (00.00) dalam UTC naive, sesuai penyimpanan created_at."""
+    now = now or datetime.utcnow()
+    wib = now + timedelta(hours=7)
+    return wib.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=7)
+
+
+def has_completed_transaction(db: Session, telegram_id: int) -> bool:
+    """Syarat withdraw: minimal 1 transaksi beli/jual/convert yang SELESAI (salah satu cukup)."""
+    return db.query(Order.id).filter(
+        Order.telegram_id == telegram_id,
+        Order.order_type.in_(("buy", "sell", "swap")),
+        func.lower(Order.status) == "completed",
+    ).first() is not None
+
+
+def withdrawn_today_idr(db: Session, telegram_id: int) -> int:
+    """Total withdraw hari ini (WIB) yang masih berlaku: PENDING + PAID (yang ditolak tidak dihitung)."""
+    from database.models import WithdrawRequest
+
+    total = db.query(func.coalesce(func.sum(WithdrawRequest.amount_idr), 0)).filter(
+        WithdrawRequest.telegram_id == telegram_id,
+        WithdrawRequest.status.in_(("PENDING", "PAID")),
+        WithdrawRequest.created_at >= _wib_day_start_utc(),
+    ).scalar() or 0
+    return int(total)
+
+
+def get_withdraw_status(db: Session, telegram_id: int) -> dict:
+    """Ringkasan hak withdraw user: syarat, sisa batas harian, dan nominal maksimal saat ini."""
+    from config.settings import settings
+
     balance = int(get_user_balance(db, telegram_id))
-    return max(0, balance - topup_locked_amount(db, telegram_id))
+    eligible = has_completed_transaction(db, telegram_id)
+    used = withdrawn_today_idr(db, telegram_id)
+    remaining = max(0, WITHDRAW_DAILY_MAX_IDR - used)
+    locked = topup_locked_amount(db, telegram_id) if settings.TOPUP_TURNOVER_LOCK else 0
+    max_now = max(0, min(balance - locked, remaining)) if eligible else 0
+    return {"balance": balance, "eligible": eligible, "used_today": used, "remaining_today": remaining,
+            "locked_topup": locked, "max_now": max_now}
+
+
+def get_withdrawable_balance(db: Session, telegram_id: int) -> int:
+    """Nominal maksimal yang boleh ditarik SEKARANG (syarat transaksi, batas harian, saldo)."""
+    return get_withdraw_status(db, telegram_id)["max_now"]
+
+
+def withdraw_block_reason(status: dict) -> str:
+    """Alasan (Bahasa Indonesia) bila withdraw belum bisa dilakukan; '' bila bisa."""
+    def idr(n):
+        return "Rp " + f"{int(n):,}".replace(",", ".")
+
+    if status["balance"] < WITHDRAW_MIN_IDR:
+        return f"Withdraw terbuka saat saldo minimal {idr(WITHDRAW_MIN_IDR)}."
+    if not status["eligible"]:
+        return ("Withdraw bisa dilakukan setelah kamu menyelesaikan minimal 1 transaksi "
+                "(beli, jual, atau convert) di bot ini.")
+    if status["remaining_today"] < WITHDRAW_MIN_IDR:
+        return (f"Batas withdraw harian {idr(WITHDRAW_DAILY_MAX_IDR)} sudah tercapai "
+                f"(terpakai {idr(status['used_today'])}). Coba lagi besok mulai 00.00 WIB.")
+    if status["max_now"] < WITHDRAW_MIN_IDR:
+        return (f"Saldo yang bisa ditarik {idr(status['max_now'])}, di bawah minimal {idr(WITHDRAW_MIN_IDR)}. "
+                f"Saldo topup hanya bisa dipakai belanja crypto di bot.")
+    return ""
 
 
 def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int):
@@ -1525,7 +1588,7 @@ def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int
     if amount < WITHDRAW_MIN_IDR:
         return None
     if amount > get_withdrawable_balance(db, telegram_id):
-        return None  # sisa saldo berasal dari topup yang belum dipakai belanja
+        return None  # belum ada transaksi selesai, melewati batas harian, atau saldo topup terkunci
     try:
         changed = db.query(User).filter(
             User.telegram_id == telegram_id,
@@ -1543,6 +1606,10 @@ def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int
             account_name=bank.account_name,
         )
         db.add(req)
+        db.flush()
+        if withdrawn_today_idr(db, telegram_id) > WITHDRAW_DAILY_MAX_IDR:
+            db.rollback()  # permintaan lain (tap ganda/sesi lain) sudah memakai batas harian
+            return None
         db.add(AuditLog(
             telegram_id=telegram_id,
             action="WITHDRAW_REQUEST",

@@ -302,6 +302,20 @@ class TopupAtomic(_Base):
 
 # ───────────── 6. Anti cairkan QRIS & akun kosong ─────────────
 class TopupWithdrawLock(_Base):
+    """Kunci saldo topup (OPSIONAL: TOPUP_TURNOVER_LOCK=true; bawaan mati)."""
+
+    def setUp(self):
+        super().setUp()
+        self._lock = patch.object(settings, "TOPUP_TURNOVER_LOCK", True)
+        self._lock.start()
+        # Syarat dasar withdraw terpenuhi: sudah ada 1 transaksi selesai (dibayar QRIS langsung).
+        self.db.add(_order("ORD-DONE-QRIS", "completed", method="GOPAY_QRIS", total_idr=5_000))
+        self.db.commit()
+
+    def tearDown(self):
+        self._lock.stop()
+        super().tearDown()
+
     def _fund(self, topup=100_000, extra=0):
         self.db.add(TopupOrder(topup_id="TOPUP-W", telegram_id=USER, amount_idr=topup, mdr_idr=0,
                                status="SUCCESS", created_at=datetime.utcnow(), paid_at=datetime.utcnow()))
@@ -349,6 +363,173 @@ class TopupWithdrawLock(_Base):
         self.db.query(User).filter_by(telegram_id=USER).update({User.balance_idr: 100_000})
         self.db.commit()
         self.assertEqual(crud.get_withdrawable_balance(self.db, USER), 100_000)
+
+
+# ───────────── Aturan withdraw: 1 transaksi selesai, maks 100k/hari, min 10k, gratis promo ─────────────
+class WithdrawRules(_Base):
+    BANK = SimpleNamespace(bank_name="BCA", account_number="1", account_name="X")
+
+    def _balance(self, amount):
+        self.db.query(User).filter_by(telegram_id=USER).update({User.balance_idr: amount})
+        self.db.commit()
+
+    def _complete(self, order_type="buy", status="completed", uid=USER, oid="ORD-OK"):
+        self.db.add(_order(oid, status, order_type, method="GOPAY_QRIS", telegram_id=uid))
+        self.db.commit()
+
+    def test_tanpa_transaksi_selesai_tidak_bisa_withdraw(self):
+        self._balance(500_000)
+        status = crud.get_withdraw_status(self.db, USER)
+        self.assertFalse(status["eligible"])
+        self.assertEqual(status["max_now"], 0)
+        self.assertIn("minimal 1 transaksi", crud.withdraw_block_reason(status))
+        self.assertIsNone(crud.create_withdraw_request(self.db, USER, self.BANK, 50_000))
+        self.assertEqual(self.balance(), Decimal("500000"))
+
+    def test_salah_satu_jenis_transaksi_selesai_cukup(self):
+        for i, kind in enumerate(("buy", "sell", "swap")):
+            with self.subTest(kind=kind):
+                uid = 7000 + i
+                self.db.add(User(telegram_id=uid, balance_idr=Decimal("50000")))
+                self.db.commit()
+                self.assertFalse(crud.get_withdraw_status(self.db, uid)["eligible"])
+                self._complete(kind, uid=uid, oid=f"ORD-{kind}")
+                self.assertTrue(crud.get_withdraw_status(self.db, uid)["eligible"])
+
+    def test_transaksi_belum_selesai_tidak_dihitung(self):
+        self._balance(50_000)
+        for i, st in enumerate(("pending", "expired", "rejected", "cancelled", "manual_review",
+                                "WAITING_CRYPTO_DEPOSIT", "paid")):
+            self._complete("buy", status=st, oid=f"ORD-NOT-{i}")
+        self.assertFalse(crud.get_withdraw_status(self.db, USER)["eligible"])
+
+    def test_transaksi_user_lain_tidak_dihitung(self):
+        self.db.add(User(telegram_id=7777, balance_idr=Decimal("0")))
+        self.db.commit()
+        self._complete("buy", uid=7777, oid="ORD-OTHER")
+        self._balance(50_000)
+        self.assertFalse(crud.get_withdraw_status(self.db, USER)["eligible"])
+
+    def test_batas_harian_100k(self):
+        self._complete()
+        self._balance(500_000)
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["max_now"], 100_000)
+        self.assertIsNotNone(crud.create_withdraw_request(self.db, USER, self.BANK, 60_000))
+        status = crud.get_withdraw_status(self.db, USER)
+        self.assertEqual((status["used_today"], status["remaining_today"], status["max_now"]),
+                         (60_000, 40_000, 40_000))
+        self.assertIsNone(crud.create_withdraw_request(self.db, USER, self.BANK, 50_000))  # melebihi sisa
+        self.assertIsNotNone(crud.create_withdraw_request(self.db, USER, self.BANK, 40_000))
+        status = crud.get_withdraw_status(self.db, USER)
+        self.assertEqual(status["max_now"], 0)
+        self.assertIn("Batas withdraw harian", crud.withdraw_block_reason(status))
+        self.assertIsNone(crud.create_withdraw_request(self.db, USER, self.BANK, 10_000))
+
+    def test_satu_permintaan_tidak_boleh_di_atas_100k(self):
+        self._complete()
+        self._balance(500_000)
+        self.assertIsNone(crud.create_withdraw_request(self.db, USER, self.BANK, 100_001))
+        self.assertIsNotNone(crud.create_withdraw_request(self.db, USER, self.BANK, 100_000))
+
+    def test_withdraw_ditolak_mengembalikan_jatah_harian(self):
+        self._complete()
+        self._balance(500_000)
+        req = crud.create_withdraw_request(self.db, USER, self.BANK, 100_000)
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["remaining_today"], 0)
+        self.assertTrue(crud.settle_withdraw_request(self.db, req.id, 1, approve=False))
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["remaining_today"], 100_000)
+
+    def test_withdraw_kemarin_wib_tidak_dihitung_hari_ini(self):
+        self._complete()
+        self._balance(500_000)
+        self.db.add(WithdrawRequest(
+            telegram_id=USER, amount_idr=100_000, bank_name="BCA", account_number="1", account_name="X",
+            status="PAID", created_at=crud._wib_day_start_utc() - timedelta(minutes=1)))
+        self.db.commit()
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["remaining_today"], 100_000)
+
+    def test_reset_harian_pakai_tengah_malam_wib(self):
+        # 2026-10-09 18:00 UTC = 10 Okt 01.00 WIB -> hari WIB baru dimulai 09 Okt 17:00 UTC.
+        self.assertEqual(crud._wib_day_start_utc(datetime(2026, 10, 9, 18, 0)), datetime(2026, 10, 9, 17, 0))
+        self.assertEqual(crud._wib_day_start_utc(datetime(2026, 10, 9, 16, 59)), datetime(2026, 10, 8, 17, 0))
+
+    def test_minimal_withdraw_10k(self):
+        self._complete()
+        self._balance(500_000)
+        self.assertIsNone(crud.create_withdraw_request(self.db, USER, self.BANK, 9_999))
+        self.assertIsNotNone(crud.create_withdraw_request(self.db, USER, self.BANK, 10_000))
+
+    def test_saldo_di_bawah_minimal_tidak_bisa(self):
+        self._complete()
+        self._balance(9_000)
+        self.assertIn("minimal", crud.withdraw_block_reason(crud.get_withdraw_status(self.db, USER)))
+
+    def test_saldo_di_bawah_batas_harian_dibatasi_saldo(self):
+        self._complete()
+        self._balance(30_000)
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["max_now"], 30_000)
+
+    def test_kunci_topup_mati_secara_bawaan(self):
+        # Topup besar + 1 transaksi selesai: boleh tarik sampai batas harian (kunci topup hanya bila diaktifkan).
+        self.assertFalse(settings.TOPUP_TURNOVER_LOCK)
+        self._complete()
+        self.db.add(TopupOrder(topup_id="TOPUP-BIG", telegram_id=USER, amount_idr=1_000_000, mdr_idr=0,
+                               status="SUCCESS", created_at=datetime.utcnow(), paid_at=datetime.utcnow()))
+        self._balance(1_000_000)
+        self.assertEqual(crud.get_withdraw_status(self.db, USER)["max_now"], 100_000)
+
+    def test_tidak_ada_biaya_withdraw_saldo_dipotong_sebesar_nominal(self):
+        self._complete()
+        self._balance(80_000)
+        self.assertIsNotNone(crud.create_withdraw_request(self.db, USER, self.BANK, 50_000))
+        self.assertEqual(self.balance(), Decimal("30000"))
+        self.assertEqual(self.db.query(WithdrawRequest).one().amount_idr, 50_000)
+
+
+class WithdrawScreens(_Base):
+    """Layar withdraw di bot: syarat, batas harian, dan promo gratis."""
+
+    async def _start(self, balance, completed):
+        from bot.handlers.withdraw import withdraw_start_handler
+        self.db.query(User).filter_by(telegram_id=USER).update({User.balance_idr: balance})
+        if completed:
+            self.db.add(_order("ORD-W-DONE", "completed", "buy", "GOPAY_QRIS"))
+        from database.models import UserSavedBank
+        self.db.add(UserSavedBank(telegram_id=USER, bank_name="BCA", account_number="123",
+                                  account_name="Budi", account_type="BANK"))
+        self.db.commit()
+        query = MagicMock()
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=USER))
+        context = SimpleNamespace(user_data={}, bot=AsyncMock())
+        await withdraw_start_handler(update, context)
+        return query
+
+    async def test_belum_ada_transaksi_diblokir_dengan_penjelasan(self):
+        q = await self._start(200_000, completed=False)
+        q.edit_message_text.assert_not_awaited()
+        self.assertIn("minimal 1 transaksi", q.answer.await_args.args[0])
+
+    async def test_sudah_ada_transaksi_menampilkan_batas_dan_gratis(self):
+        with patch.object(settings, "WITHDRAW_FREE_UNTIL", "2999-01-01"):
+            q = await self._start(200_000, completed=True)
+        text = q.edit_message_text.await_args.args[0]
+        self.assertIn("GRATIS", text)
+        self.assertIn("Rp 100.000", text)  # batas harian dan nominal maksimal
+        self.assertIn("Minimal penarikan", text)
+
+    async def test_setelah_promo_baris_gratis_hilang(self):
+        with patch.object(settings, "WITHDRAW_FREE_UNTIL", "2000-01-01"):
+            q = await self._start(200_000, completed=True)
+        self.assertNotIn("GRATIS", q.edit_message_text.await_args.args[0])
+
+    async def test_batas_harian_tercapai_diblokir(self):
+        self.db.add(WithdrawRequest(telegram_id=USER, amount_idr=100_000, bank_name="BCA", account_number="1",
+                                    account_name="X", status="PENDING", created_at=datetime.utcnow()))
+        self.db.commit()
+        q = await self._start(200_000, completed=True)
+        self.assertIn("Batas withdraw harian", q.answer.await_args.args[0])
 
 
 # ───────────── 7. Tombol Cek Ulang yang jujur ─────────────

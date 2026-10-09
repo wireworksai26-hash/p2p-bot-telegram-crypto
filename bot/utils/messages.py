@@ -72,6 +72,8 @@ ORDER_SUMMARY_SELL = (
     "────────────────────\n"
     f"{E_MONEY()} <b>Nominal Bersih (IDR):</b> <b>{{nominal_idr_str}}</b>\n"
     "🔌 <b>Fee Layanan:</b> {fee_idr_str}\n\n"
+    "👛 <b>Wallet Pengirim Koin Anda:</b>\n"
+    "<code>{sender_wallet}</code>\n\n"
     "🏦 <b>Rekening / E-Wallet Penerima Anda:</b>\n"
     "• Bank / E-Wallet: {bank_name}\n"
     "• No Rekening: <code>{bank_acc}</code>\n"

@@ -41,6 +41,8 @@ def build_referral_rules_text(cfg: dict) -> str:
         "💰 <b>Saldo Referral</b>\n"
         "• Masuk ke saldo bot: bisa untuk transaksi atau ditarik ke rekening/e-wallet "
         f"(min. {format_idr(WITHDRAW_MIN_IDR)})\n"
+        "• Withdraw: maks. Rp 100.000 per hari, syarat sudah menyelesaikan 1 transaksi "
+        "(beli/jual/convert), biaya gratis selama promo\n"
         f"• Reward masuk setelah transaksi selesai dan {hold}"
     )
 

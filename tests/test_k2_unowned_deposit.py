@@ -56,10 +56,14 @@ class FakeChain:
         self.deposits[tx_hash] = (Decimal(str(amount)), tx_verifier._timestamp(when or datetime.utcnow()), sender)
 
     async def verify_deposit(self, network, symbol, tx_hash, expected_wallet, expected_amount,
-                             not_before=None, not_after=None):
+                             not_before=None, not_after=None, expected_sender=None):
         if tx_hash not in self.deposits:
             return tx_verifier._fail("Transaksi gagal atau belum confirmed.")
         amount, stamp, sender = self.deposits[tx_hash]
+        if expected_sender and sender and not tx_verifier.addresses_match(network, sender, expected_sender):
+            return tx_verifier._fail(
+                f"Alamat pengirim tidak sesuai. Transaksi dikirim dari {sender}, "
+                f"sedangkan wallet terdaftar adalah {expected_sender}.")
         if not tx_verifier._amount_matches(amount, expected_amount):
             return tx_verifier._fail(f"Nominal deposit kurang: diterima {amount} {symbol}, "
                                      f"dibutuhkan {Decimal(str(expected_amount))} {symbol}.")
@@ -325,6 +329,7 @@ class SellE2E(unittest.IsolatedAsyncioTestCase):
         await self.tap(self.A, "swap_tgt_net_BASE", from_screen=False)
         await self.say(self.A, "20")
         await self.say(self.A, "0x" + "c" * 40)
+        await self.say(self.A, "0x" + "a" * 40)  # wallet pengirim koin
         shown = await self.tap(self.A, "confirm_swap_order", from_screen=False)
         db = SessionLocal()
         try:

@@ -751,8 +751,29 @@ async def _verify_aptos(tx_hash, wallet):
     return _ok(Decimal(args[1]) / 10**8, int(data["timestamp"]) / 1e6, data["hash"], data.get("sender", ""))
 
 
+def addresses_match(network: str, addr1: str, addr2: str) -> bool:
+    """Periksa kecocokan dua alamat di blockchain tertentu (EVM case-insensitive, TRON/TON/Move dinormalisasi)."""
+    if not addr1 or not addr2:
+        return False
+    net = (network or "").upper()
+    try:
+        if net in EVM_NETWORKS:
+            return addr1.strip().lower() == addr2.strip().lower()
+        if net == "TRON":
+            return _tron_address(addr1) == _tron_address(addr2)
+        if net == "TON":
+            return ton_address(addr1) == ton_address(addr2)
+        if net in {"SUI", "APTOS"}:
+            return _move_address(addr1) == _move_address(addr2)
+        if net == "SOLANA":
+            return addr1.strip() == addr2.strip()
+    except Exception:
+        pass
+    return addr1.strip().lower() == addr2.strip().lower()
+
+
 async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amount,
-                         not_before=None, not_after=None):
+                         not_before=None, not_after=None, expected_sender=None):
     net, symbol = network.upper(), symbol.upper()
     try:
         if not expected_wallet or Decimal(str(expected_amount)) <= 0:
@@ -784,6 +805,11 @@ async def verify_deposit(network, symbol, tx_hash, expected_wallet, expected_amo
                 return _fail(
                     f"Nominal deposit {kind}: diterima {result['amount']} {symbol}, "
                     f"dibutuhkan {Decimal(str(expected_amount))} {symbol}.")
+            if expected_sender and result.get("from_address"):
+                if not addresses_match(network, result["from_address"], expected_sender):
+                    return _fail(
+                        f"Alamat pengirim tidak sesuai. Transaksi dikirim dari {result['from_address']}, "
+                        f"sedangkan wallet terdaftar adalah {expected_sender}.")
         return result
     except Exception as exc:
         logger.warning("Verifikasi %s/%s gagal (%s)", net, symbol, type(exc).__name__)

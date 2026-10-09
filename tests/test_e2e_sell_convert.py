@@ -59,6 +59,7 @@ from bot.handlers.sell import (
     get_hot_wallet_address,
     INPUT_AMOUNT as SELL_INPUT_AMOUNT,
     INPUT_BANK as SELL_INPUT_BANK,
+    INPUT_SENDER as SELL_INPUT_SENDER,
     CONFIRM_ORDER as SELL_CONFIRM_ORDER,
     WAITING_TX as SELL_WAITING_TX,
 )
@@ -123,7 +124,7 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         with patch("services.price_service.price_service.get_price", new=AsyncMock(return_value=self._mock_price_response(2_000_000.0))):
             next_state = await sell_handle_amount(update, context)
 
-        self.assertEqual(next_state, SELL_INPUT_BANK)
+        self.assertEqual(next_state, SELL_INPUT_SENDER)
         self.assertEqual(context.user_data["sell_crypto_amount"], 0.5)
         self.assertEqual(context.user_data["sell_price_per_unit"], 2_000_000.0)
         # Gross = 0.5 * 2.000.000 = 1.000.000

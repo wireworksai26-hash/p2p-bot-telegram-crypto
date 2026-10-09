@@ -82,6 +82,10 @@ def _plain(html):
     return re.sub(r"<[^>]+>", "", html or "").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
 
 
+# Wallet pengirim koin (langkah Jual/Convert); modul-level agar helper yang dipinjam tes lain ikut memakainya.
+SENDER_WALLET = "0x" + "a" * 40
+
+
 class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
     A, B = 70001, 70002
     WALLET = "0x71C839556CB3250b716773B3aBE329a4a796c9c6"
@@ -226,7 +230,10 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         shown = await self._convert_to_target_wallet_step(self.A)
         self.assertIn("INPUT WALLET TUJUAN", shown)
         shown = await self.say(self.A, "0x" + "c" * 40)
+        self.assertIn("Alamat Wallet Pengirim", shown)
+        shown = await self.say(self.A, SENDER_WALLET)
         self.assertIn("RINGKASAN QUOTE CONVERT", shown)
+        self.assertIn(SENDER_WALLET, shown)  # ringkasan menampilkan wallet pengirim
         self.assertIn("terkunci ke akun Telegram Anda", shown)
         self.assertIn("confirm_swap_order", [b.get("callback_data") for b in self.last_buttons[self.A]])
         await self.say(self.A, "/cancel")
@@ -310,6 +317,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         await self.tap(uid, "sell_sym_USDT")
         await self.tap(uid, "sell_net_USDT_BSC")
         await self.say(uid, "10")
+        await self.say(uid, SENDER_WALLET)
         await self.say(uid, "BCA, 1234567890, Budi Santoso")
         shown = await self.tap(uid, "sell_confirm")
         self.assertIn("ORDER PENJUALAN DIBUAT", shown)
@@ -497,7 +505,9 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         await self.tap(uid, "menu_sell")
         await self.tap(uid, "sell_sym_USDT")
         await self.tap(uid, "sell_net_USDT_BSC")
-        return await self.say(uid, "10")
+        shown = await self.say(uid, "10")
+        self.assertIn("Alamat Wallet Pengirim", shown)  # langkah baru: wallet pengirim dulu
+        return await self.say(uid, SENDER_WALLET)
 
     async def test_sell_bank_account_locked_to_user_after_successful_sale(self):
         db = SessionLocal()

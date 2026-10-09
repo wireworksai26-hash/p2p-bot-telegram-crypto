@@ -44,6 +44,7 @@ from bot.utils.formatter import format_crypto, format_crypto_copy
 from bot.utils.telegram_utils import notify_admins
 from bot.utils.flow_guard import block_if_busy
 from bot.utils.messages import WALLET_DUPLICATE_WARNING, WALLET_LOCK_NOTE
+from bot.utils.wallet_notes import exchange_send_note, exchange_receive_note
 from services import quote_guard
 from bot.utils.emojis import (
     E_SWAP,
@@ -65,6 +66,7 @@ logger = logging.getLogger(__name__)
 
 # State Conversation
 SELECT_SRC_SYMBOL, SELECT_SRC_NET, SELECT_TGT_SYMBOL, SELECT_TGT_NET, INPUT_AMOUNT, INPUT_TARGET_ADDR, CONFIRM_SWAP, WAITING_DEPOSIT_HASH = range(8)
+INPUT_SENDER_ADDR = 8
 
 SUPPORTED_ASSETS = ["USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "SUI", "TON", "MATIC", "ARB", "AVAX", "KAIA", "BERA", "APT", "HYPE", "USDG"]
 
@@ -550,7 +552,8 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>{src_amount:.6f} {src_sym} ({src_net})</b> (~Rp {nominal_idr:,})\n"
         f"Fee Convert: <b>Rp {fee_idr:,}</b>{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"Estimasi yang diterima: <b>{tgt_amount:.6f} {tgt_sym} ({tgt_net})</b>\n\n"
-        f"Silakan masukkan <b>Alamat Wallet {tgt_sym} ({tgt_net})</b> tujuan milikmu:",
+        f"Silakan masukkan <b>Alamat Wallet {tgt_sym} ({tgt_net})</b> tujuan milikmu:\n\n"
+        f"{exchange_receive_note()}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -608,6 +611,48 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     src_sym = context.user_data["swap_src_symbol"]
     src_net = context.user_data["swap_src_network"]
+    await update.message.reply_text(
+        f"✅ Wallet tujuan tersimpan.\n\n"
+        f"Sekarang ketik <b>Alamat Wallet Pengirim</b> Anda: alamat wallet yang akan dipakai mengirim "
+        f"<b>{src_sym} ({src_net})</b> ke bot. Setoran hanya diterima dari alamat ini.\n\n"
+        f"{exchange_send_note()}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+            [get_owner_button()],
+        ]),
+    )
+    return INPUT_SENDER_ADDR
+
+
+async def input_sender_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simpan alamat wallet pengirim koin asal; deposit hanya sah bila datang dari alamat ini."""
+    from services.sender_wallet import check_sender_address
+
+    addr = (update.message.text or "").strip()
+    src_net = context.user_data["swap_src_network"]
+    error = check_sender_address(src_net, addr)
+    if error:
+        await update.message.reply_text(
+            f"❌ {error}\n\nSilakan ketik ulang <b>Alamat Wallet Pengirim</b> di jaringan {src_net}:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Batal Transaksi", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+                [get_owner_button()],
+            ]),
+        )
+        return INPUT_SENDER_ADDR
+    context.user_data["swap_sender_wallet"] = addr
+    return await _show_swap_summary(update, context)
+
+
+async def _show_swap_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ringkasan quote Convert + tombol konfirmasi (setelah alamat tujuan & pengirim terisi)."""
+    target_addr = context.user_data["swap_target_addr"]
+    sender_wallet = context.user_data.get("swap_sender_wallet") or "-"
+    tgt_net = context.user_data["swap_tgt_network"]
+    src_sym = context.user_data["swap_src_symbol"]
+    src_net = context.user_data["swap_src_network"]
     src_amount = context.user_data["swap_src_amount"]
     tgt_sym = context.user_data["swap_tgt_symbol"]
     tgt_amount = context.user_data["swap_tgt_amount"]
@@ -637,6 +682,7 @@ async def input_target_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Nilai IDR:</b> Rp {nominal_idr:,}\n"
         f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
+        f"<b>Wallet Pengirim:</b> <code>{_esc(sender_wallet)}</code>\n"
         f"<b>Wallet Tujuan:</b> <code>{target_addr}</code>\n\n"
         f"{WALLET_LOCK_NOTE}\n\n"
         f"Apakah data di atas sudah sesuai?",
@@ -743,6 +789,7 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
             total_idr=nominal_idr,
             fee_category="CONVERT",
             buyer_wallet=target_addr,
+            sender_wallet=context.user_data.get("swap_sender_wallet"),
             deposit_wallet=seller_deposit_wallet,
             status="WAITING_CRYPTO_DEPOSIT",
             quoted_at=quoted_at,
@@ -773,6 +820,7 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["active_swap_order_id"] = order_id
 
     keyboard = [
+        [InlineKeyboardButton("📋 Salin Jumlah Koin", copy_text=CopyTextButton(text=format_deposit_amount(src_amount, src_sym)))],
         [InlineKeyboardButton("⛓ Salin Alamat Setoran", copy_text=CopyTextButton(text=seller_deposit_wallet))],
         [InlineKeyboardButton("Masukkan TX Hash / Bukti Setor", callback_data=f"input_swap_tx_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],
         [InlineKeyboardButton("Batal Order", callback_data=f"cancel_swap_order_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]
@@ -785,6 +833,7 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"📌 <b>INSTRUKSI SETORAN DANA:</b>\n"
         f"Silakan kirim <b>TEPAT</b> <code>{format_deposit_amount(src_amount, src_sym)}</code> <b>{src_sym} ({src_net})</b> ke alamat wallet seller berikut:\n"
         f"<code>{seller_deposit_wallet}</code>\n\n"
+        f"{exchange_send_note()}\n\n"
         f"Setelah mengirim, tekan tombol di bawah ini untuk mengirim <b>TX Hash</b> (wajib). Convert hanya diproses setelah TX Hash terverifikasi di blockchain. Lupa? Kirim /txhash kapan saja:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1064,6 +1113,11 @@ swap_conv_handler = ConversationHandler(
         ],
         INPUT_TARGET_ADDR: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, input_target_addr),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        INPUT_SENDER_ADDR: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, input_sender_addr),
             CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
             CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
         ],

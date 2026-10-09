@@ -201,8 +201,11 @@ class TestTombolSalin(unittest.IsolatedAsyncioTestCase):
         panggilan = query.edit_message_text.call_args
         kwargs = panggilan.kwargs
         salin = [b for b in _tombol(kwargs["reply_markup"]) if b.copy_text]
-        self.assertEqual(len(salin), 1, "pesan deposit convert wajib punya tombol salin")
-        self.assertEqual(salin[0].copy_text.text, alamat)
+        # Dua tombol salin: jumlah koin (angka saja) dan alamat deposit.
+        self.assertEqual(len(salin), 2, "pesan deposit convert wajib punya tombol salin jumlah & alamat")
+        self.assertIn(alamat, [b.copy_text.text for b in salin])
+        jumlah = [b.copy_text.text for b in salin if b.copy_text.text != alamat][0]
+        self.assertRegex(jumlah, r"^\d+(\.\d+)?$", "tombol salin jumlah hanya berisi angka")
         teks = panggilan.args[0] if panggilan.args else kwargs.get("text", "")
         self.assertIn(f"<code>{alamat}</code>", teks, "alamat harus biru <code>")
 
@@ -239,8 +242,12 @@ class TestTombolSalin(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(kirim, "pesan deposit jual harus terkirim")
         kwargs = kirim.kwargs
         salin = [b for b in _tombol(kwargs["reply_markup"]) if b.copy_text]
-        self.assertEqual(len(salin), 1, "pesan deposit jual wajib punya tombol salin")
-        self.assertEqual(salin[0].copy_text.text, hot)
+        self.assertEqual(len(salin), 2, "pesan deposit jual wajib punya tombol salin jumlah & alamat")
+        self.assertIn(hot, [b.copy_text.text for b in salin])
+        jumlah = [b.copy_text.text for b in salin if b.copy_text.text != hot][0]
+        self.assertRegex(jumlah, r"^\d+(\.\d+)?$", "tombol salin jumlah hanya berisi angka")
+        # Angka koin di teks order ikut bisa diketuk-salin (di dalam <code>), tanpa nama koin.
+        self.assertIn(f"<code>{jumlah}</code>", kwargs["caption"])
         self.assertIn(f"<code>{hot}</code>", kwargs["caption"], "alamat harus biru <code>")
 
 

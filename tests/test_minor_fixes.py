@@ -270,10 +270,11 @@ class TestSecretsAndHardening(unittest.TestCase):
         finally:
             Base.metadata.drop_all(bind=engine)
 
-    def test_hint_kontrak_token_jual_tidak_lagi_nameerror(self):
+    def test_layar_order_jual_tidak_menampilkan_kontrak_token(self):
+        # Permintaan client: cukup alamat Hot Wallet, tanpa baris "Token: ..., kontrak ...".
         src = (ROOT / "bot" / "handlers" / "sell.py").read_text(encoding="utf-8")
-        i = src.index("token_hint = \"\"")
-        self.assertIn("from services.crypto_sender import CryptoSenderFactory", src[i:i + 200])
+        self.assertNotIn("token_hint", src)
+        self.assertNotIn("kontrak", src)
 
 
 if __name__ == "__main__":

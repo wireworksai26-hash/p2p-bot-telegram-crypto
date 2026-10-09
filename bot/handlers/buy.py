@@ -55,6 +55,7 @@ from bot.keyboards.crypto_select import (
 )
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr, validate_wallet_address, validate_crypto_amount
+from bot.utils.wallet_notes import exchange_receive_note
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_BUY
 from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
@@ -487,7 +488,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"{qris_mdr_note(nominal_idr)}\n\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
-                f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
+                f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>\n\n"
+                f"{exchange_receive_note()}"
             ),
             reply_markup=InlineKeyboardMarkup(input_wallet_keyboard),
             parse_mode="HTML"

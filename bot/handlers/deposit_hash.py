@@ -96,6 +96,7 @@ async def submit_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE
             expected_amount=float(order.crypto_amount),
             not_before=order.created_at,
             not_after=deposit_detector.deposit_deadline(order),
+            expected_sender=getattr(order, "sender_wallet", None),
         )
         lolos = bool((hasil or {}).get("verified"))
         alasan = (hasil or {}).get("reason") or ""

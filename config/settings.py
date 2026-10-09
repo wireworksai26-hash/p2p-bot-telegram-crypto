@@ -92,9 +92,14 @@ class Settings:
 
     # App logic configurations
     ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 10))
-    # Aturan turnover: saldo hasil topup QRIS (sejak tanggal ini, format YYYY-MM-DD) hanya bisa
-    # dipakai belanja, tidak bisa langsung ditarik ke rekening. Topup lama tidak dikunci.
+    # Aturan turnover (OPSIONAL, bawaan MATI): bila true, saldo hasil topup QRIS sejak tanggal
+    # TOPUP_TURNOVER_START (YYYY-MM-DD) hanya bisa dipakai belanja dan tidak bisa ditarik.
+    # Bawaan mati karena syarat withdraw sekarang: minimal 1 transaksi selesai + batas harian.
+    TOPUP_TURNOVER_LOCK = os.getenv("TOPUP_TURNOVER_LOCK", "false").lower() in ("true", "1", "yes")
     TOPUP_TURNOVER_START = os.getenv("TOPUP_TURNOVER_START", "2026-10-09")
+    # Promo: biaya withdraw gratis sampai tanggal ini (YYYY-MM-DD, WIB). Hanya tampilan; bot belum
+    # memotong biaya withdraw apa pun.
+    WITHDRAW_FREE_UNTIL = os.getenv("WITHDRAW_FREE_UNTIL", "2026-11-09")
     # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
     SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
     # Jual/Convert: deposit hanya diterima lewat TX hash yang dikirim user. Auto-scan riwayat

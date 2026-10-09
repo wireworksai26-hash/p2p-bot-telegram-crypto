@@ -17,8 +17,11 @@ from config.settings import settings
 from database.connection import SessionLocal
 from database.crud import (
     WITHDRAW_MIN_IDR,
+    WITHDRAW_DAILY_MAX_IDR,
     get_user_balance,
+    get_withdraw_status,
     get_withdrawable_balance,
+    withdraw_block_reason,
     get_user_saved_banks,
     get_saved_bank_by_id,
     create_withdraw_request,
@@ -46,14 +49,26 @@ def withdraw_button_for(balance: float) -> InlineKeyboardButton:
     return InlineKeyboardButton("🔒 Withdraw Saldo", callback_data="wd_locked")
 
 
-async def _show_topup_locked(query, total_balance: int, withdrawable: int) -> None:
-    """Saldo cukup tapi sebagian besar berasal dari topup yang belum dipakai belanja."""
-    await query.answer(
-        f"🔒 Saldo topup hanya bisa dipakai belanja crypto di bot. Saldo {format_idr(total_balance)}, "
-        f"yang bisa ditarik {format_idr(withdrawable)} (minimal {format_idr(WITHDRAW_MIN_IDR)}). "
-        "Belanja crypto dulu, atau hubungi owner.",
-        show_alert=True,
-    )
+def _fee_line() -> str:
+    """Baris promo biaya withdraw; hanya tampil selama masa promo."""
+    from datetime import datetime, timedelta
+    try:
+        until = datetime.strptime(str(settings.WITHDRAW_FREE_UNTIL).strip(), "%Y-%m-%d")
+    except ValueError:
+        return ""
+    if datetime.utcnow() + timedelta(hours=7) >= until:
+        return ""
+    return f"🎁 Biaya withdraw: <b>GRATIS</b> (promo sampai {until.strftime('%d-%m-%Y')})\n"
+
+
+def _limit_text(status: dict) -> str:
+    return (f"📆 Batas harian: <b>{format_idr(WITHDRAW_DAILY_MAX_IDR)}</b> "
+            f"(sisa hari ini <b>{format_idr(status['remaining_today'])}</b>)\n")
+
+
+async def _show_withdraw_blocked(query, reason: str) -> None:
+    """Withdraw belum bisa: belum ada transaksi selesai, batas harian, atau saldo topup terkunci."""
+    await query.answer(f"🔒 {reason}", show_alert=True)
 
 
 async def withdraw_locked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -72,17 +87,15 @@ async def withdraw_start_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     db = SessionLocal()
     try:
-        total_balance = int(get_user_balance(db, user.id))
-        balance = int(get_withdrawable_balance(db, user.id))
+        status = get_withdraw_status(db, user.id)
         banks = get_user_saved_banks(db, user.id)
     finally:
         db.close()
 
-    if total_balance < WITHDRAW_MIN_IDR:
-        await withdraw_locked_handler(update, context)
-        return
-    if balance < WITHDRAW_MIN_IDR:
-        await _show_topup_locked(query, total_balance, balance)
+    balance = status["max_now"]
+    reason = withdraw_block_reason(status)
+    if reason:
+        await _show_withdraw_blocked(query, reason)
         return
 
     if not banks:
@@ -108,8 +121,10 @@ async def withdraw_start_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     await query.edit_message_text(
         f"💸 <b>WITHDRAW SALDO</b>\n\n"
-        f"💳 Saldo tersedia: <b>{format_idr(balance)}</b>\n"
-        f"📉 Minimal penarikan: <b>{format_idr(WITHDRAW_MIN_IDR)}</b>\n\n"
+        f"💳 Bisa ditarik sekarang: <b>{format_idr(balance)}</b>\n"
+        f"📉 Minimal penarikan: <b>{format_idr(WITHDRAW_MIN_IDR)}</b>\n"
+        f"{_limit_text(status)}"
+        f"{_fee_line()}\n"
         "Pilih rekening / e-wallet tujuan:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
@@ -125,19 +140,17 @@ async def withdraw_bank_selected_handler(update: Update, context: ContextTypes.D
     db = SessionLocal()
     try:
         bank = get_saved_bank_by_id(db, bank_id, user.id)
-        total_balance = int(get_user_balance(db, user.id))
-        balance = int(get_withdrawable_balance(db, user.id))
+        status = get_withdraw_status(db, user.id)
     finally:
         db.close()
 
     if not bank:
         await query.answer("⚠️ Rekening tidak ditemukan.", show_alert=True)
         return
-    if total_balance < WITHDRAW_MIN_IDR:
-        await withdraw_locked_handler(update, context)
-        return
-    if balance < WITHDRAW_MIN_IDR:
-        await _show_topup_locked(query, total_balance, balance)
+    balance = status["max_now"]
+    reason = withdraw_block_reason(status)
+    if reason:
+        await _show_withdraw_blocked(query, reason)
         return
 
     _clear_flow(context)
@@ -147,9 +160,11 @@ async def withdraw_bank_selected_handler(update: Update, context: ContextTypes.D
         f"💸 <b>Nominal Withdraw</b>\n\n"
         f"Tujuan: <b>{_esc(bank.bank_name)}</b> <code>{_esc(bank.account_number)}</code>\n"
         f"a.n <i>{_esc(bank.account_name)}</i>\n"
-        f"💳 Saldo tersedia: <b>{format_idr(balance)}</b>",
+        f"💳 Bisa ditarik sekarang: <b>{format_idr(balance)}</b>\n"
+        f"{_limit_text(status)}"
+        f"{_fee_line()}",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"Tarik Semua ({format_idr(balance)})", callback_data="wd_all")],
+            [InlineKeyboardButton(f"Tarik Maksimal ({format_idr(balance)})", callback_data="wd_all")],
             [InlineKeyboardButton("✏️ Nominal Lain", callback_data="wd_custom")],
             [InlineKeyboardButton("🔙 Ganti Rekening", callback_data="wd_start")],
         ]),
@@ -174,7 +189,8 @@ async def withdraw_custom_prompt_handler(update: Update, context: ContextTypes.D
     context.user_data["awaiting_withdraw_amount"] = True
     await query.answer()
     await query.edit_message_text(
-        f"✏️ <b>Ketik nominal withdraw</b> (minimal {format_idr(WITHDRAW_MIN_IDR)}).\n"
+        f"✏️ <b>Ketik nominal withdraw</b> (minimal {format_idr(WITHDRAW_MIN_IDR)}, "
+        f"maksimal {format_idr(WITHDRAW_DAILY_MAX_IDR)} per hari).\n"
         "Contoh: <code>25000</code> atau <code>25k</code>\n\n"
         "<i>Ketik /cancel untuk membatalkan.</i>",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Batal", callback_data="menu_balance")]]),
@@ -192,7 +208,7 @@ async def handle_withdraw_amount_text(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("❌ Withdraw dibatalkan.")
         return True
 
-    ok, amount = validate_amount_idr(raw, min_amount=WITHDRAW_MIN_IDR, max_amount=100_000_000)
+    ok, amount = validate_amount_idr(raw, min_amount=WITHDRAW_MIN_IDR, max_amount=WITHDRAW_DAILY_MAX_IDR)
     if not ok:
         await update.message.reply_text(
             f"❌ Nominal tidak valid. Minimal {format_idr(WITHDRAW_MIN_IDR)}, contoh: <code>25000</code> atau <code>25k</code>.",
@@ -202,13 +218,15 @@ async def handle_withdraw_amount_text(update: Update, context: ContextTypes.DEFA
 
     db = SessionLocal()
     try:
-        balance = int(get_withdrawable_balance(db, update.effective_user.id))
+        status = get_withdraw_status(db, update.effective_user.id)
     finally:
         db.close()
+    balance = status["max_now"]
     if amount > balance:
         await update.message.reply_text(
-            f"❌ Melebihi saldo yang bisa ditarik (<b>{format_idr(balance)}</b>). "
-            f"Saldo dari topup hanya bisa dipakai belanja crypto. Ketik nominal lain:",
+            f"❌ Melebihi yang bisa ditarik sekarang (<b>{format_idr(balance)}</b>; batas harian "
+            f"{format_idr(WITHDRAW_DAILY_MAX_IDR)}, sisa hari ini {format_idr(status['remaining_today'])}). "
+            f"Ketik nominal lain:",
             parse_mode="HTML",
         )
         return True
@@ -241,6 +259,7 @@ async def _show_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, amou
     text = (
         "💸 <b>KONFIRMASI WITHDRAW</b>\n\n"
         f"Nominal: <b>{format_idr(amount)}</b>\n"
+        f"{_fee_line()}"
         f"Tujuan: <b>{_esc(bank.bank_name)}</b> <code>{_esc(bank.account_number)}</code>\n"
         f"a.n <i>{_esc(bank.account_name)}</i>\n\n"
         "Saldo langsung dipotong dan dikembalikan bila admin menolak. Pastikan data rekening benar."
@@ -272,9 +291,10 @@ async def withdraw_confirm_handler(update: Update, context: ContextTypes.DEFAULT
         bank = get_saved_bank_by_id(db, bank_id, user.id)
         req = create_withdraw_request(db, user.id, bank, amount) if bank else None
         if req is None:
+            reason = withdraw_block_reason(get_withdraw_status(db, user.id)) if bank else ""
             await query.answer(
-                "❌ Saldo tidak cukup, rekening tidak ditemukan, atau saldo berasal dari topup yang "
-                "belum dipakai belanja crypto.", show_alert=True)
+                f"❌ {reason or 'Saldo tidak cukup, melebihi batas harian, atau rekening tidak ditemukan.'}",
+                show_alert=True)
             return
         req_id, req_amount = req.id, int(req.amount_idr)
         bank_name, acc_no, acc_name = req.bank_name, req.account_number, req.account_name

@@ -35,7 +35,7 @@ from database.models import DepositClaim, Order, User
 from bot.utils.validator import parse_idr_amount, looks_like_idr
 from bot.handlers import sell as sell_mod
 from bot.handlers.sell import (
-    handle_amount_input, handle_input_mode, INPUT_AMOUNT, INPUT_BANK,
+    handle_amount_input, handle_input_mode, INPUT_AMOUNT, INPUT_SENDER,
 )
 from bot.handlers.deposit_hash import (
     submit_deposit_hash, txhash_command, txhash_receive, WAIT_HASH,
@@ -101,7 +101,7 @@ class SellAmountCase(unittest.IsolatedAsyncioTestCase):
 class TestSellRupiah(SellAmountCase):
     async def test_rupiah_pas_dibagi_kurs(self):
         state, ctx, _ = await self._kirim("5000", mode="IDR", price=16000.0)
-        self.assertEqual(state, INPUT_BANK)
+        self.assertEqual(state, INPUT_SENDER)
         # Nominal Rupiah = yang masuk rekening; fee (3.000) ditambahkan ke koin yang disetor.
         self.assertEqual(ctx.user_data["sell_crypto_amount"], 0.5)
         self.assertEqual(ctx.user_data["sell_gross_nominal_idr"], 8000)
@@ -111,7 +111,7 @@ class TestSellRupiah(SellAmountCase):
     async def test_rupiah_dibulatkan_ke_atas_agar_tidak_di_bawah_nominal(self):
         price = 17915.0
         state, ctx, _ = await self._kirim("Rp 5.000", mode="IDR", price=price)
-        self.assertEqual(state, INPUT_BANK)
+        self.assertEqual(state, INPUT_SENDER)
         coin = Decimal(str(ctx.user_data["sell_crypto_amount"]))
         self.assertEqual(coin, coin.quantize(Decimal("0.0001")), "presisi USDT = 4 desimal")
         gross = ctx.user_data["sell_gross_nominal_idr"]
@@ -128,7 +128,7 @@ class TestSellRupiah(SellAmountCase):
                 with self.subTest(symbol=symbol, nominal=nominal):
                     state, ctx, _ = await self._kirim(
                         str(nominal), mode="IDR", price=price, symbol=symbol, network=network)
-                    self.assertEqual(state, INPUT_BANK)
+                    self.assertEqual(state, INPUT_SENDER)
                     net = ctx.user_data["sell_net_idr"]
                     self.assertGreaterEqual(net, nominal)
                     self.assertLess(net - nominal, price * 0.0001 + 2000 if symbol == "BTC" else 200)
@@ -137,7 +137,7 @@ class TestSellRupiah(SellAmountCase):
 
     async def test_penanda_rupiah_dikenali_walau_mode_koin(self):
         state, ctx, _ = await self._kirim("50k", mode="COIN", price=16000.0)
-        self.assertEqual(state, INPUT_BANK)
+        self.assertEqual(state, INPUT_SENDER)
         self.assertEqual(ctx.user_data["sell_net_idr"], 50000)
         self.assertEqual(ctx.user_data["sell_gross_nominal_idr"], 54000)
         self.assertEqual(ctx.user_data["sell_crypto_amount"], 3.375)
@@ -154,7 +154,7 @@ class TestSellRupiah(SellAmountCase):
 
     async def test_mode_koin_dibulatkan_ke_bawah_tanpa_kode_unik(self):
         state, ctx, _ = await self._kirim("0.50009", mode="COIN")
-        self.assertEqual(state, INPUT_BANK)
+        self.assertEqual(state, INPUT_SENDER)
         self.assertEqual(ctx.user_data["sell_crypto_amount"], 0.5)
 
     async def test_toggle_mode(self):
