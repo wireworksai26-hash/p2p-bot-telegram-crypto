@@ -577,7 +577,9 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("price", show_prices))
     application.add_handler(CommandHandler("harga", show_prices))
     application.add_handler(CommandHandler("balance", show_balance_menu))
-    application.add_handler(CommandHandler("admin", admin_handler))
+    # /tokoadmin = alias khusus bot ini: di grup yang berisi bot lain, /admin ikut diterima bot lain,
+    # sedangkan nama unik ini hanya dikenali bot ini.
+    application.add_handler(CommandHandler(["admin", "tokoadmin"], admin_handler))
     from bot.handlers.admin_maintenance import maintenance_command_handler
     application.add_handler(CommandHandler(["maintenance", "mt"], maintenance_command_handler))
     from bot.handlers.admin import (

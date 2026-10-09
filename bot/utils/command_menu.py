@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Urutan = urutan tampil. Nama: a-z0-9_ maks 32; deskripsi 3-256 karakter.
 ADMIN_COMMAND_MENU = [
     ("admin", "Dashboard admin (semua menu)"),
+    ("tokoadmin", "Dashboard admin (khusus bot ini, aman di grup)"),
     ("panduan", "Panduan lengkap fitur admin"),
     ("orders", "Antrean order"),
     ("sellorders", "Dashboard order Jual crypto"),
