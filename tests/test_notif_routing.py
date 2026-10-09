@@ -127,8 +127,21 @@ class BotParseGagal:
                            reply_markup=None, message_thread_id=None, **kw):
         self.panggilan.append((str(chat_id), message_thread_id, parse_mode))
         if parse_mode:
-            raise RuntimeError("Can't parse entities")
+            from telegram.error import BadRequest
+            raise BadRequest("Can't parse entities: unsupported start tag")
         return True
+
+
+class BotTimeout:
+    """Timeout baca: pesan bisa saja sudah terkirim, jadi TIDAK boleh dikirim ulang."""
+
+    def __init__(self):
+        self.panggilan = 0
+
+    async def send_message(self, **kw):
+        from telegram.error import TimedOut
+        self.panggilan += 1
+        raise TimedOut("Timed out")
 
 
 class TestRoutingGagal(unittest.TestCase):
@@ -157,6 +170,12 @@ class TestRoutingGagal(unittest.TestCase):
                                            parse_mode="HTML", message_thread_id=55))
         self.assertTrue(ok)
         self.assertEqual(bot.panggilan, [("-100123", 55, "HTML"), ("-100123", 55, None)])
+
+    def test_timeout_tidak_dikirim_ulang_agar_notifikasi_tidak_dobel(self):
+        bot = BotTimeout()
+        ok = asyncio.run(safe_send_message(bot, "-100123", "teks", parse_mode="HTML"))
+        self.assertFalse(ok)
+        self.assertEqual(bot.panggilan, 1)
 
 
 if __name__ == "__main__":

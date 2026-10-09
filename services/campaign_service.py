@@ -606,6 +606,26 @@ async def execute_top_spender_campaign(
                       f"Tunggu {TOP_SPENDER_COOLDOWN_MINUTES} menit sebelum eksekusi berikutnya."),
         }
 
+    # Satu periode hanya boleh dibayar sekali: ranking memakai jendela period_days, jadi membayar lagi
+    # sebelum jendela bergeser berarti menghadiahi transaksi yang sama dua kali.
+    period_marker = f"({int(period_days)}D)"
+    already_paid = db.query(Campaign).filter(
+        Campaign.template_type == "tpl_top_spenders",
+        Campaign.status == "COMPLETED",
+        Campaign.title.like(f"%{period_marker}%"),
+        Campaign.created_at >= datetime.utcnow() - timedelta(days=max(1, int(period_days))),
+    ).order_by(Campaign.created_at.desc()).first()
+    if already_paid:
+        next_ok = already_paid.created_at + timedelta(days=max(1, int(period_days)))
+        return {
+            "distributed_count": 0, "total_amount": 0, "notif_success": 0, "notif_fail": 0,
+            "winners": [],
+            "error": (f"Hadiah Top Spender periode {int(period_days)} hari sudah dibayar "
+                      f"({already_paid.campaign_code}). Bisa dibayar lagi setelah "
+                      f"{(next_ok + timedelta(hours=7)).strftime('%d-%m-%Y %H:%M')} WIB agar transaksi yang sama "
+                      f"tidak dihadiahi dua kali."),
+        }
+
     # Hadiah milestone SELALU dari Kas Bot (keputusan client). Kurang -> admin wajib mengisi dulu.
     needed = sum(TOP_SPENDER_REWARDS.get(s["rank"], 0) for s in top_spenders)
     balance = crud.get_bot_treasury_balance(db)

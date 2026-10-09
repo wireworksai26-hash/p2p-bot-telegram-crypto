@@ -16,6 +16,7 @@ berulang oleh hook order, sweeper, atau proses paralel: satu order hanya dihitun
 """
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -53,8 +54,14 @@ def get_referral_settings(db) -> dict:
     for name, (key, default, cast) in SETTING_DEFS.items():
         raw = _cfg(db, key)
         try:
-            val = cast(float(raw)) if raw not in (None, "") else default
-        except (TypeError, ValueError):
+            if raw in (None, ""):
+                val = default
+            else:
+                number = float(raw)
+                if not math.isfinite(number):
+                    raise ValueError("nilai tidak berhingga")
+                val = cast(number)
+        except (TypeError, ValueError, OverflowError):
             val = default
         out[name] = max(cast(0), val)
     enabled = _cfg(db, "referral_enabled")
@@ -62,6 +69,17 @@ def get_referral_settings(db) -> dict:
     out["fee_guard"] = (_cfg(db, "referral_fee_guard") or "true").lower() != "false"
     out["share"] = min(out["share"], 100.0)
     return out
+
+
+def _gas_surcharge(order: Order) -> int:
+    """Tambahan fee untuk pasangan gas mahal; hanya saat bot yang mengirim koin (Beli / tujuan Convert)."""
+    from services.fee_service import GAS_SURCHARGE_IDR, is_gas_pair
+    kind = (order.order_type or "").lower()
+    if kind == "buy" and is_gas_pair(order.crypto_symbol, order.network):
+        return GAS_SURCHARGE_IDR
+    if kind in ("swap", "convert") and is_gas_pair(order.target_crypto_symbol, order.target_network):
+        return GAS_SURCHARGE_IDR
+    return 0
 
 
 def _completion_ts(order: Order) -> datetime:
@@ -89,7 +107,7 @@ def _accrue_order(db, ref: Referral, order: Order, ts: datetime, s: dict) -> int
             {"tx_count": Referral.tx_count + 1}, synchronize_session=False)
         n = int(db.query(Referral.tx_count).filter(Referral.id == ref.id).scalar())
 
-        fee = int(order.fee_idr or 0)
+        fee = max(0, int(order.fee_idr or 0) - _gas_surcharge(order))  # surcharge gas = biaya, bukan margin
         budget = fee if s["fee_guard"] else 10 ** 12  # total payout satu order tidak melebihi fee
         release_at = ts + timedelta(hours=s["hold"])
         now = datetime.utcnow()
@@ -127,13 +145,12 @@ def _accrue_order(db, ref: Referral, order: Order, ts: datetime, s: dict) -> int
             referrer_total += grant(KIND_SHARE, ref.referrer_id, int(fee * s["share"] / 100),
                                     f"share:{order.order_id}")
 
-        updates = {}
-        if ref.status == "PENDING":
-            updates.update(status="COMPLETED", completed_at=ts, reward_idr=referrer_total)
-        elif referrer_total:
-            updates["reward_idr"] = Referral.reward_idr + referrer_total
-        if updates:
-            db.query(Referral).filter(Referral.id == ref.id).update(updates, synchronize_session=False)
+        # Klaim PENDING -> COMPLETED secara atomik (UPDATE bersyarat), bukan dari status di memori.
+        claimed = db.query(Referral).filter(Referral.id == ref.id, Referral.status == "PENDING").update(
+            {"status": "COMPLETED", "completed_at": ts, "reward_idr": referrer_total}, synchronize_session=False)
+        if not claimed and referrer_total:
+            db.query(Referral).filter(Referral.id == ref.id).update(
+                {"reward_idr": Referral.reward_idr + referrer_total}, synchronize_session=False)
         db.commit()
         return rows
     except IntegrityError:
@@ -192,6 +209,8 @@ def release_due_earnings(db, now: Optional[datetime] = None) -> dict:
     Return {beneficiary_id: total_rupiah_yang_dirilis}.
     """
     now = now or datetime.utcnow()
+    if not get_referral_settings(db)["enabled"]:
+        return {}  # program dimatikan admin: reward ditahan sampai program dihidupkan lagi
     due_ids = [i for (i,) in db.query(ReferralEarning.id).filter(
         ReferralEarning.status == "HELD", ReferralEarning.release_at <= now,
     ).order_by(ReferralEarning.id.asc()).limit(200)]

@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 QUOTE_FRESH_SECONDS = 60
 QUOTE_MAX_DRIFT = Decimal("0.005")  # 0,5%
 
+# Masa berlaku order Jual/Convert (Beli/QRIS: settings.ORDER_EXPIRE_MINUTES, juga 10 menit).
+# Koin yang masuk SETELAH batas ini + toleransi blok tidak dibayar dengan harga terkunci.
+QUOTE_MINUTES = 10
+LATE_DEPOSIT_GRACE_SECONDS = 120
+# Estimasi maksimal admin mentransfer Rupiah setelah koin Jual terverifikasi.
+SELL_PAYOUT_ETA_MINUTES = 20
+
 QUOTE_MOVED_TEXT = (
     "⏱️ <b>Harga pasar sudah berubah</b>\n\n"
     "Harga koin bergerak lebih dari 0,5% sejak simulasi dibuat. "

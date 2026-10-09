@@ -34,13 +34,18 @@ BUY_NETWORKS_BY_SYMBOL = {
 
 def _get_symbol_keyboard(prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     """Keyboard pilih simbol untuk alur beli (buy_sym_*) atau jual (sell_sym_*)."""
+    from services.chain_maintenance import blocked_reason, load_flags
+    flags = load_flags()
     keyboard = []
     row = []
     for sym in BUY_NETWORKS_BY_SYMBOL:
         emoji_id = get_coin_emoji_id(sym)
+        text = coin_button_text(sym)
+        if blocked_reason(symbol=sym, flags=flags):
+            text, emoji_id = f"🛠 {sym} [Maintenance]", None
         row.append(
             InlineKeyboardButton(
-                text=coin_button_text(sym),
+                text=text,
                 callback_data=f"{prefix}_sym_{sym}",
                 icon_custom_emoji_id=emoji_id
             )
@@ -68,16 +73,19 @@ def _get_network_keyboard(symbol: str, prefix: str, back_callback: str) -> Inlin
     if prefix == "sell":
         networks = sell_networks(symbol)
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                text=network_button_text(net),
-                callback_data=f"{prefix}_net_{symbol}_{net}",
-                icon_custom_emoji_id=get_network_emoji_id(net)
-            )
-        ]
-        for net in networks
-    ]
+    from services.chain_maintenance import blocked_reason, load_flags
+    flags = load_flags()
+
+    def _net_button(net):
+        if blocked_reason(network=net, flags=flags):
+            return InlineKeyboardButton(text=f"🛠 {net} [Maintenance]", callback_data=f"{prefix}_net_{symbol}_{net}")
+        return InlineKeyboardButton(
+            text=network_button_text(net),
+            callback_data=f"{prefix}_net_{symbol}_{net}",
+            icon_custom_emoji_id=get_network_emoji_id(net)
+        )
+
+    keyboard = [[_net_button(net)] for net in networks]
     keyboard.append([InlineKeyboardButton("Kembali (Pilih Koin)", callback_data=back_callback, icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))])
     keyboard.append([get_owner_button()])
     return InlineKeyboardMarkup(keyboard)

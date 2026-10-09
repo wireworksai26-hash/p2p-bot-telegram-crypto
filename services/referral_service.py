@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from bot.utils.formatter import format_idr
 from bot.utils.telegram_utils import safe_send_message
@@ -33,7 +33,12 @@ _NOTIFY_LOOKBACK_DAYS = 7
 
 def _referees_to_process(db) -> list:
     """Teman yang perlu dicek: referral PENDING + teman dengan order selesai beberapa hari terakhir."""
-    ids = {rid for (rid,) in db.query(Referral.referee_id).filter(Referral.status == "PENDING").limit(_BATCH)}
+    has_completed = select(Order.telegram_id).where(func.lower(Order.status) == "completed")
+    ids = {
+        rid for (rid,) in db.query(Referral.referee_id)
+        .filter(Referral.status == "PENDING", Referral.referee_id.in_(has_completed))
+        .order_by(Referral.id.asc()).limit(_BATCH)
+    }
     cutoff = datetime.utcnow() - timedelta(days=_RECENT_DAYS)
     recent = (
         db.query(Order.telegram_id)

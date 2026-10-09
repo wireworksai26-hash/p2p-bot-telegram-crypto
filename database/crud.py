@@ -219,8 +219,16 @@ def reject_and_refund_bot_balance_order(db: Session, order_id: str, admin_id: in
     order = db.query(Order).filter(Order.order_id == order_id).first()
     if not order or order.order_type != "buy" or order.payment_method != "BOT_BALANCE":
         return {"refunded": False, "reason": "not_bot_balance_order"}
-    if order.status != "pending":
+    # manual_review = saldo sudah dipotong tapi koin tidak terkirim (mis. stok habis). Boleh di-refund
+    # hanya bila JELAS belum ada broadcast: tanpa hash dan bukan "payout terputus" (koin mungkin sudah terkirim).
+    from_status = order.status
+    if from_status not in ("pending", "manual_review"):
         return {"refunded": False, "reason": "status_changed", "status": order.status}
+    if from_status == "manual_review" and (
+        (order.payout_tx_hash or "").strip() or (order.tx_hash or "").strip()
+        or "terputus" in (order.failure_reason or "").lower()
+    ):
+        return {"refunded": False, "reason": "payout_may_be_sent", "status": order.status}
     if order.paid_at is None:
         return {"refunded": False, "reason": "debit_not_confirmed"}
 
@@ -236,7 +244,7 @@ def reject_and_refund_bot_balance_order(db: Session, order_id: str, admin_id: in
                 Order.order_id == order_id,
                 Order.order_type == "buy",
                 Order.payment_method == "BOT_BALANCE",
-                Order.status == "pending",
+                Order.status == from_status,
                 Order.paid_at.isnot(None),
                 Order.total_idr > 0,
             )
@@ -262,7 +270,7 @@ def reject_and_refund_bot_balance_order(db: Session, order_id: str, admin_id: in
             telegram_id=order.telegram_id,
             action="BOT_BALANCE_ORDER_REFUND",
             order_id=order_id,
-            from_status="pending",
+            from_status=from_status,
             to_status="rejected",
             details=f"Admin {admin_id} menolak order Saldo Bot dan mengembalikan Rp {amount:,}.",
         ))
@@ -328,6 +336,8 @@ def update_order_status(
 
         # Set extra fields yang dikirim (misal: paid_at, tx_hash, dll)
         for key, value in extra_fields.items():
+            if key == "failure_reason" and isinstance(value, str):
+                value = value[:480]  # kolom String(500); pesan error sender bisa panjang
             if hasattr(order, key):
                 setattr(order, key, value)
             else:
@@ -443,6 +453,67 @@ def claim_topup_success(db: Session, topup_id: str, allow_expired: bool = False)
     except Exception as e:
         db.rollback()
         logger.error(f"Gagal claim topup {topup_id}: {e}")
+        raise
+
+
+def claim_and_credit_topup(db: Session, topup_id: str, allow_expired: bool = False):
+    """Claim topup (PENDING -> SUCCESS) DAN kredit saldo dalam SATU transaksi database.
+
+    Dulu claim lalu kredit dua langkah terpisah: putus di antaranya = user sudah bayar tapi saldo
+    tidak masuk. Return (is_treasury, net_amt, new_balance), atau None bila topup sudah diproses
+    pihak lain / tidak ada. Topup TREASURY (kas bot) tetap dua langkah, tapi claim dibatalkan
+    otomatis bila kreditnya gagal.
+    """
+    from sqlalchemy import update
+
+    topup = db.query(TopupOrder).filter(TopupOrder.topup_id == topup_id).first()
+    if topup is None:
+        return None
+    net_amt = int(topup.amount_idr) - int(topup.mdr_idr or 0)
+    telegram_id = int(topup.telegram_id)
+
+    if is_treasury_topup(topup_id):
+        if not claim_topup_success(db, topup_id, allow_expired=allow_expired):
+            return None
+        try:
+            return True, net_amt, topup_bot_treasury(
+                db, net_amt, admin_id=telegram_id, note=f"QRIS Topup {topup_id}")
+        except Exception:
+            db.rollback()
+            db.execute(update(TopupOrder).where(
+                TopupOrder.topup_id == topup_id, TopupOrder.status == "SUCCESS",
+            ).values(status="PENDING", paid_at=None))
+            db.commit()
+            raise
+
+    if not db.query(User.telegram_id).filter(User.telegram_id == telegram_id).first():
+        create_user(db, telegram_id)
+    amount = _positive_amount(net_amt)
+    claimable = ["PENDING", "EXPIRED"] if allow_expired else ["PENDING"]
+    try:
+        claimed = db.execute(
+            update(TopupOrder)
+            .where(TopupOrder.topup_id == topup_id, TopupOrder.status.in_(claimable))
+            .values(status="SUCCESS", paid_at=datetime.utcnow())
+        )
+        if claimed.rowcount != 1:
+            db.rollback()
+            return None
+        credited = db.execute(
+            update(User).where(User.telegram_id == telegram_id)
+            .values(balance_idr=func.coalesce(User.balance_idr, 0) + amount)
+        )
+        if credited.rowcount != 1:
+            raise RuntimeError(f"User {telegram_id} tidak ditemukan saat kredit topup {topup_id}")
+        db.add(AuditLog(
+            telegram_id=telegram_id, action="TOPUP_CREDITED",
+            details=f"Topup {topup_id}: +Rp {net_amt:,} (claim & kredit satu transaksi).",
+        ))
+        db.commit()  # status SUCCESS dan saldo bertambah bersamaan, atau tidak sama sekali
+        return False, net_amt, _refresh_balance(db, telegram_id)
+    except Exception:
+        db.rollback()
+        logger.exception("Gagal claim+kredit topup %s", topup_id)
         raise
 
 
@@ -584,6 +655,35 @@ def claim_admin_action_token(
     return entry.payload if result.rowcount == 1 else None
 
 
+def claim_admin_task(db: Session, task_key: str, admin_id: int) -> tuple:
+    """Pegang tugas admin. Return (berhasil, id admin pemegang). Pemegang yang sama tetap boleh."""
+    from database.models import AdminTaskClaim
+    from sqlalchemy.exc import IntegrityError
+
+    task_key = str(task_key)[:80]
+    row = db.query(AdminTaskClaim).filter(AdminTaskClaim.task_key == task_key).first()
+    if row is None:
+        try:
+            db.add(AdminTaskClaim(task_key=task_key, admin_id=int(admin_id)))
+            db.commit()
+            return True, int(admin_id)
+        except IntegrityError:
+            db.rollback()
+            row = db.query(AdminTaskClaim).filter(AdminTaskClaim.task_key == task_key).first()
+    owner = int(row.admin_id) if row else int(admin_id)
+    if row is not None and owner != int(admin_id):
+        # Pemegang menghilang (offline) > 30 menit: admin lain boleh mengambil alih.
+        stale = row.claimed_at is None or (datetime.utcnow() - row.claimed_at).total_seconds() > 1800
+        if stale:
+            changed = db.query(AdminTaskClaim).filter(
+                AdminTaskClaim.task_key == task_key, AdminTaskClaim.admin_id == owner,
+            ).update({"admin_id": int(admin_id), "claimed_at": datetime.utcnow()}, synchronize_session=False)
+            db.commit()
+            if changed == 1:
+                return True, int(admin_id)
+    return owner == int(admin_id), owner
+
+
 def claim_campaign_action_lock(db: Session, action: str, cooldown_seconds: int) -> bool:
     """Ambil lock campaign lintas worker hingga cooldown berakhir, tanpa commit sendiri."""
     from sqlalchemy import update
@@ -634,7 +734,7 @@ def get_gopay_resume_orders(db: Session) -> list[Order]:
     gopay_stuck = (
         db.query(Order)
         .filter(
-            Order.payment_method == "GOPAY_QRIS",
+            Order.payment_method.in_(("GOPAY_QRIS", "BOT_BALANCE")),
             Order.status.in_(("paid", "payout_processing")),
             Order.payout_tx_hash.is_(None),
         )
@@ -1373,6 +1473,47 @@ def deduct_user_balance(db: Session, telegram_id: int, amount_idr: float) -> boo
 WITHDRAW_MIN_IDR = 10_000
 
 
+def _turnover_start() -> datetime:
+    from config.settings import settings
+    try:
+        return datetime.strptime(str(settings.TOPUP_TURNOVER_START).strip(), "%Y-%m-%d")
+    except ValueError:
+        return datetime(2026, 10, 9)
+
+
+def topup_locked_amount(db: Session, telegram_id: int) -> int:
+    """Saldo hasil topup QRIS yang belum "diputar" lewat belanja Saldo Bot -> tidak boleh ditarik.
+
+    Dikunci = topup bersih (sejak TOPUP_TURNOVER_START) - belanja Saldo Bot. Cegah bot dipakai sebagai jasa cairkan QRIS/PayLater tanpa transaksi apa pun.
+    """
+    start = _turnover_start()
+    topups = db.query(
+        func.coalesce(func.sum(TopupOrder.amount_idr - func.coalesce(TopupOrder.mdr_idr, 0)), 0)
+    ).filter(
+        TopupOrder.telegram_id == telegram_id,
+        TopupOrder.status == "SUCCESS",
+        func.coalesce(TopupOrder.paid_at, TopupOrder.created_at) >= start,
+        ~TopupOrder.topup_id.like("TREASURY-%"),
+        ~TopupOrder.topup_id.like("TOPUP-TREASURY-%"),
+    ).scalar() or 0
+    if int(topups) <= 0:
+        return 0
+    spent = db.query(func.coalesce(func.sum(Order.total_idr), 0)).filter(
+        Order.telegram_id == telegram_id,
+        Order.payment_method == "BOT_BALANCE",
+        Order.paid_at.isnot(None),
+        Order.paid_at >= start,
+        func.lower(Order.status).notin_(("rejected", "cancelled", "expired", "failed")),
+    ).scalar() or 0
+    return max(0, int(topups) - int(spent))
+
+
+def get_withdrawable_balance(db: Session, telegram_id: int) -> int:
+    """Saldo yang boleh ditarik = saldo - bagian topup yang belum dipakai belanja."""
+    balance = int(get_user_balance(db, telegram_id))
+    return max(0, balance - topup_locked_amount(db, telegram_id))
+
+
 def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int):
     """Potong saldo dan buat permintaan withdraw dalam SATU transaksi.
 
@@ -1383,6 +1524,8 @@ def create_withdraw_request(db: Session, telegram_id: int, bank, amount_idr: int
     amount = int(amount_idr)
     if amount < WITHDRAW_MIN_IDR:
         return None
+    if amount > get_withdrawable_balance(db, telegram_id):
+        return None  # sisa saldo berasal dari topup yang belum dipakai belanja
     try:
         changed = db.query(User).filter(
             User.telegram_id == telegram_id,
@@ -1726,6 +1869,12 @@ def create_referral(db: Session, referrer_id: int, referee_id: int):
 
     if referrer_id == referee_id:
         return None
+
+    from database.models import Order, User
+    if not db.query(User.telegram_id).filter(User.telegram_id == referrer_id).first():
+        return None  # pengundang tidak dikenal (link dibuat-buat)
+    if db.query(Order.id).filter(Order.telegram_id == referee_id).first():
+        return None  # sudah pernah bertransaksi: bukan pengguna baru
 
     # Cek apakah referral sudah ada untuk referee ini
     existing = db.query(Referral).filter(Referral.referee_id == referee_id).first()
@@ -2507,6 +2656,9 @@ def get_top_spenders(
 # PHASE 7 — RANDOM WINNER CRUD
 # ============================================================
 
+GIVEAWAY_MIN_COMPLETED_IDR = 5_000
+
+
 def get_random_winners(
     db: Session, pool_segment: str, count: int, min_tx_amount: int = 0
 ) -> list[dict]:
@@ -2545,7 +2697,16 @@ def get_random_winners(
         )
         query = query.filter(User.telegram_id.in_(active_ids))
 
-    # else ALL: tidak ada filter tambahan
+    # Anti akun kosong (sybil): semua segmen, termasuk ALL, hanya mengikutsertakan user yang pernah
+    # menyelesaikan transaksi minimal GIVEAWAY_MIN_COMPLETED_IDR. Akun yang cuma /start tidak ikut.
+    qualified = (
+        db.query(Order.telegram_id)
+        .filter(func.lower(Order.status) == "completed")
+        .group_by(Order.telegram_id)
+        .having(func.sum(order_volume_idr()) >= GIVEAWAY_MIN_COMPLETED_IDR)
+        .subquery()
+    )
+    query = query.filter(User.telegram_id.in_(qualified))
 
     pool = query.all()
 

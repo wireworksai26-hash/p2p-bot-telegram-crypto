@@ -156,7 +156,7 @@ class BuyExpiryProtection(unittest.IsolatedAsyncioTestCase):
     def test_expiry_batch_excludes_gateway_unknown_order(self):
         db = SessionLocal()
         try:
-            count = crud.expire_stale_orders(db, minutes=15, exclude_order_ids={"ORD-GW-UNKNOWN"})
+            count = crud.expire_stale_orders(db, minutes=10, exclude_order_ids={"ORD-GW-UNKNOWN"})
         finally:
             db.close()
         self.assertEqual(count, 0)
@@ -176,7 +176,7 @@ class BuyExpiryProtection(unittest.IsolatedAsyncioTestCase):
             order = db.query(Order).filter_by(order_id="ORD-GW-UNKNOWN").one()
             self.assertEqual(order.status, "pending")
             db.query(Order).filter_by(order_id="ORD-GW-UNKNOWN").update(
-                {Order.created_at: datetime.utcnow() - timedelta(minutes=16)},
+                {Order.created_at: datetime.utcnow() - timedelta(minutes=11)},
                 synchronize_session=False,
             )
             db.commit()

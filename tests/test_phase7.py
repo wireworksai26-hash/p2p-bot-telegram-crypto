@@ -386,14 +386,42 @@ class TestRandomWinnerCampaign(unittest.TestCase):
         Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
 
+        from database.models import Order
         for i in range(1, 21):
             u = User(telegram_id=400000 + i, username=f"random_user_{i}", balance_idr=Decimal("0"))
             self.db.add(u)
+        self.db.commit()
+        # Pool undian hanya user yang pernah menyelesaikan transaksi (anti akun kosong).
+        for i in range(1, 21):
+            self.db.add(Order(
+                order_id=f"ORD-RW-{i}", telegram_id=400000 + i, order_type="buy", crypto_symbol="USDT",
+                network="BSC", crypto_amount=Decimal("1"), price_per_unit=16000, nominal_idr=16000,
+                fee_idr=0, total_idr=16000, buyer_wallet="0x" + "1" * 40, status="completed"))
         self.db.commit()
 
     def tearDown(self):
         self.db.close()
         Base.metadata.drop_all(bind=engine)
+
+    def test_akun_kosong_tidak_ikut_undian(self):
+        for i in range(21, 31):  # 10 akun yang cuma /start
+            self.db.add(User(telegram_id=400000 + i, username=f"kosong_{i}", balance_idr=Decimal("0")))
+        self.db.commit()
+        winners = crud.get_random_winners(self.db, pool_segment="ALL", count=100)
+        ids = {w["telegram_id"] for w in winners}
+        self.assertEqual(len(ids), 20)
+        self.assertTrue(all(400000 < t <= 400020 for t in ids))
+
+    def test_transaksi_di_bawah_minimum_tidak_ikut(self):
+        from database.models import Order
+        self.db.add(User(telegram_id=499999, username="receh", balance_idr=Decimal("0")))
+        self.db.add(Order(
+            order_id="ORD-RW-RECEH", telegram_id=499999, order_type="buy", crypto_symbol="USDT",
+            network="BSC", crypto_amount=Decimal("0.1"), price_per_unit=16000, nominal_idr=1600,
+            fee_idr=0, total_idr=1600, buyer_wallet="0x" + "1" * 40, status="completed"))
+        self.db.commit()
+        winners = crud.get_random_winners(self.db, pool_segment="ALL", count=100)
+        self.assertNotIn(499999, {w["telegram_id"] for w in winners})
 
     def test_get_random_winners(self):
         winners = crud.get_random_winners(self.db, pool_segment="ALL", count=5)

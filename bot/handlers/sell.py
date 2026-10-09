@@ -34,7 +34,7 @@ from bot.keyboards.crypto_select import (
 )
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_crypto_amount, parse_idr_amount, looks_like_idr
-from bot.utils.formatter import format_idr, format_crypto, generate_order_id, display_symbol
+from bot.utils.formatter import format_idr, format_crypto, format_crypto_copy, generate_order_id, display_symbol
 from bot.utils.messages import ORDER_SUMMARY_SELL, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
 from bot.utils.flow_guard import block_if_busy
@@ -44,8 +44,8 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Masa berlaku quote Jual (keputusan client: 30 menit; QRIS beli/topup tetap 15 menit).
-SELL_QUOTE_MINUTES = 30
+# Masa berlaku order Jual: 10 menit (sama dengan Beli/Convert). Kelamaan -> buat order baru.
+SELL_QUOTE_MINUTES = quote_guard.QUOTE_MINUTES
 
 # State percakapan
 SELECT_SYMBOL = 1
@@ -84,7 +84,7 @@ async def start_sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         text=(
             f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
-            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
+            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 23.59 WIB\n"
             "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
@@ -101,7 +101,7 @@ async def start_sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text=(
             f"{E_CHART()} <b>JUAL CRYPTOCURRENCY</b>\n\n"
             "Silakan pilih koin crypto yang ingin Anda jual di bawah ini:\n\n"
-            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 22.00 WIB\n"
+            "⏰ <b>Jam Layanan Jual:</b> 08.00 - 23.59 WIB\n"
             "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan dana diproses manual pada jam layanan atau saat admin online kembali).</i>"
         ),
         reply_markup=get_sell_symbol_keyboard(),
@@ -200,6 +200,17 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
         await safe_edit_message(
             query,
             text=f"⚠️ Jaringan <b>{network}</b> belum didukung untuk jual {symbol}. Silakan pilih jaringan lain.",
+            reply_markup=get_sell_network_keyboard(symbol),
+            parse_mode="HTML",
+        )
+        return SELECT_NETWORK
+
+    from services.chain_maintenance import blocked_reason, maintenance_text
+    reason = blocked_reason(symbol, network)
+    if reason:
+        await safe_edit_message(
+            query,
+            text=maintenance_text(reason),
             reply_markup=get_sell_network_keyboard(symbol),
             parse_mode="HTML",
         )
@@ -611,6 +622,14 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     fee_idr = context.user_data["sell_fee_idr"]
     net_idr = context.user_data["sell_net_idr"] # nominal bersih
 
+    from services.chain_maintenance import blocked_reason, maintenance_text
+    reason = blocked_reason(symbol, network)
+    if reason:
+        context.user_data.pop("sell_order_id", None)  # order belum dibuat
+        await query.edit_message_text(
+            maintenance_text(reason) + "\n\n<b>Jangan menyetor crypto.</b>", parse_mode="HTML")
+        return ConversationHandler.END
+
     # Rekening bisa terkunci ke user lain sejak diinput — cek ulang sebelum order dibuat.
     from database.crud import is_bank_account_taken_by_other
     with SessionLocal() as lock_db:
@@ -669,6 +688,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
         
         token_hint = ""
         try:
+            from services.crypto_sender import CryptoSenderFactory
             token_address = CryptoSenderFactory.get_sender(network).config.get("tokens", {}).get(symbol.upper())
             if token_address:
                 token_hint = f"Token: <b>{symbol}</b>, kontrak <code>{token_address}</code>\n"
@@ -682,16 +702,14 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             f"Network: <b>{network}</b>\n"
             f"{token_hint}"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
-            f"⏳ <b>Batas Waktu Quote:</b> {SELL_QUOTE_MINUTES} Menit\n"
-            f"• Kirim <b>hanya {symbol} di jaringan {network}</b>. Koin lain atau native coin "
-            f"(mis. ETH/BNB/POL) tidak dapat diverifikasi otomatis dan harus diproses admin.\n\n"
-            f"✍️ <b>WAJIB kirim TX Hash setelah transfer.</b>\n"
-            f"Tekan tombol <b>Kirim TX Hash</b> di bawah lalu kirim Hash/TxID transaksimu. "
-            f"Bot akan memeriksanya langsung di blockchain; jika valid, admin langsung memproses Rupiah Anda. "
-            f"Tanpa TX Hash, order tidak bisa diproses.\n"
-            f"<i>Sudah menutup chat ini? Kirim perintah /txhash kapan saja untuk mengirim hash.</i>\n\n"
-            f"⏰ <b>Catatan Layanan:</b>\n"
-            f"• Pencairan dana ke rekening/e-wallet Anda dilayani <b>08.00 - 22.00 WIB</b> (diproses manual saat admin online)."
+            f"⏳ <b>Batas Waktu Order:</b> {SELL_QUOTE_MINUTES} Menit. Terlambat? Harga dicek ulang admin atau buat order baru.\n"
+            f"• Kirim <b>hanya {symbol} di jaringan {network}</b>; koin lain/native coin diproses manual admin.\n\n"
+            f"✍️ <b>WAJIB kirim TX Hash setelah transfer.</b> "
+            f"Tekan <b>Kirim TX Hash</b> di bawah lalu kirim Hash/TxID-nya (atau /txhash kapan saja). "
+            f"Tanpa TX Hash, order tidak bisa diproses.\n\n"
+            f"⏰ <b>Catatan:</b> setelah koin terverifikasi, mohon <b>tunggu admin mentransfer Rupiah</b> "
+            f"(estimasi maks. <b>{quote_guard.SELL_PAYOUT_ETA_MINUTES} menit</b>). "
+            f"Layanan pencairan <b>08.00 - 23.59 WIB</b>."
         )
 
         keyboard = [
@@ -824,9 +842,9 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"📸 <b>BUKTI TRANSFER PENJUALAN (SELL)</b>\n\n"
             f"Order: <code>{order.order_id}</code>\n"
             f"User ID: <code>{order.telegram_id}</code>\n"
-            f"Crypto: {format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({order.network})\n"
+            f"Crypto: {format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)} ({order.network})\n"
             f"Rupiah Bersih: <b>{format_idr(order.total_idr)}</b>\n"
-            f"Rekening: <code>{order.buyer_wallet}</code>\n\n"
+            f"Rekening: <code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
             f"<i>⚠️ Foto bukan konfirmasi blockchain. Jangan transfer Rupiah sebelum ada notifikasi DEPOSIT TERVERIFIKASI.</i>"
         )
         delivered = False

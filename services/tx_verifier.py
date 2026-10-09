@@ -17,6 +17,15 @@ from config.assets import NON_EVM_TOKENS
 from services.crypto_sender import CryptoSenderFactory
 
 logger = logging.getLogger(__name__)
+
+
+def _host_only(url) -> str:
+    """Host saja untuk log: URL RPC/explorer sering memuat API key di path atau query."""
+    try:
+        from urllib.parse import urlsplit
+        return urlsplit(str(url)).netloc or "?"
+    except Exception:
+        return "?"
 EVM_NETWORKS = {"BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM",
                 "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"}
 TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -418,6 +427,7 @@ async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
         timestamp = int(block["timestamp"], 16)
 
         amount = Decimal(0)
+        from_address = ""
         if symbol == sender.config["native_symbol"]:
             tx = await _explorer_proxy(chain_id, "eth_getTransactionByHash", txhash=tx_hash)
             if (tx.get("to") or "").lower() != wallet.lower():
@@ -425,6 +435,7 @@ async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
             if (tx.get("from") or "").lower() == wallet.lower():
                 return _fail("Transfer ke diri sendiri bukan deposit.")
             amount = Decimal(int(tx["value"], 16)) / 10**18
+            from_address = (tx.get("from") or "").lower()
         else:
             token = sender.config["tokens"].get(symbol)
             if not token:
@@ -444,7 +455,8 @@ async def _verify_evm_via_explorer(network, symbol, tx_hash, wallet):
                 if "0x" + _hex(topics[1])[-40:] == wallet.lower():
                     continue
                 amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
-        return _ok(amount, timestamp, tx_hash)
+                from_address = from_address or "0x" + _hex(topics[1])[-40:]
+        return _ok(amount, timestamp, tx_hash, from_address)
     except Exception as exc:
         logger.warning("Verifikasi explorer %s gagal (%s)", network, type(exc).__name__)
         return None
@@ -470,6 +482,7 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                 return _fail("Menunggu konfirmasi blockchain.")
             block = await asyncio.to_thread(w3.eth.get_block, block_no)
             amount = Decimal(0)
+            from_address = ""
             if symbol == sender.config["native_symbol"]:
                 tx = await asyncio.to_thread(w3.eth.get_transaction, tx_hash)
                 if (tx.get("to") or "").lower() != wallet.lower():
@@ -477,6 +490,7 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                 if (tx.get("from") or "").lower() == wallet.lower():
                     return _fail("Transfer ke diri sendiri bukan deposit.")
                 amount = Decimal(tx["value"]) / 10**18
+                from_address = (tx.get("from") or "").lower()
             else:
                 token = sender.config["tokens"].get(symbol)
                 if not token:
@@ -495,13 +509,14 @@ async def _verify_evm(network, symbol, tx_hash, wallet):
                         self_send = True
                         continue
                     amount += Decimal(int(_hex(log["data"]), 16)) / (10**decimals)
+                    from_address = from_address or "0x" + _hex(topics[1])[-40:]
                 if amount == 0:
                     if self_send:
                         return _fail("Transfer ke diri sendiri bukan deposit.")
                     return _fail("Tidak ada transfer token masuk ke wallet deposit pada transaksi ini.")
-            return _ok(amount, block["timestamp"], tx_hash)
+            return _ok(amount, block["timestamp"], tx_hash, from_address)
         except Exception as exc:
-            logger.warning("Verifikasi RPC %s via %s gagal: %s", network, rpc_url, exc)
+            logger.warning("Verifikasi RPC %s via %s gagal: %s", network, _host_only(rpc_url), exc)
     fallback = await _verify_evm_via_explorer(network, symbol, tx_hash, wallet)
     if fallback is not None:
         return fallback
@@ -515,6 +530,9 @@ async def _verify_solana(symbol, tx_hash, wallet):
     if not isinstance(meta, dict) or "err" not in meta or meta["err"] is not None:
         return _fail("Transaksi Solana gagal/belum lengkap.")
     msg = result["transaction"]["message"]
+    # Penanda tangan pertama = pengirim/pembayar fee transaksi.
+    first_key = (msg.get("accountKeys") or [""])[0]
+    from_address = first_key.get("pubkey", "") if isinstance(first_key, dict) else str(first_key or "")
     if symbol == "SOL":
         keys = [key["pubkey"] if isinstance(key, dict) else key for key in msg["accountKeys"]]
         if wallet not in keys:
@@ -543,7 +561,7 @@ async def _verify_solana(symbol, tx_hash, wallet):
                     token = item["uiTokenAmount"]
                     balances[item["accountIndex"]] = balances.get(item["accountIndex"], Decimal(0)) + sign * Decimal(token["amount"]) / (10**int(token["decimals"]))
         amount = sum(balances.values(), Decimal(0))
-    return _ok(amount, result["blockTime"], tx_hash)
+    return _ok(amount, result["blockTime"], tx_hash, from_address)
 
 
 async def _verify_tron(symbol, tx_hash, wallet):
@@ -556,11 +574,13 @@ async def _verify_tron(symbol, tx_hash, wallet):
     if info.get("result") == "FAILED" or info.get("receipt", {}).get("result") not in (None, "SUCCESS"):
         return _fail("Receipt TRON gagal.")
     amount = Decimal(0)
+    from_address = ""
     if symbol == "TRX":
         for contract in tx.get("raw_data", {}).get("contract", []):
             value = contract.get("parameter", {}).get("value", {})
             if contract.get("type") == "TransferContract" and _tron_address(value.get("to_address", "")) == wallet and _tron_address(value.get("owner_address", "")) != wallet:
                 amount += Decimal(value["amount"]) / 10**6
+                from_address = from_address or _tron_address(value.get("owner_address", ""))
     elif symbol == "USDT":
         for log in info.get("log", []):
             topics = log.get("topics", [])
@@ -568,7 +588,8 @@ async def _verify_tron(symbol, tx_hash, wallet):
                 continue
             if _hex(topics[0]) == TRANSFER_TOPIC and _tron_address(_hex(topics[2])[-40:]) == wallet and _tron_address(_hex(topics[1])[-40:]) != wallet:
                 amount += Decimal(int(log["data"], 16)) / 10**6
-    return _ok(amount, info["blockTimeStamp"] / 1000, tx_hash)
+                from_address = from_address or _tron_address(_hex(topics[1])[-40:])
+    return _ok(amount, info["blockTimeStamp"] / 1000, tx_hash, from_address)
 
 
 def _ton_native_evidence(tx, wallet):
@@ -685,13 +706,13 @@ async def _sui_rpc(method, params):
             return await _rpc(rpc, method, params)
         except Exception as exc:
             last_exc = exc
-            logger.warning("RPC SUI %s gagal (%s), coba host berikut", rpc, type(exc).__name__)
+            logger.warning("RPC SUI %s gagal (%s), coba host berikut", _host_only(rpc), type(exc).__name__)
     raise RuntimeError("Semua RPC SUI gagal.") from last_exc
 
 
 async def _verify_sui(tx_hash, wallet):
     result = await _sui_rpc("sui_getTransactionBlock", [tx_hash,
-                            {"showEffects": True, "showBalanceChanges": True}])
+                            {"showEffects": True, "showBalanceChanges": True, "showInput": True}])
     if result.get("effects", {}).get("status", {}).get("status") != "success" or not result.get("checkpoint"):
         return _fail("Transaksi SUI belum sukses/final.")
     amount = Decimal(0)
@@ -700,7 +721,8 @@ async def _verify_sui(tx_hash, wallet):
         if len(coin_type) == 3 and _move_address(coin_type[0]) == _move_address("0x2") and coin_type[1:] == ["sui", "SUI"]:
             if _move_address(change.get("owner", {}).get("AddressOwner", "")) == _move_address(wallet):
                 amount += Decimal(change["amount"]) / 10**9
-    return _ok(amount, int(result["timestampMs"]) / 1000, tx_hash)
+    from_address = str(((result.get("transaction") or {}).get("data") or {}).get("sender") or "")
+    return _ok(amount, int(result["timestampMs"]) / 1000, tx_hash, from_address)
 
 
 async def _aptos_get(path):
@@ -710,7 +732,7 @@ async def _aptos_get(path):
             return await _json("GET", f"{rpc}/{path}")
         except Exception as exc:
             last_exc = exc
-            logger.warning("RPC Aptos %s gagal (%s), coba host berikut", rpc, type(exc).__name__)
+            logger.warning("RPC Aptos %s gagal (%s), coba host berikut", _host_only(rpc), type(exc).__name__)
     raise RuntimeError("Semua RPC Aptos gagal.") from last_exc
 
 
@@ -886,7 +908,7 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                     return
                 except Exception as exc:
                     last_error = exc
-                    logger.warning("Scan %s/%s blok gagal via %s: %s", network, symbol, rpc, exc)
+                    logger.warning("Scan %s/%s blok gagal via %s: %s", network, symbol, _host_only(rpc), exc)
             raise RuntimeError(f"scan blok gagal di semua RPC {network}: {last_error}")
         else:
             w3 = _scan_web3(_ordered_rpcs(network, sender.rpc_list)[0])
@@ -916,7 +938,7 @@ async def _scan_hashes(network, symbol, wallet, limit, not_before):
                         break
                     except Exception as exc:
                         last_error = exc
-                        logger.warning("Scan %s/%s getLogs gagal via %s: %s", network, symbol, rpc, exc)
+                        logger.warning("Scan %s/%s getLogs gagal via %s: %s", network, symbol, _host_only(rpc), exc)
                 if logs is None:
                     raise RuntimeError(f"getLogs gagal di semua RPC {network}: {last_error}")
                 for log in reversed(logs):

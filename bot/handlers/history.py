@@ -81,7 +81,10 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 
         message_text = "\n".join(text_lines)
         
-        keyboard = [
+        keyboard = []
+        if orders:
+            keyboard.append([InlineKeyboardButton("🆘 Laporkan Kendala Order", callback_data="report_issue")])
+        keyboard += [
             [InlineKeyboardButton("Kembali ke Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
             [get_owner_button()]
         ]

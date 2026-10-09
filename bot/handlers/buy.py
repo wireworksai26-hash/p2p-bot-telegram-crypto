@@ -218,7 +218,17 @@ async def handle_network_selection(update: Update, context: ContextTypes.DEFAULT
     parts = query.data.split("_")
     symbol = parts[2]
     network = parts[3]
-    
+
+    from services.chain_maintenance import blocked_reason, maintenance_text
+    reason = blocked_reason(symbol, network)
+    if reason:
+        await query.edit_message_text(
+            text=maintenance_text(reason),
+            reply_markup=get_buy_network_keyboard(symbol),
+            parse_mode="HTML",
+        )
+        return SELECT_NETWORK
+
     context.user_data["buy_symbol"] = symbol
     context.user_data["buy_network"] = network
     
@@ -758,6 +768,16 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
     user_id = update.effective_user.id
 
+    from services.chain_maintenance import blocked_reason, maintenance_text
+    reason = blocked_reason(context.user_data.get("buy_symbol"), context.user_data.get("buy_network"))
+    if reason:
+        await query.edit_message_text(
+            text=maintenance_text(reason),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back")]]),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     # --- 00. Alamat bisa saja terkunci ke user lain sejak dipilih (transaksi orang lain baru sukses) ---
     if _wallet_locked_by_other(user_id, context.user_data.get("buy_wallet", "")):
         await query.edit_message_text(
@@ -1282,9 +1302,14 @@ async def finalize_gopay_buy_payment(
                 f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual, lalu "
                 f"tekan tombol di bawah dan kirim SS transfer agar diteruskan ke user."
             )
+            buttons = [[manual_payout_button(order.order_id)]]
+            if order.payment_method == "BOT_BALANCE" and not tx_hash_gagal:
+                # Koin tidak pernah terkirim (mis. stok habis): admin bisa mengembalikan saldo user.
+                buttons.append([InlineKeyboardButton(
+                    "❌ Tolak & Refund Saldo", callback_data=f"admin_reject_buy_{order.order_id}")])
             await notify_admins(
                 bot or bot_app, admin_msg,
-                reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
+                reply_markup=InlineKeyboardMarkup(buttons),
                 kind="error", butuh_tindakan=True,
             )
 

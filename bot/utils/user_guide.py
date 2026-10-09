@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.keyboards.main_menu import get_owner_button
 from config.settings import settings
+from services import quote_guard
 
 GUIDE_INDEX_TEXT = (
     "📖 <b>PANDUAN TRANSAKSI</b>\n\n"
@@ -88,7 +89,8 @@ GUIDE_TOPICS = {
         "Cara mendapatkannya ada di topik <b>Cara Dapat TX Hash</b>. Tanpa hash, pesananmu tidak diproses.\n\n"
         "<b>Langkah 7 — Tunggu</b>\n"
         "Bot memeriksa transaksimu di blockchain (biasanya kurang dari 1 menit). Kalau valid, admin "
-        "mentransfer Rupiah ke rekeningmu pada jam layanan <b>08.00 – 22.00 WIB</b>. Kamu dapat "
+        "mentransfer Rupiah ke rekeningmu pada jam layanan <b>08.00 – 23.59 WIB</b> (estimasi "
+        f"maksimal <b>{quote_guard.SELL_PAYOUT_ETA_MINUTES} menit</b>; mohon tunggu). Kamu dapat "
         "notifikasi saat selesai."
     )),
     "convert": ("🔄 Cara Convert", (
@@ -102,7 +104,7 @@ GUIDE_TOPICS = {
         "💵 <b>Nominal Rupiah</b>, contoh <code>Rp 100.000</code> (atau <code>$10</code> untuk dollar).\n\n"
         "<b>Langkah 3 — Cek simulasi</b>\n"
         "Bot menampilkan berapa yang kamu kirim, fee, dan berapa koin tujuan yang kamu terima. "
-        "Simulasi ini berlaku 30 menit.\n\n"
+        f"Simulasi ini berlaku {quote_guard.QUOTE_MINUTES} menit; kalau terlewat, buat order baru.\n\n"
         "<b>Langkah 4 — Alamat wallet tujuan</b>\n"
         "Tempel alamat wallet yang akan menerima koin hasil convert. Alamatnya harus untuk "
         "<b>jaringan tujuan</b> (bukan jaringan asal).\n\n"
@@ -160,9 +162,10 @@ GUIDE_TOPICS = {
         "☑️ Jangan buat pesanan ganda untuk transaksi yang sama.\n\n"
         "<b>Waktu penting</b>\n"
         f"• QRIS Beli: bayar dalam <b>{settings.ORDER_EXPIRE_MINUTES} menit</b>.\n"
-        "• Simulasi Jual/Convert berlaku <b>30 menit</b>. Koin yang sudah dikirim tetap bisa "
-        "diverifikasi sampai <b>24 jam</b>.\n"
-        "• Rupiah Jual dicairkan pada jam layanan <b>08.00 – 22.00 WIB</b>.\n\n"
+        f"• Order Jual/Convert berlaku <b>{quote_guard.QUOTE_MINUTES} menit</b>; terlambat = buat order baru. "
+        "Koin yang terlanjur dikirim telat tetap aman (maks. <b>24 jam</b>), tapi dicek admin dan "
+        "dibayar sesuai harga terkini.\n"
+        "• Rupiah Jual dicairkan pada jam layanan <b>08.00 – 23.59 WIB</b>.\n\n"
         "<b>Rekening &amp; wallet terkunci</b>\n"
         "Setelah transaksi sukses, rekening/wallet yang dipakai terkunci ke akun Telegram-mu. "
         "Gunakan yang utama."

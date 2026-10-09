@@ -348,7 +348,9 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
             paid = False
 
         if paid:
-            if not claim_topup_success(db, topup.topup_id):
+            from database.crud import claim_and_credit_topup
+            settled = claim_and_credit_topup(db, topup.topup_id)
+            if settled is None:
                 await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
                 return
             try:
@@ -360,9 +362,8 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
             net_amt = topup.amount_idr - topup_mdr
 
             if str(topup.topup_id).startswith("TREASURY-") or str(topup.topup_id).startswith("TOPUP-TREASURY-"):
-                from database.crud import topup_bot_treasury
                 from bot.utils.emojis import tg_emoji
-                new_treasury_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+                new_treasury_bal = settled[2]
                 success_text = (
                     f"{tg_emoji('BANK', '🏦')} ✅ <b>PEMBAYARAN QRIS KAS BOT TERVERIFIKASI!</b>\n\n"
                     f"🎉 Top up kas bot sebesar <b>{format_idr(net_amt)}</b> telah berhasil masuk!\n"
@@ -376,7 +377,7 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 ]
                 await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
             else:
-                new_bal = credit_user_balance(db, topup.telegram_id, net_amt)
+                new_bal = settled[2]
                 mdr_credit_line = f"\n🧾 Pajak QRIS 0,3%: -{format_idr(topup_mdr)}" if topup_mdr else ""
 
                 success_text = (
@@ -479,10 +480,11 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
                 db, amount=topup.amount_idr, ref_id=topup.topup_id,
                 kind="topup", created_at=topup.created_at,
             ):
-                if claim_topup_success(db, topup.topup_id):
-                    from database.crud import credit_claimed_topup
-                    # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
-                    is_treasury, net_amt, new_bal = credit_claimed_topup(db, topup)
+                from database.crud import claim_and_credit_topup
+                # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
+                settled = claim_and_credit_topup(db, topup.topup_id)
+                if settled is not None:
+                    is_treasury, net_amt, new_bal = settled
                     label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
                     menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
                     await update.message.reply_text(

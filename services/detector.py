@@ -28,9 +28,9 @@ from database.connection import SessionLocal
 from database.models import Order, AuditLog, DepositClaim
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from services import tx_verifier
+from services import tx_verifier, quote_guard
 from bot.keyboards.main_menu import get_owner_button
-from bot.utils.formatter import format_crypto, format_idr
+from bot.utils.formatter import format_crypto, format_crypto_copy, format_idr
 from bot.utils.telegram_utils import safe_send_message, notify_admins
 from bot.utils.manual_payout import manual_payout_button
 
@@ -165,6 +165,17 @@ class DepositDetector:
                 order.status = "manual_review"
                 order.failure_reason = "Payout terputus; periksa receipt sebelum mengirim ulang."
                 db.commit()
+                if bot_app:
+                    await notify_admins(
+                        bot_app,
+                        f"🚨 <b>PAYOUT TERPUTUS — CEK DULU SEBELUM KIRIM ULANG</b>\n\n"
+                        f"Order: <code>{order.order_id}</code> ({order.order_type})\n"
+                        f"User: <code>{order.telegram_id}</code>\n"
+                        f"Koin tujuan: {format_crypto_copy(order.target_crypto_amount or order.crypto_amount, order.target_crypto_symbol or order.crypto_symbol)}\n"
+                        f"Wallet: <code>{_esc(str(order.buyer_wallet or '-'))}</code>\n\n"
+                        f"Bot berhenti saat mengirim, jadi koin <b>mungkin sudah terkirim</b>. Cek explorer "
+                        f"wallet tujuan sebelum mengirim manual.",
+                        kind="error", butuh_tindakan=True)
             return
 
         tx_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
@@ -288,16 +299,15 @@ class DepositDetector:
 
         tx_hash = verified.get("tx_hash", tx_hash)
 
-        # Convert dibayar otomatis: deposit yang masuk SETELAH quote berakhir tidak boleh
-        # dibayar dengan kurs lama (dulu tetap auto-payout hingga 24 jam). Admin cek kurs dulu.
-        if (not trusted and order.order_type == "swap" and order.quote_expires_at
+        # Jual & Convert: deposit yang masuk SETELAH masa berlaku order (10 menit) tidak boleh
+        # dibayar dengan harga terkunci — user bisa menunggu harga turun lalu baru mengirim koin.
+        # Admin cek dulu dan membayar sesuai harga terkini.
+        expiry = order.quote_expires_at or order.expired_at
+        if (not trusted and order.order_type in ("swap", "sell") and expiry
                 and verified.get("timestamp")
-                and verified["timestamp"] > tx_verifier._timestamp(order.quote_expires_at) + 120):
-            await self.escalate_user_hash(
-                db, order, tx_hash,
-                "Deposit masuk setelah masa quote convert berakhir — cek kurs terkini sebelum koin dikirim.",
-                bot_app,
-            )
+                and verified["timestamp"] > tx_verifier._timestamp(expiry) + quote_guard.LATE_DEPOSIT_GRACE_SECONDS):
+            reason, user_note = await self._late_deposit_texts(order)
+            await self.escalate_user_hash(db, order, tx_hash, reason, bot_app, user_note=user_note)
             return
 
         # Guard anti reuse hash: hash yang sudah diklaim order lain tidak boleh
@@ -374,7 +384,9 @@ class DepositDetector:
                 else:
                     user_msg += (
                         "💰 Admin akan segera memproses pembayaran Rupiah "
-                        "ke rekeningmu."
+                        "ke rekeningmu.\n"
+                        f"⏳ Mohon tunggu transfer admin (estimasi maksimal "
+                        f"{quote_guard.SELL_PAYOUT_ETA_MINUTES} menit pada jam layanan 08.00 - 23.59 WIB)."
                     )
                 keyboard = InlineKeyboardMarkup([[get_owner_button()]])
                 await safe_send_message(bot_app, order.telegram_id, user_msg, reply_markup=keyboard)
@@ -391,7 +403,7 @@ class DepositDetector:
                         f"💰 <b>DEPOSIT CRYPTO TERVERIFIKASI (SELL)</b>\n\n"
                         f"Order: <code>{order.order_id}</code>\n"
                         f"User ID: <code>{order.telegram_id}</code>\n"
-                        f"Deposit: {format_crypto(verified.get('amount'), order.crypto_symbol)} ({order.network})\n"
+                        f"Deposit: {format_crypto_copy(verified.get('amount'), order.crypto_symbol)} ({order.network})\n"
                         f"Pengirim: <code>{_esc(str(verified.get('from_address') or '-'))}</code>\n"
                         f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
                         f"‼️ <b>TRANSFER RUPIAH SEGERA:</b> "
@@ -509,8 +521,8 @@ class DepositDetector:
                             f"\u2705 <b>CONVERT SELESAI (AUTO-PAYOUT)</b>\n\n"
                             f"Order: <code>{order.order_id}</code>\n"
                             f"User ID: <code>{order.telegram_id}</code>\n"
-                            f"Kirim: {format_crypto(float(order.crypto_amount or 0), order.crypto_symbol)} ({order.network})\n"
-                            f"Terima: {format_crypto(float(order.target_crypto_amount or 0), order.target_crypto_symbol)} ({order.target_network})\n"
+                            f"Kirim: {format_crypto_copy(order.crypto_amount or 0, order.crypto_symbol, exact=True)} ({order.network})\n"
+                            f"Terima: {format_crypto_copy(order.target_crypto_amount or 0, order.target_crypto_symbol, exact=True)} ({order.target_network})\n"
                             f"Wallet Tujuan: <code>{order.buyer_wallet}</code>\n"
                             f"TX Payout: <code>{result.get('tx_hash')}</code>"
                         )
@@ -525,14 +537,14 @@ class DepositDetector:
                 order.status = "manual_review"
                 if result.get("tx_hash"):
                     order.payout_tx_hash = result["tx_hash"]
-                order.failure_reason = result.get("error_message") or "Auto-payout gagal"
+                order.failure_reason = (result.get("error_message") or "Auto-payout gagal")[:480]
                 db.commit()
                 if bot_app:
                     try:
                         admin_msg = (
                             f"🚨 <b>AUTO-PAYOUT GAGAL (CONVERT)</b>\n\n"
                             f"Order: <code>{order.order_id}</code>\n"
-                            f"Kirim: {order.target_crypto_amount} {order.target_crypto_symbol} "
+                            f"Kirim: {format_crypto_copy(order.target_crypto_amount, order.target_crypto_symbol, exact=True)} "
                             f"({order.target_network})\n"
                             f"Wallet: <code>{order.buyer_wallet}</code>\n"
                             f"Error: {order.failure_reason}\n\n"
@@ -586,6 +598,10 @@ class DepositDetector:
         if sender and sender in settings.OWNER_WALLET_ADDRESSES:
             return ("Pengirim deposit adalah wallet owner (isi ulang stok), bukan wallet user — "
                     "tidak boleh dikonfirmasi otomatis.")
+        # Verifier mengisi from_address; kosong berarti pengirim tidak bisa dibaca dari chain,
+        # jadi pemilik deposit tidak bisa dipastikan -> admin cek (hash orang lain bisa ditempel).
+        if "from_address" in verified and not sender:
+            return "Pengirim deposit tidak dapat dibaca dari blockchain — pastikan pengirimnya user ini."
         received = verified.get("amount", 0)
         if not self._deposit_fits(received, order.crypto_amount):
             return (f"Nominal deposit {received} {order.crypto_symbol} tidak sesuai order "
@@ -599,7 +615,41 @@ class DepositDetector:
                         f"pemiliknya tidak bisa dipastikan otomatis.")
         return ""
 
-    async def escalate_user_hash(self, db, order, tx_hash, reason, bot_app) -> None:
+    @staticmethod
+    async def _late_deposit_texts(order):
+        """(alasan untuk admin, kabar untuk user) saat deposit masuk setelah order kedaluwarsa."""
+        minutes = quote_guard.QUOTE_MINUTES
+        if order.order_type == "swap":
+            return (
+                f"Deposit masuk setelah masa quote convert ({minutes} menit) berakhir — "
+                f"cek kurs terkini sebelum koin dikirim.",
+                f"⏰ Deposit Order <code>{order.order_id}</code> masuk setelah batas {minutes} menit. "
+                f"Kurs lama sudah tidak berlaku, jadi admin mengecek kurs terkini dulu sebelum koin dikirim. "
+                f"Mohon tunggu.",
+            )
+        reason = (f"Deposit masuk setelah masa berlaku order Jual ({minutes} menit) — harga terkunci "
+                  f"tidak berlaku. Bayar sesuai harga terkini, bukan harga terkunci.")
+        try:
+            from services.price_service import price_service
+            info = await price_service.get_price(order.crypto_symbol)
+            now_price = float((info or {}).get("sell_price_idr") or 0)
+            locked = float(order.price_per_unit or 0)
+            if now_price > 0 and locked > 0:
+                pct = (now_price - locked) / locked * 100
+                estimate = int(float(order.total_idr or 0) * now_price / locked)
+                reason += (f" Harga terkunci {format_idr(locked)}/koin; sekarang {format_idr(now_price)}/koin "
+                           f"({pct:+.2f}%). Terkunci: {format_idr(order.total_idr)}; "
+                           f"perkiraan sesuai harga sekarang: ±{format_idr(estimate)}.")
+        except Exception as exc:
+            logger.warning("Harga terkini untuk deposit telat %s tak tersedia: %s", order.order_id, exc)
+        user_note = (
+            f"⏰ Deposit Order <code>{order.order_id}</code> masuk setelah batas {minutes} menit, jadi harga "
+            f"awal sudah tidak berlaku. Admin akan mengecek dan membayar sesuai <b>harga terkini</b>. "
+            f"Mohon tunggu (estimasi maksimal {quote_guard.SELL_PAYOUT_ETA_MINUTES} menit pada jam layanan)."
+        )
+        return reason, user_note
+
+    async def escalate_user_hash(self, db, order, tx_hash, reason, bot_app, user_note=None) -> None:
         """Minta admin memeriksa hash (sekali per order — scan berulang tidak spam)."""
         # Satu notifikasi per (order, hash): scan 20 dtk tidak spam, tapi hash BARU dari user
         # yang sama tetap sampai ke admin.
@@ -618,6 +668,8 @@ class DepositDetector:
         logger.warning("Order %s: hash %s butuh review admin (%s)", order.order_id, tx_hash, reason)
         if not bot_app:
             return
+        if user_note:
+            await safe_send_message(bot_app, order.telegram_id, user_note)
         if order.order_type == "swap":
             button = InlineKeyboardButton("✅ Proses Convert (sudah dicek)", callback_data=f"admin_approve_swap_{order.order_id}")
         else:
@@ -628,7 +680,7 @@ class DepositDetector:
             f"🕵️ <b>HASH DEPOSIT PERLU DICEK MANUAL</b>\n\n"
             f"Order: <code>{order.order_id}</code> ({order.order_type})\n"
             f"User: <code>{order.telegram_id}</code>\n"
-            f"Order: {format_crypto(order.crypto_amount, order.crypto_symbol)} ({order.network})\n"
+            f"Order: {format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)} ({order.network})\n"
             f"TX Hash: <code>{_esc(tx_hash or '-')}</code>\n"
             f"Alasan: {_esc(reason)}\n\n"
             f"<i>Pastikan pengirim deposit memang user ini sebelum konfirmasi.</i>",

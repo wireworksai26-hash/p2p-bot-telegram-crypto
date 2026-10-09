@@ -36,7 +36,7 @@ GUIDE_TOPICS = {
         "Sama seperti Jual sampai hash terverifikasi, lalu bot mengirim koin tujuan <b>otomatis</b> ke wallet "
         "user. Bila stok kurang atau pengiriman gagal, order masuk antrean dan admin dikabari.\n\n"
         "📣 Setiap order selesai, bot memposting <b>testimoni</b> ke channel secara otomatis.\n\n"
-        "⏰ Jam layanan pencairan Jual: 08.00 – 22.00 WIB (diproses manual oleh admin)."
+        "⏰ Jam layanan pencairan Jual: 08.00 – 23.59 WIB (diproses manual oleh admin)."
     )),
     "jual": ("💸 Order Jual", (
         "💸 <b>ORDER JUAL — TRANSFER RUPIAH KE USER</b>\n\n"

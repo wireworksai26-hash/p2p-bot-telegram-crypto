@@ -167,6 +167,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     try:
         user = update.effective_user
+
+        # Pastikan tombol ☰ (daftar perintah) ada; sekali per proses, tidak pernah gagalkan /start.
+        from bot.utils.command_menu import ensure_default_menu
+        await ensure_default_menu(context.bot)
         
         # Reset state percakapan lama jika user pernah stuck di flow sebelumnya
         reset_user_conversations(update, context)
@@ -386,7 +390,7 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers.withdraw import withdraw_confirm_handler
         await withdraw_confirm_handler(update, context)
 
-    elif data.startswith(("admin_wd_ok_", "admin_wd_no_")):
+    elif data.startswith(("admin_wd_ok_", "admin_wd_no_", "admin_wd_take_")):
         from bot.handlers.withdraw import admin_withdraw_callback
         await admin_withdraw_callback(update, context)
 
@@ -449,6 +453,10 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("admin_approve_swap_"):
         from bot.handlers.admin import admin_approve_swap_callback
         await admin_approve_swap_callback(update, context)
+
+    elif data.startswith("admin_recheck_swap_"):
+        from bot.handlers.admin import admin_recheck_swap_callback
+        await admin_recheck_swap_callback(update, context)
 
     elif data.startswith("admin_reject_swap_"):
         from bot.handlers.admin import admin_reject_swap_callback

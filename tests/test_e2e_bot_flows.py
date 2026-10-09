@@ -180,7 +180,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         await self.say(uid, self.WALLET)
         await self.tap(uid, "paymethod_GOPAY_QRIS")
         shown = await self.tap(uid, "buy_confirm")
-        self.assertIn("Batas Waktu: 15 Menit", shown)
+        self.assertIn("Batas Waktu: 10 Menit", shown)
         self.assertIn("Saya Sudah Transfer", [b["text"] for b in self.last_buttons[uid]])
         return shown
 
@@ -313,7 +313,7 @@ class BotFlowE2E(unittest.IsolatedAsyncioTestCase):
         await self.say(uid, "BCA, 1234567890, Budi Santoso")
         shown = await self.tap(uid, "sell_confirm")
         self.assertIn("ORDER PENJUALAN DIBUAT", shown)
-        self.assertIn("Batas Waktu Quote: 30 Menit", shown)  # QRIS 15, Jual 30
+        self.assertIn("Batas Waktu Order: 10 Menit", shown)  # Beli, Jual, Convert: 10 menit
         db = SessionLocal()
         try:
             order = db.query(Order).filter(Order.telegram_id == uid, Order.order_type == "sell").one()

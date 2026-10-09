@@ -6,6 +6,7 @@ Dipasang per chat lewat BotCommandScopeChat. Dipakai oleh:
 - /admin (otomatis, sekali per proses per chat) sehingga admin tidak perlu menunggu restart,
 - /refreshmenu (paksa pasang ulang + laporan hasil per chat).
 """
+import asyncio
 import logging
 
 from telegram import BotCommand, BotCommandScopeChat
@@ -46,8 +47,43 @@ ADMIN_COMMAND_MENU = [
     ("cancel", "Membatalkan proses berjalan"),
 ]
 
+# Menu ☰ untuk SEMUA user (scope default). Tanpa daftar ini tombol ☰ tiga garis tidak muncul
+# di chat dengan bot (mis. setelah token diganti ke bot baru).
+USER_COMMAND_MENU = [
+    ("start", "Menu utama"),
+    ("beli", "Beli crypto"),
+    ("jual", "Jual crypto"),
+    ("convert", "Convert / Swap crypto"),
+    ("cancel", "Membatalkan transaksi"),
+]
+
 # Chat yang sudah dipasang pada proses ini (agar /admin tidak memanggil Telegram tiap kali).
 _applied_chats: set = set()
+_default_menu_ok = False
+
+
+async def ensure_default_menu(bot) -> bool:
+    """
+    Pastikan menu ☰ default terpasang di bot ini. Dicek ke Telegram sekali per proses; bila kosong
+    (bot baru / startup gagal memasang) langsung dipasang. Tidak pernah melempar.
+    """
+    global _default_menu_ok
+    if _default_menu_ok:
+        return True
+    try:
+        wanted = [BotCommand(cmd, desc) for cmd, desc in USER_COMMAND_MENU]
+
+        async def _apply():
+            current = await bot.get_my_commands()
+            if [(c.command, c.description) for c in current] != [(c.command, c.description) for c in wanted]:
+                await bot.set_my_commands(wanted)
+                logger.info("Menu ☰ default dipasang otomatis (%d perintah).", len(wanted))
+
+        await asyncio.wait_for(_apply(), timeout=5)  # jangan menahan /start bila API lambat
+        _default_menu_ok = True
+    except Exception as exc:
+        logger.warning("Menu ☰ default gagal dipasang: %s", exc)
+    return _default_menu_ok
 
 
 def admin_menu_chat_ids() -> list:

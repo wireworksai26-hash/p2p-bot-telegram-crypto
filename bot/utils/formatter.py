@@ -33,6 +33,22 @@ def display_symbol(symbol: str) -> str:
     return DISPLAY_SYMBOLS.get(sym, sym)
 
 
+def format_crypto_copy(amount, symbol: str, exact: bool = False) -> str:
+    """
+    Jumlah koin untuk pesan HTML dengan ANGKA-nya saja di dalam <code> (ketuk = tersalin),
+    mis. '<code>5.0000</code> USDT'. exact=True memakai presisi deposit persis seperti
+    tersimpan di order (untuk admin yang menyalin angka ke wallet/explorer).
+    """
+    try:
+        if exact:
+            from services.deposit_amount import format_deposit_amount
+            return f"<code>{format_deposit_amount(amount, symbol)}</code> {display_symbol(symbol)}"
+        number, _, label = format_crypto(amount, symbol).partition(" ")
+        return f"<code>{number}</code> {label}".strip()
+    except Exception:
+        return f"<code>{amount}</code> {symbol}"
+
+
 def format_crypto(amount: float, symbol: str) -> str:
     """
     Format jumlah cryptocurrency dengan presisi yang sesuai.

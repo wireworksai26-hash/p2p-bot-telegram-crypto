@@ -91,7 +91,10 @@ class Settings:
     ADMIN_GROUP_ID = int(_admin_group) if _admin_group and _admin_group.lstrip("-").isdigit() else None
 
     # App logic configurations
-    ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 15))
+    ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 10))
+    # Aturan turnover: saldo hasil topup QRIS (sejak tanggal ini, format YYYY-MM-DD) hanya bisa
+    # dipakai belanja, tidak bisa langsung ditarik ke rekening. Topup lama tidak dikunci.
+    TOPUP_TURNOVER_START = os.getenv("TOPUP_TURNOVER_START", "2026-10-09")
     # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
     SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
     # Jual/Convert: deposit hanya diterima lewat TX hash yang dikirim user. Auto-scan riwayat

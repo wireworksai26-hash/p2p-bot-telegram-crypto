@@ -57,7 +57,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         disc_info = get_referral_discount_info(db, user.id)
 
         # Build referral link
-        bot_username = (await context.bot.get_me()).username if context.bot else "Hsnpro_bot"
+        bot_username = (await context.bot.get_me()).username if context.bot else "TokoKoinID_bot"
         ref_link = f"https://t.me/{bot_username}?start=ref_{user.id}"
 
         # Discount status block

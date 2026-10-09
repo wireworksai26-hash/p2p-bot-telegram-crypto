@@ -16,6 +16,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Any
 
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+
 from bot.utils.formatter import format_idr, format_crypto
 from config.settings import settings
 
@@ -188,6 +190,36 @@ def _mark_posted(order_id: Optional[str]) -> None:
         logger.warning(f"Gagal menandai testimoni terkirim untuk order {order_id}: {e}")
 
 
+_bot_username_cache: Optional[str] = None
+_SEND_ATTEMPTS = 3
+
+
+async def _send_with_retry(bot, **kwargs):
+    """
+    Kirim ke channel dengan retry untuk gangguan sementara: flood limit (tunggu sesuai
+    permintaan Telegram) dan timeout/jaringan (jeda 1-3 detik). Error permanen (bot bukan admin
+    channel, channel tidak ada) langsung dilempar agar sweeper/admin tahu penyebabnya.
+    """
+    for attempt in range(1, _SEND_ATTEMPTS + 1):
+        try:
+            return await bot.send_message(**kwargs)
+        except RetryAfter as exc:
+            if attempt == _SEND_ATTEMPTS:
+                raise
+            wait = min(float(getattr(exc, "retry_after", 1) or 1) + 1, 30)
+            logger.warning("Testimoni kena flood limit, menunggu %.0f detik (percobaan %d)", wait, attempt)
+            await asyncio.sleep(wait)
+        except (BadRequest, TimedOut):
+            # BadRequest turunan NetworkError di PTB tetapi permanen (channel salah / bot bukan admin).
+            # TimedOut: pesan bisa saja sudah terkirim, kirim ulang berisiko dobel di channel publik.
+            raise
+        except NetworkError as exc:
+            if attempt == _SEND_ATTEMPTS:
+                raise
+            logger.warning("Kirim testimoni gagal sementara (%s), coba lagi (percobaan %d)", type(exc).__name__, attempt)
+            await asyncio.sleep(1 if attempt == 1 else 3)
+
+
 async def post_transaction_testimony(
     bot,
     order,
@@ -216,12 +248,16 @@ async def post_transaction_testimony(
             if user_obj and user_obj.username:
                 username = user_obj.username
 
+        global _bot_username_cache
         if not bot_username:
-            try:
-                me = await bot.get_me()
-                bot_username = me.username if me else "TokoKoinID_Bot"
-            except Exception:
-                bot_username = "TokoKoinID_Bot"
+            if _bot_username_cache is None:
+                try:
+                    me = await bot.get_me()
+                    if me and me.username:
+                        _bot_username_cache = me.username  # cache hanya bila berhasil
+                except Exception:
+                    pass
+            bot_username = _bot_username_cache or "TokoKoinID_Bot"
 
         order_type = getattr(order, "order_type", "buy")
         crypto_symbol = getattr(order, "crypto_symbol", "") or ""
@@ -244,7 +280,8 @@ async def post_transaction_testimony(
             target_network=target_network,
         )
 
-        await bot.send_message(
+        await _send_with_retry(
+            bot,
             chat_id=target_channel,
             text=text,
             parse_mode="HTML",
@@ -255,7 +292,8 @@ async def post_transaction_testimony(
         return True
 
     except Exception as e:
-        logger.error(f"Gagal mengirim testimoni transaksi {getattr(order, 'order_id', '?')} ke {target_channel}: {e}", exc_info=True)
+        _last_error[getattr(order, "order_id", "?")] = f"{type(e).__name__}: {e}"
+        logger.error(f"Gagal mengirim testimoni transaksi {getattr(order, 'order_id', '?')} ke {target_channel}: {e}")
         return False
 
 
@@ -270,8 +308,10 @@ _scheduled_order_ids: set = set()
 # (gagal kirim, bot restart, jalur completion yang lupa memicu testimoni).
 _SWEEP_LOOKBACK_DAYS = 3
 _SWEEP_BATCH = 10
-_SWEEP_MAX_ATTEMPTS = 5
+_SWEEP_MAX_ATTEMPTS = 20          # sweeper jalan tiap 10 detik, jadi ~3 menit usaha ulang per order
 _sweep_attempts: dict = {}
+_last_error: dict = {}            # order_id -> error terakhir (untuk alarm admin)
+_alerted_orders: set = set()
 
 
 def _snapshot_order(order, db=None) -> SimpleNamespace:
@@ -283,6 +323,27 @@ def _snapshot_order(order, db=None) -> SimpleNamespace:
         if user_obj and user_obj.username:
             snap.user_username = user_obj.username
     return snap
+
+
+async def _alert_admins_testimony_stuck(bot, order_id: str) -> None:
+    """Satu kali per order: kabari admin bahwa testimoni gagal terus, lengkap dengan penyebabnya."""
+    if order_id in _alerted_orders:
+        return
+    _alerted_orders.add(order_id)
+    try:
+        from bot.utils.telegram_utils import notify_admins
+        error = html.escape(_last_error.get(order_id, "tidak diketahui"))
+        await notify_admins(
+            bot,
+            f"⚠️ <b>TESTIMONI GAGAL TERKIRIM</b>\n\n"
+            f"Order: <code>{html.escape(order_id)}</code>\n"
+            f"Sudah dicoba {_SWEEP_MAX_ATTEMPTS}x. Penyebab terakhir:\n<code>{error}</code>\n\n"
+            f"Cek bahwa bot adalah <b>admin channel testimoni</b> dengan izin posting, lalu kirim manual: "
+            f"<code>/posttesti {html.escape(order_id)}</code>",
+            kind="error", butuh_tindakan=True,
+        )
+    except Exception as exc:
+        logger.warning("Gagal mengirim alarm testimoni %s: %s", order_id, exc)
 
 
 async def sweep_unposted_testimonies(bot) -> int:
@@ -330,7 +391,9 @@ async def sweep_unposted_testimonies(bot) -> int:
         else:
             _scheduled_order_ids.discard(snap.order_id)
             _sweep_attempts[snap.order_id] = _sweep_attempts.get(snap.order_id, 0) + 1
-        await asyncio.sleep(0.5)
+            if _sweep_attempts[snap.order_id] >= _SWEEP_MAX_ATTEMPTS:
+                await _alert_admins_testimony_stuck(bot, snap.order_id)
+        await asyncio.sleep(0.4)
     if sent:
         logger.info(f"Sweeper testimoni: {sent} testimoni tertunda berhasil dikirim.")
     return sent

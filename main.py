@@ -78,6 +78,10 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+# httpx/httpcore mencatat URL tiap request di level INFO — URL API Telegram memuat token bot dan
+# URL explorer memuat API key. Naikkan ke WARNING agar rahasia tidak masuk log.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # State fallback auto-detect topup via GET /transactions (anti klaim ganda & rate-limit)
 _topup_last_transactions_fetch = 0.0
@@ -298,6 +302,13 @@ def _migrate_orders_schema():
                         conn.exec_driver_sql(f"ALTER TABLE orders ADD COLUMN {col} {dtype}")
                         logger.info("Migrasi orders: kolom %s ditambahkan.", col)
 
+                # Order selesai lama tanpa completed_at: isi dari updated_at agar waktu selesai tidak
+                # ikut bergeser saat order disentuh lagi (dipakai referral & laporan).
+                conn.exec_driver_sql(
+                    "UPDATE orders SET completed_at = updated_at "
+                    "WHERE LOWER(status) = 'completed' AND completed_at IS NULL AND updated_at IS NOT NULL"
+                )
+
                 # Kolom pelacak testimoni channel. Order COMPLETED yang sudah ada dianggap
                 # terkirim agar sweeper tidak membanjiri channel dengan transaksi lama.
                 if "testimony_posted_at" not in existing_orders:
@@ -475,13 +486,8 @@ def _seed_price_configs(db):
 # =============================================================
 # 2. TELEGRAM BOT SETUP
 # =============================================================
-BOT_COMMAND_MENU = [
-    ("start", "Menu utama"),
-    ("beli", "Beli crypto"),
-    ("jual", "Jual crypto"),
-    ("convert", "Convert / Swap crypto"),
-    ("cancel", "Membatalkan transaksi"),
-]
+from bot.utils.command_menu import USER_COMMAND_MENU  # noqa: E402
+BOT_COMMAND_MENU = USER_COMMAND_MENU
 
 # Menu ☰ khusus admin: daftar & pemasangannya ada di bot/utils/command_menu.py
 from bot.utils.command_menu import (  # noqa: E402
@@ -572,6 +578,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler("harga", show_prices))
     application.add_handler(CommandHandler("balance", show_balance_menu))
     application.add_handler(CommandHandler("admin", admin_handler))
+    from bot.handlers.admin_maintenance import maintenance_command_handler
+    application.add_handler(CommandHandler(["maintenance", "mt"], maintenance_command_handler))
     from bot.handlers.admin import (
         refresh_menu_command_handler, guide_command_handler, user_guide_command_handler,
     )
@@ -656,6 +664,9 @@ def build_bot_application() -> Application:
 
     # --- Callback Query Handler (catch-all for inline keyboard buttons) ---
     # Handles menu_* callbacks and any other inline-button presses.
+    from bot.handlers.order_report import report_issue_menu, report_order_detail
+    application.add_handler(CallbackQueryHandler(report_issue_menu, pattern="^report_issue$"))
+    application.add_handler(CallbackQueryHandler(report_order_detail, pattern=r"^report_order_[A-Za-z0-9_-]{3,50}$"))
     application.add_handler(CallbackQueryHandler(menu_callback_handler))
 
     # --- Global Error Handler ---
@@ -832,13 +843,13 @@ def setup_scheduler():
         coalesce=True,
     )
 
-    # --- Testimony Sweeper (every 30s) ---
+    # --- Testimony Sweeper (every 10s) ---
     # Jaring pengaman: order COMPLETED yang testimoninya belum masuk channel
     # (gagal kirim / restart) diposting ulang otomatis tanpa perlu /postlasttesti.
     scheduler.add_job(
         _job_sweep_testimonies,
         "interval",
-        seconds=30,
+        seconds=10,
         id="testimony_sweeper",
         name="Post pending completed-order testimonies to channel",
         next_run_time=datetime.now(timezone.utc),
@@ -1116,14 +1127,14 @@ async def _complete_topup(db, topup):
     from bot.utils.formatter import format_idr
     from bot.utils.emojis import tg_emoji
 
-    if not claim_topup_success(db, topup.topup_id, allow_expired=True):
+    from database.crud import claim_and_credit_topup
+    settled = claim_and_credit_topup(db, topup.topup_id, allow_expired=True)
+    if settled is None:
         return
+    _is_treasury, net_amt, settled_balance = settled
 
-    topup_mdr = int(topup.mdr_idr or 0)
-    net_amt = topup.amount_idr - topup_mdr
-
-    if str(topup.topup_id).startswith("TREASURY-") or str(topup.topup_id).startswith("TOPUP-TREASURY-"):
-        new_treasury_bal = topup_bot_treasury(db, net_amt, admin_id=topup.telegram_id, note=f"QRIS Topup {topup.topup_id}")
+    if _is_treasury:
+        new_treasury_bal = settled_balance
         if bot_app:
             try:
                 msg = (
@@ -1148,7 +1159,7 @@ async def _complete_topup(db, topup):
                 logger.warning(f"Gagal kirim notifikasi treasury topup ke admin {topup.telegram_id}: {e}")
         return
 
-    new_bal = credit_user_balance(db, topup.telegram_id, net_amt)
+    new_bal = settled_balance
 
     if bot_app:
         try:

@@ -8,6 +8,8 @@ fallback otomatis ke reply_text agar tidak memicu error global bot.
 
 import logging
 
+from telegram.error import BadRequest
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,7 +103,9 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML",
             )
             return True
         except Exception as send_err:
-            if parse_mode:
+            # Kirim ulang tanpa parse_mode HANYA bila Telegram menolak format (BadRequest). Timeout/jaringan
+            # bisa berarti pesan sudah terkirim; kirim ulang akan menggandakan notifikasi uang ke user.
+            if parse_mode and isinstance(send_err, BadRequest):
                 logger.warning("Retry kirim pesan ke %s tanpa parse_mode karena: %s", chat_id, send_err)
                 await bot_obj.send_message(
                     chat_id=int(chat_id),

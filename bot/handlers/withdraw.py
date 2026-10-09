@@ -18,6 +18,7 @@ from database.connection import SessionLocal
 from database.crud import (
     WITHDRAW_MIN_IDR,
     get_user_balance,
+    get_withdrawable_balance,
     get_user_saved_banks,
     get_saved_bank_by_id,
     create_withdraw_request,
@@ -45,6 +46,16 @@ def withdraw_button_for(balance: float) -> InlineKeyboardButton:
     return InlineKeyboardButton("🔒 Withdraw Saldo", callback_data="wd_locked")
 
 
+async def _show_topup_locked(query, total_balance: int, withdrawable: int) -> None:
+    """Saldo cukup tapi sebagian besar berasal dari topup yang belum dipakai belanja."""
+    await query.answer(
+        f"🔒 Saldo topup hanya bisa dipakai belanja crypto di bot. Saldo {format_idr(total_balance)}, "
+        f"yang bisa ditarik {format_idr(withdrawable)} (minimal {format_idr(WITHDRAW_MIN_IDR)}). "
+        "Belanja crypto dulu, atau hubungi owner.",
+        show_alert=True,
+    )
+
+
 async def withdraw_locked_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer(
         f"🔒 Withdraw terbuka saat saldo minimal {format_idr(WITHDRAW_MIN_IDR)} "
@@ -61,13 +72,17 @@ async def withdraw_start_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     db = SessionLocal()
     try:
-        balance = int(get_user_balance(db, user.id))
+        total_balance = int(get_user_balance(db, user.id))
+        balance = int(get_withdrawable_balance(db, user.id))
         banks = get_user_saved_banks(db, user.id)
     finally:
         db.close()
 
-    if balance < WITHDRAW_MIN_IDR:
+    if total_balance < WITHDRAW_MIN_IDR:
         await withdraw_locked_handler(update, context)
+        return
+    if balance < WITHDRAW_MIN_IDR:
+        await _show_topup_locked(query, total_balance, balance)
         return
 
     if not banks:
@@ -110,15 +125,19 @@ async def withdraw_bank_selected_handler(update: Update, context: ContextTypes.D
     db = SessionLocal()
     try:
         bank = get_saved_bank_by_id(db, bank_id, user.id)
-        balance = int(get_user_balance(db, user.id))
+        total_balance = int(get_user_balance(db, user.id))
+        balance = int(get_withdrawable_balance(db, user.id))
     finally:
         db.close()
 
     if not bank:
         await query.answer("⚠️ Rekening tidak ditemukan.", show_alert=True)
         return
-    if balance < WITHDRAW_MIN_IDR:
+    if total_balance < WITHDRAW_MIN_IDR:
         await withdraw_locked_handler(update, context)
+        return
+    if balance < WITHDRAW_MIN_IDR:
+        await _show_topup_locked(query, total_balance, balance)
         return
 
     _clear_flow(context)
@@ -141,7 +160,7 @@ async def withdraw_bank_selected_handler(update: Update, context: ContextTypes.D
 async def withdraw_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = SessionLocal()
     try:
-        balance = int(get_user_balance(db, update.effective_user.id))
+        balance = int(get_withdrawable_balance(db, update.effective_user.id))
     finally:
         db.close()
     await _show_confirm(update, context, balance)
@@ -183,12 +202,13 @@ async def handle_withdraw_amount_text(update: Update, context: ContextTypes.DEFA
 
     db = SessionLocal()
     try:
-        balance = int(get_user_balance(db, update.effective_user.id))
+        balance = int(get_withdrawable_balance(db, update.effective_user.id))
     finally:
         db.close()
     if amount > balance:
         await update.message.reply_text(
-            f"❌ Saldo tidak cukup. Saldo Anda <b>{format_idr(balance)}</b>. Ketik nominal lain:",
+            f"❌ Melebihi saldo yang bisa ditarik (<b>{format_idr(balance)}</b>). "
+            f"Saldo dari topup hanya bisa dipakai belanja crypto. Ketik nominal lain:",
             parse_mode="HTML",
         )
         return True
@@ -252,7 +272,9 @@ async def withdraw_confirm_handler(update: Update, context: ContextTypes.DEFAULT
         bank = get_saved_bank_by_id(db, bank_id, user.id)
         req = create_withdraw_request(db, user.id, bank, amount) if bank else None
         if req is None:
-            await query.answer("❌ Saldo tidak cukup atau rekening tidak ditemukan.", show_alert=True)
+            await query.answer(
+                "❌ Saldo tidak cukup, rekening tidak ditemukan, atau saldo berasal dari topup yang "
+                "belum dipakai belanja crypto.", show_alert=True)
             return
         req_id, req_amount = req.id, int(req.amount_idr)
         bank_name, acc_no, acc_name = req.bank_name, req.account_number, req.account_name
@@ -282,10 +304,13 @@ async def withdraw_confirm_handler(update: Update, context: ContextTypes.DEFAULT
         f"a.n: <b>{_esc(acc_name)}</b>\n\n"
         "Transfer manual dulu, lalu tekan <b>Sudah Ditransfer</b>. Tolak akan mengembalikan saldo user."
     )
-    admin_markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_wd_ok_{req_id}"),
-        InlineKeyboardButton("❌ Tolak & Refund", callback_data=f"admin_wd_no_{req_id}"),
-    ]])
+    admin_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✋ Saya Tangani (sebelum transfer)", callback_data=f"admin_wd_take_{req_id}")],
+        [
+            InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_wd_ok_{req_id}"),
+            InlineKeyboardButton("❌ Tolak & Refund", callback_data=f"admin_wd_no_{req_id}"),
+        ],
+    ])
     for admin_id in settings.ADMIN_CHAT_IDS:
         await safe_send_message(context.bot, admin_id, admin_text, reply_markup=admin_markup)
 
@@ -300,8 +325,29 @@ async def admin_withdraw_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("❌ Akses ditolak.", show_alert=True)
         return
 
+    take = query.data.startswith("admin_wd_take_")
     approve = query.data.startswith("admin_wd_ok_")
     req_id = int(query.data.rsplit("_", 1)[1])
+
+    # Satu withdraw = satu admin. Admin pertama yang menekan tombol apa pun memegangnya;
+    # admin lain diblokir supaya tidak ada yang transfer sementara yang lain menolak (refund ganda).
+    from database.crud import claim_admin_task
+    db = SessionLocal()
+    try:
+        mine, owner = claim_admin_task(db, f"withdraw:{req_id}", admin_id)
+    finally:
+        db.close()
+    if not mine:
+        await query.answer(f"⛔ WD-{req_id} sedang ditangani admin lain (ID {owner}).", show_alert=True)
+        return
+    if take:
+        await query.answer(f"✋ WD-{req_id} kamu yang tangani. Transfer lalu tekan Sudah Ditransfer.", show_alert=True)
+        for other in dict.fromkeys(settings.ADMIN_CHAT_IDS):
+            if int(other) != int(admin_id):
+                await safe_send_message(
+                    context.bot, other,
+                    f"⏳ WD-{req_id} sedang ditangani admin <code>{admin_id}</code>. Jangan diproses lagi.")
+        return
 
     db = SessionLocal()
     try:

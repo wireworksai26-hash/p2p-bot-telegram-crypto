@@ -598,10 +598,10 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
         # 10 USDT persis, tanpa kode unik.
         self.assertEqual(float(order.crypto_amount), 10.0)
         self.assertEqual(float(order.target_crypto_amount), 9.5)
-        # Quote berlaku 30 menit
+        # Quote berlaku 10 menit
         self.assertIsNotNone(order.quote_expires_at)
         diff = order.quote_expires_at - order.quoted_at
-        self.assertEqual(int(diff.total_seconds()), 1800)
+        self.assertEqual(int(diff.total_seconds()), 600)
 
     async def test_convert_cancellation_updates_db(self):
         """Uji pembatalan convert order mengupdate status order di DB menjadi 'cancelled'."""

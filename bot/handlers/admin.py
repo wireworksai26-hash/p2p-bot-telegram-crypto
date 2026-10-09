@@ -9,6 +9,7 @@ import os
 import html
 import asyncio
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from telegram import Update, InlineKeyboardMarkup, ForceReply
@@ -23,7 +24,7 @@ from database.models import User, Order, WalletBalance, PriceConfig, AuditLog, T
 from database import crud
 from html import escape as _esc
 from services.crypto_sender import CryptoSenderFactory
-from bot.utils.formatter import format_idr, format_crypto
+from bot.utils.formatter import format_idr, format_crypto, format_crypto_copy
 from bot.utils.emojis import (
     CUSTOM_EMOJI_IDS,
     CUSTOM_EMOJI_ALTS,
@@ -80,6 +81,9 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
         [
             InlineKeyboardButton("🎨 Custom Emoji 3D", callback_data="admin_panel_emojis"),
             InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
+        ],
+        [
+            InlineKeyboardButton("🛠 Maintenance Chain/Koin", callback_data="admin_panel_maint"),
         ],
         [
             InlineKeyboardButton("📖 Panduan Admin", callback_data="admin_panel_guide"),
@@ -145,7 +149,7 @@ async def sellorders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ready = order.status == "CRYPTO_CONFIRMED"
             status = "✅ DEPOSIT TERVERIFIKASI" if ready else "⏳ BELUM TERVERIFIKASI"
             lines.append(f"<code>{escape(order.order_id)}</code> — {status}\n"
-                         f"{format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({escape(order.network)}) · {format_idr(order.total_idr)}")
+                         f"{format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)} ({escape(order.network)}) · {format_idr(order.total_idr)}")
             if ready:
                 keyboard.append([InlineKeyboardButton(f"✅ Bayar {order.order_id[-6:]}", callback_data=f"admin_confirm_sell_{order.order_id}"),
                                  InlineKeyboardButton("📸 Bukti pembayaran", callback_data=f"admin_upload_proof_{order.order_id}")])
@@ -232,12 +236,12 @@ def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
     action_buttons = []
     for idx, o in enumerate(orders, 1):
         o_type = "🛒 BELI" if o.order_type == "buy" else ("💵 JUAL" if o.order_type == "sell" else "💱 SWAP")
-        crypto_str = format_crypto(float(o.crypto_amount or 0), o.crypto_symbol)
-        
+        crypto_str = format_crypto_copy(o.crypto_amount or 0, o.crypto_symbol, exact=True)
+
         text_lines.append(
             f"<b>{idx}. {o.order_id}</b> ({o_type})\n"
             f"   🚦 Status: <code>{o.status.upper()}</code>\n"
-            f"   🪙 Koin: <code>{crypto_str} ({o.network})</code>\n"
+            f"   🪙 Koin: {crypto_str} ({o.network})\n"
             f"   💳 Nilai: <code>{format_idr(o.total_idr or 0)}</code>\n"
             f"   👤 User ID: <code>{o.telegram_id}</code>\n"
         )
@@ -318,8 +322,8 @@ def build_admin_audit_view(db) -> str:
             time_str = log.created_at.strftime("%H:%M:%S") if log.created_at else "-"
             text_lines.append(
                 f"• <b>[{time_str}] {log.action}</b>\n"
-                f"  Order: <code>{log.order_id or '-'}</code> | {log.from_status or '-'} ➔ <b>{log.to_status or '-'}</b>\n"
-                f"  Detail: <i>{log.details or '-'}</i>\n"
+                f"  Order: <code>{_esc(log.order_id or '-')}</code> | {_esc(log.from_status or '-')} ➔ <b>{_esc(log.to_status or '-')}</b>\n"
+                f"  Detail: <i>{_esc(log.details or '-')}</i>\n"
             )
 
     return "\n".join(text_lines)
@@ -342,7 +346,7 @@ def build_admin_users_view(db) -> str:
         text_lines.append("🚫 <b>Daftar User Banned:</b>")
         for u in banned_users[:10]:
             uname = f"@{u.username}" if u.username else u.full_name or "Tanpa Nama"
-            text_lines.append(f"• ID <code>{u.telegram_id}</code> ({uname})")
+            text_lines.append(f"• ID <code>{u.telegram_id}</code> ({_esc(uname)})")
         text_lines.append("")
 
     text_lines.extend([
@@ -489,11 +493,21 @@ def parse_ref_setting_value(name: str, raw: str) -> tuple[bool, object]:
     text = (raw or "").strip().lower()
     for token in ("rp", "%", "jam", "tx", "orang", " "):
         text = text.replace(token, "")
+    if not text.isascii():
+        return False, "Masukkan angka yang valid."
     try:
         if meta["unit"] == "pct":
             val = float(text.replace(",", "."))
+            if not math.isfinite(val):
+                return False, "Masukkan angka yang valid."
+        elif meta["unit"] == "idr":
+            if "," in text:
+                return False, "Gunakan angka bulat tanpa koma (contoh: 7500 atau 7.500)."
+            val = int(text.replace(".", ""))
         else:
-            val = int(text.replace(".", "").replace(",", ""))
+            if "." in text or "," in text:
+                return False, "Gunakan angka bulat tanpa titik/koma."
+            val = int(text)
     except ValueError:
         return False, "Masukkan angka yang valid."
     lo, hi = meta.get("min", 0), meta["max"]
@@ -759,7 +773,7 @@ def build_admin_top_spenders_keyboard(
 def build_admin_random_draw_view(db, pool_segment: str = "ACTIVE_30D") -> str:
     """Membangun teks menu Undian Acak (Flash Giveaway)."""
     seg_names = {
-        "ALL": "Semua User Bot",
+        "ALL": "Semua User (min. 1 transaksi selesai)",
         "BUYERS": "User Pernah Beli (Completed)",
         "ACTIVE_30D": "User Aktif 30 Hari Terakhir",
     }
@@ -2270,7 +2284,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.answer("⏳ Sedang memproses pembagian reward Top Spender...", show_alert=False)
             from services.campaign_service import execute_top_spender_campaign
             bot_me = await context.bot.get_me() if context.bot else None
-            bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+            bot_username = bot_me.username if bot_me else "TokoKoinID_bot"
 
             result = await execute_top_spender_campaign(
                 db=db,
@@ -2333,7 +2347,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
             from services.campaign_service import execute_random_winner_campaign
             bot_me = await context.bot.get_me() if context.bot else None
-            bot_username = bot_me.username if bot_me else "Hsnpro_bot"
+            bot_username = bot_me.username if bot_me else "TokoKoinID_bot"
 
             res = await execute_random_winner_campaign(
                 db=db,
@@ -2497,6 +2511,10 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
             await query.answer("⏳ Menyiapkan file spreadsheet (.CSV)...", show_alert=False)
             await _send_weekly_report_csv(context.bot, query.message.chat_id, db, days)
+
+        elif data == "admin_panel_maint" or data.startswith("admin_panel_mt_"):
+            from bot.handlers.admin_maintenance import handle_maintenance_callback
+            await handle_maintenance_callback(query, data, user_id)
 
         elif data == "admin_panel_guide" or data.startswith("admin_panel_guide_"):
             from bot.utils.admin_guide import guide_index, guide_topic
@@ -3016,12 +3034,12 @@ async def orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text_lines = ["📥 <b>DAFTAR ORDER AKTIF (PENDING/PAID)</b>\n"]
         for o in orders:
             o_type = "🛒 BELI" if o.order_type == "buy" else "💵 JUAL"
-            crypto_str = format_crypto(float(o.crypto_amount), o.crypto_symbol)
-            
+            crypto_str = format_crypto_copy(o.crypto_amount, o.crypto_symbol, exact=True)
+
             text_lines.append(
                 f"• <b>{o.order_id}</b> ({o_type})\n"
                 f"  🚦 Status: <b>{o.status.upper()}</b>\n"
-                f"  🪙 Koin: <code>{crypto_str} ({o.network})</code>\n"
+                f"  🪙 Koin: {crypto_str} ({o.network})\n"
                 f"  💳 IDR: <code>{format_idr(o.total_idr)}</code>\n"
                 f"  👤 User ID: <code>{o.telegram_id}</code>\n"
             )
@@ -3355,11 +3373,19 @@ async def admin_verify_sell_deposit_callback(update: Update, context: ContextTyp
             await safe_send_message(
                 context.bot, order.telegram_id,
                 f"✅ <b>Deposit Order <code>{_esc(order_id)}</code> Terverifikasi</b>\n\n"
-                "Admin akan segera memproses pembayaran Rupiah ke rekeningmu.")
+                "Admin akan segera memproses pembayaran Rupiah ke rekeningmu.\n"
+                "⏳ Mohon tunggu transfer admin (estimasi maksimal 20 menit pada jam layanan 08.00 - 23.59 WIB).")
+
+        late = db.query(AuditLog.id).filter(
+            AuditLog.order_id == order_id, AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW",
+            AuditLog.details.like("%masa berlaku order Jual%")).first()
+        late_warning = (
+            "⚠️ <b>DEPOSIT TELAT</b> — angka terkunci di bawah sudah tidak berlaku bila harga turun. "
+            "Transfer sesuai harga terkini (lihat pesan eskalasi).\n\n" if late else "")
 
         await query.answer("✅ Deposit ditandai terverifikasi. Lanjutkan transfer Rupiah.", show_alert=False)
         await query.message.reply_text(
-            f"💰 <b>DEPOSIT SELL TERVERIFIKASI (MANUAL)</b>\n\n"
+            f"💰 <b>DEPOSIT SELL TERVERIFIKASI (MANUAL)</b>\n\n{late_warning}"
             f"Order: <code>{_esc(order_id)}</code>\n"
             f"User ID: <code>{order.telegram_id}</code>\n"
             f"‼️ <b>TRANSFER RUPIAH:</b> <b>{format_idr(order.total_idr)}</b> ke rekening:\n"
@@ -3453,7 +3479,7 @@ async def admin_upload_proof_callback(update: Update, context: ContextTypes.DEFA
             f"📸 <b>UPLOAD BUKTI TRANSFER PEMBAYARAN</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
             f"Total Rupiah: <b>{format_idr(int(order.total_idr or 0))}</b>\n"
-            f"Rekening Tujuan: <code>{order.buyer_wallet}</code>\n\n"
+            f"Rekening Tujuan: <code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
             f"👉 <b>Silakan kirimkan FOTO / SCREENSHOT bukti transfer ke chat ini sekarang.</b>\n"
             f"Bot akan otomatis meneruskan bukti foto tersebut langsung ke pembeli dan menyelesaikan order."
         )
@@ -3586,9 +3612,9 @@ async def admin_manual_payout_callback(update: Update, context: ContextTypes.DEF
         await query.answer("📸 Kirim foto SS transfer ke chat ini.", show_alert=False)
 
         if order.order_type == "swap":
-            amount_str = f"{format_crypto(float(order.target_crypto_amount or 0), order.target_crypto_symbol or '')} ({order.target_network})"
+            amount_str = f"{format_crypto_copy(order.target_crypto_amount or 0, order.target_crypto_symbol or '', exact=True)} ({order.target_network})"
         else:
-            amount_str = f"{format_crypto(float(order.crypto_amount or 0), order.crypto_symbol or '')} ({order.network})"
+            amount_str = f"{format_crypto_copy(order.crypto_amount or 0, order.crypto_symbol or '', exact=True)} ({order.network})"
 
         warning = ""
         if order.payout_tx_hash:
@@ -4231,6 +4257,9 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
         return
 
     order_id = query.data.replace("admin_reject_buy_", "")
+    order_id_confirmed = order_id.startswith("yes_")
+    if order_id_confirmed:
+        order_id = order_id[4:]
     db = SessionLocal()
     try:
         order = crud.get_order_by_id(db, order_id)
@@ -4248,10 +4277,26 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
 
         # B9: Order bertipe Saldo Bot yang ditolak admin -> otomatis refund ke saldo bot user
         if order.payment_method == "BOT_BALANCE":
+            if order.status == "manual_review" and not order_id_confirmed:
+                await query.answer()
+                await query.message.reply_text(
+                    f"⚠️ <b>KONFIRMASI TOLAK &amp; REFUND</b>\n\n"
+                    f"Order: <code>{html.escape(order_id)}</code>\n"
+                    f"Saldo {format_idr(order.total_idr)} akan dikembalikan ke user. "
+                    f"Pastikan koin <b>BELUM terkirim</b> ke wallet user (cek explorer) agar tidak bayar dua kali.",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("✅ Ya, Refund Saldo", callback_data=f"admin_reject_buy_yes_{order_id}"),
+                    ]]),
+                )
+                return
             refund = crud.reject_and_refund_bot_balance_order(db, order_id, user_id)
             if not refund.get("refunded"):
                 reason = refund.get("reason")
-                if reason == "debit_not_confirmed":
+                if reason == "payout_may_be_sent":
+                    message = ("⛔ Order ini punya jejak pengiriman/terputus — koin mungkin sudah terkirim. "
+                               "Cek explorer; jangan refund otomatis.")
+                elif reason == "debit_not_confirmed":
                     message = "⛔ Debit saldo order ini tidak tercatat. Tidak dilakukan refund otomatis agar saldo tidak bertambah tanpa dasar."
                 elif reason == "invalid_refund_amount":
                     message = "⛔ Nominal refund tidak valid. Order tidak diubah; periksa data order."
@@ -4333,12 +4378,13 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
             return
 
         # Admin sudah memeriksa bukti: topup EXPIRED (bayar di menit terakhir) tetap bisa dikredit.
-        if not crud.claim_topup_success(db, topup_id, allow_expired=True):
+        settled = crud.claim_and_credit_topup(db, topup_id, allow_expired=True)
+        if settled is None:
             await query.answer("ℹ️ Topup ini sudah diproses sistem.", show_alert=True)
             return
 
         # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
-        is_treasury, net_amt, new_bal = crud.credit_claimed_topup(db, topup)
+        is_treasury, net_amt, new_bal = settled
         label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
 
         from bot.utils.telegram_utils import safe_send_message
@@ -4418,7 +4464,14 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("❌ Akses ditolak.", show_alert=True)
         return
 
-    order_id = query.data.replace("admin_approve_swap_", "")
+    raw = query.data.replace("admin_approve_swap_", "")
+    # Tombol ini MENGIRIM koin (melewati cek pemilik deposit), jadi butuh konfirmasi kedua.
+    confirmed = raw.startswith("yes_")
+    if raw.startswith("no_"):
+        await query.answer("Dibatalkan. Tidak ada koin yang dikirim.")
+        await _finish_admin_action(query, "↩️ <b>DIBATALKAN</b> — tidak ada koin dikirim.")
+        return
+    order_id = raw[4:] if confirmed else raw
     db = SessionLocal()
     try:
         order = crud.get_order_by_id(db, order_id)
@@ -4433,6 +4486,22 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
         if order.order_type != "swap" or order.status not in ("WAITING_CRYPTO_DEPOSIT", "CRYPTO_CONFIRMED"):
             await query.answer("Order tidak dapat diproses otomatis dalam status ini.", show_alert=True)
             return
+        if not confirmed:
+            await query.answer()
+            await query.message.reply_text(
+                f"⚠️ <b>KONFIRMASI KIRIM KOIN</b>\n\n"
+                f"Order: <code>{html.escape(order_id)}</code>\n"
+                f"Kirim: {format_crypto_copy(order.target_crypto_amount, order.target_crypto_symbol)} "
+                f"({html.escape(str(order.target_network))}) ke <code>{html.escape(str(order.buyer_wallet))}</code>\n\n"
+                f"Apakah Anda yakin transaksi ini <b>sah dan bukan milik pihak ketiga</b>? "
+                f"Pengaman pemilik deposit akan dilewati dan koin toko langsung dikirim.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Ya, Kirim Koin", callback_data=f"admin_approve_swap_yes_{order_id}"),
+                    InlineKeyboardButton("↩️ Batal", callback_data=f"admin_approve_swap_no_{order_id}"),
+                ]]),
+            )
+            return
         await query.answer("Memeriksa ulang deposit on-chain...")
         from services.detector import deposit_detector
         if order.status == "WAITING_CRYPTO_DEPOSIT":
@@ -4444,6 +4513,40 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
         await query.message.reply_text(f"Status order {order.order_id}: {order.status}. Foto saja tidak mengesahkan deposit.")
     except Exception as e:
         logger.error(f"Error admin_approve_swap_callback {order_id}: {e}", exc_info=True)
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+    finally:
+        db.close()
+
+
+async def admin_recheck_swap_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol "Cek Ulang Deposit": jalankan pemeriksaan STANDAR (sama dengan pemindai otomatis).
+
+    Tidak melewati pengaman pemilik deposit/kurs: koin hanya terkirim bila deposit lolos semua
+    pengecekan; bila mencurigakan, order tetap menunggu keputusan admin.
+    """
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+    order_id = query.data.replace("admin_recheck_swap_", "")
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order or order.order_type != "swap":
+            await query.answer("❌ Order convert tidak ditemukan.", show_alert=True)
+            return
+        if order.status != "WAITING_CRYPTO_DEPOSIT":
+            await query.answer(f"Status order: {order.status}. Tidak ada yang perlu dicek ulang.", show_alert=True)
+            return
+        await query.answer("Memeriksa ulang deposit on-chain...")
+        from services.detector import deposit_detector
+        await deposit_detector._process_order(db, order, context.application, trusted=False)
+        db.refresh(order)
+        await query.message.reply_text(
+            f"Status order {order.order_id}: {order.status}. Pengecekan standar saja; deposit yang "
+            f"mencurigakan tidak dikirim otomatis. Foto tidak mengesahkan deposit.")
+    except Exception as e:
+        logger.error(f"Error admin_recheck_swap_callback {order_id}: {e}", exc_info=True)
         await query.answer(f"❌ Error: {e}", show_alert=True)
     finally:
         db.close()

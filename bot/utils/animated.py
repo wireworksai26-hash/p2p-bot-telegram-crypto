@@ -12,6 +12,7 @@ Dua mekanisme, keduanya hanya menyentuh sisi admin:
 Aman bila gagal: bila Telegram menolak pesan beranimasi, pesan dikirim ulang apa adanya.
 """
 
+import inspect
 import logging
 import re
 
@@ -109,59 +110,135 @@ def _is_admin_chat(chat_id) -> bool:
         return False
 
 
-async def _try_animated(call, kwargs, fields):
-    """Panggil API dengan teks beranimasi; bila ditolak Telegram, ulangi dengan teks asli."""
-    animated = dict(kwargs)
-    changed = False
-    for field in fields:
-        value = animated.get(field)
-        new = animate_html(value) if isinstance(value, str) else value
-        if new != value:
-            animated[field] = new
-            changed = True
-    if not changed:
-        return await call(**kwargs)
+# ---------------------------------------------------------------------------
+# Fallback otomatis: emoji animasi hanya boleh dipakai bot yang usernamenya dibeli di Fragment
+# atau yang pemiliknya akun Telegram Premium. Bila Telegram menolak (mis. setelah ganti token
+# ke bot yang pemiliknya bukan Premium), pesan dikirim ulang dengan emoji Unicode biasa,
+# bukan gagal total. State disimpan di modul karena objek Bot PTB tidak boleh diberi atribut baru.
+# ---------------------------------------------------------------------------
+_STATE = {"rejects": 0, "accepts": 0, "warned": False}
+_TG_EMOJI_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
+_METHODS = ("send_message", "edit_message_text", "send_photo", "send_document",
+            "edit_message_caption", "edit_message_reply_markup")
+_SIGS = {name: inspect.signature(getattr(ExtBot, name)) for name in _METHODS}
+
+
+def _icon_chars() -> dict:
+    """id emoji animasi -> karakter Unicode (untuk label tombol saat icon dilepas)."""
+    chars = {v: k for k, v in ANIMATED_EMOJI.items()}
     try:
-        return await call(**animated)
-    except BadRequest as exc:
-        if "not modified" in str(exc).lower():
-            raise
-        logger.warning("Pesan beranimasi ditolak (%s); dikirim ulang tanpa animasi.", exc)
-        return await call(**kwargs)
+        from bot.utils import emojis as E
+        for key, cid in E.DEFAULT_EMOJI_IDS.items():
+            alt = E.DEFAULT_EMOJI_ALTS.get(key)
+            if cid and alt:
+                chars.setdefault(str(cid), alt)
+    except Exception:
+        pass
+    return chars
+
+
+def _has_custom_emoji(params: dict) -> bool:
+    for field in ("text", "caption"):
+        value = params.get(field)
+        if isinstance(value, str) and "<tg-emoji" in value:
+            return True
+    for field in ("entities", "caption_entities"):
+        if any(getattr(e, "type", None) == "custom_emoji" for e in (params.get(field) or ())):
+            return True
+    markup = params.get("reply_markup")
+    rows = getattr(markup, "inline_keyboard", None) or ()
+    return any(getattr(b, "icon_custom_emoji_id", None) for row in rows for b in row)
+
+
+def _strip_custom_emoji(params: dict, bot) -> dict:
+    """Salinan params tanpa emoji animasi: tag <tg-emoji> jadi karakternya, icon tombol jadi awalan label."""
+    out = dict(params)
+    for field in ("text", "caption"):
+        if isinstance(out.get(field), str):
+            out[field] = _TG_EMOJI_RE.sub(r"\1", out[field])
+    for field in ("entities", "caption_entities"):
+        if out.get(field):
+            out[field] = [e for e in out[field] if getattr(e, "type", None) != "custom_emoji"] or None
+    markup = out.get("reply_markup")
+    if getattr(markup, "inline_keyboard", None):
+        chars = _icon_chars()
+        data = markup.to_dict()
+        for row in data["inline_keyboard"]:
+            for btn in row:
+                icon = btn.pop("icon_custom_emoji_id", None)
+                if icon:
+                    btn["text"] = f"{chars.get(str(icon), '')} {btn['text']}".strip()
+        out["reply_markup"] = type(markup).de_json(data, bot)
+    return out
+
+
+def _is_retryable(exc) -> bool:
+    return isinstance(exc, BadRequest) and "not modified" not in str(exc).lower()
 
 
 class AnimatedExtBot(ExtBot):
-    """ExtBot yang menganimasikan emoji pada pesan ke chat admin."""
+    """
+    ExtBot dengan dua tugas:
+    1. Pesan HTML ke chat admin dianimasikan otomatis (emoji Unicode -> <tg-emoji>).
+    2. Semua pesan yang membawa emoji animasi dikirim ulang tanpa emoji animasi bila
+       Telegram menolaknya (bot tanpa hak emoji animasi).
+    """
 
     __slots__ = ()
 
-    async def send_message(self, chat_id, text, *args, **kwargs):
-        if args or not _is_html(kwargs) or not _is_admin_chat(chat_id):
-            return await super().send_message(chat_id, text, *args, **kwargs)
-        return await _try_animated(
-            lambda **kw: super(AnimatedExtBot, self).send_message(**kw),
-            {"chat_id": chat_id, "text": text, **kwargs}, ("text",))
+    async def _animated_call(self, name, args, kwargs):
+        parent = getattr(ExtBot, name)
+        params = dict(_SIGS[name].bind(self, *args, **kwargs).arguments)
+        params.pop("self", None)
 
-    async def edit_message_text(self, text, chat_id=None, *args, **kwargs):
-        if args or not _is_html(kwargs) or not _is_admin_chat(chat_id):
-            return await super().edit_message_text(text, chat_id, *args, **kwargs)
-        return await _try_animated(
-            lambda **kw: super(AnimatedExtBot, self).edit_message_text(**kw),
-            {"text": text, "chat_id": chat_id, **kwargs}, ("text",))
+        if name in ("send_message", "edit_message_text", "send_photo", "send_document") \
+                and _is_html(params) and _is_admin_chat(params.get("chat_id")):
+            for field in ("text", "caption"):
+                if isinstance(params.get(field), str):
+                    params[field] = animate_html(params[field])
 
-    async def send_photo(self, chat_id, photo, *args, **kwargs):
-        if args or not _is_html(kwargs) or not _is_admin_chat(chat_id):
-            return await super().send_photo(chat_id, photo, *args, **kwargs)
-        return await _try_animated(
-            lambda **kw: super(AnimatedExtBot, self).send_photo(**kw),
-            {"chat_id": chat_id, "photo": photo, **kwargs}, ("caption",))
+        if not _has_custom_emoji(params):
+            return await parent(self, **params)
 
-    async def send_document(self, chat_id, document, *args, **kwargs):
-        if args or not _is_html(kwargs) or not _is_admin_chat(chat_id):
-            return await super().send_document(chat_id, document, *args, **kwargs)
-        return await _try_animated(
-            lambda **kw: super(AnimatedExtBot, self).send_document(**kw),
-            {"chat_id": chat_id, "document": document, **kwargs}, ("caption",))
+        # Setelah beberapa penolakan berturut-turut tanpa satu pun sukses, lepas emoji lebih dulu
+        # (hemat satu request gagal per pesan).
+        if _STATE["rejects"] >= 2 and _STATE["accepts"] == 0:
+            return await parent(self, **_strip_custom_emoji(params, self))
+
+        # Upload (mis. foto QRIS dari BytesIO) sudah terbaca habis pada percobaan pertama; ingat posisinya
+        # agar kirim ulang tidak mengirim file kosong.
+        streams = [(v, v.tell()) for v in params.values() if hasattr(v, "seek") and hasattr(v, "tell")]
+        try:
+            result = await parent(self, **params)
+            _STATE["accepts"] += 1
+            return result
+        except BadRequest as exc:
+            if not _is_retryable(exc):
+                raise
+            for stream, position in streams:
+                stream.seek(position)
+            plain = _strip_custom_emoji(params, self)
+            result = await parent(self, **plain)  # bila ini juga gagal, error aslinya yang naik
+            _STATE["rejects"] += 1
+            if not _STATE["warned"]:
+                _STATE["warned"] = True
+                logger.warning(
+                    "Telegram menolak emoji animasi (%s); pesan dikirim ulang dengan emoji biasa. "
+                    "Emoji animasi hanya bisa dipakai bot milik akun Telegram Premium atau bot dengan "
+                    "username dari Fragment.", exc)
+            return result
+
+
+def _make_method(name):
+    async def method(self, *args, **kwargs):
+        return await self._animated_call(name, args, kwargs)
+    method.__name__ = name
+    method.__qualname__ = f"AnimatedExtBot.{name}"
+    return method
+
+
+for _name in _METHODS:
+    setattr(AnimatedExtBot, _name, _make_method(_name))
 
 
 def install_animated_bot(application) -> bool:
@@ -170,7 +247,10 @@ def install_animated_bot(application) -> bool:
         bot = application.bot
         if isinstance(bot, ExtBot) and not isinstance(bot, AnimatedExtBot):
             object.__setattr__(bot, "__class__", AnimatedExtBot)
-        return isinstance(application.bot, AnimatedExtBot)
+        active = isinstance(application.bot, AnimatedExtBot)
+        if active:
+            logger.info("Emoji animasi admin aktif (pesan ke ADMIN_CHAT_IDS).")
+        return active
     except Exception as exc:
         logger.warning("Emoji animasi admin tidak aktif: %s", exc)
         return False

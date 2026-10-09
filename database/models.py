@@ -159,6 +159,15 @@ class CampaignActionLock(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class AdminTaskClaim(Base):
+    """Penanda "✋ Saya tangani": satu tugas admin (mis. withdraw) hanya boleh dipegang satu admin."""
+    __tablename__ = "admin_task_claims"
+
+    task_key = Column(String(80), primary_key=True)
+    admin_id = Column(BigInteger, nullable=False)
+    claimed_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WalletBalance(Base):
     __tablename__ = 'wallet_balances'
     __table_args__ = (
@@ -235,6 +244,19 @@ class GopaySession(Base):
     key = Column(String(100), primary_key=True, default='active_session')
     session_data = Column(String, nullable=False)  # JSON payload string
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ChainMaintenance(Base):
+    """Penanda maintenance per jaringan (NETWORK) atau koin (COIN): order BARU ditutup, order berjalan tetap diproses."""
+    __tablename__ = 'chain_maintenance'
+    __table_args__ = (UniqueConstraint('scope', 'code', name='uq_chain_maintenance_scope_code'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scope = Column(String(10), nullable=False)   # 'NETWORK' | 'COIN'
+    code = Column(String(30), nullable=False)    # mis. SOLANA, ETH, USDT
+    note = Column(String(200), nullable=True)    # catatan untuk user (opsional)
+    set_by = Column(BigInteger, nullable=True)   # telegram_id admin
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class NotificationTarget(Base):

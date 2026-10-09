@@ -42,7 +42,13 @@ SNK_TEXT = (
     "5. Transaksi tidak dapat dibatalkan setelah pembayaran diverifikasi.\n"
     "6. Jika mengalami kendala, hubungi owner dengan tombol <b>Hubungi Owner</b>.\n"
     "7. Apabila ada saran atau masukan untuk bot ini silakan chat admin untuk dilakukan perbaikan dan pembaruan.\n"
-    "8. Tidak menerima top up USD dan Gram ke Address Exness, HashKey, wallet telegram."
+    "8. Tidak menerima top up USD dan Gram ke Address Exness, HashKey, wallet telegram.\n"
+    "9. <b>Kebijakan Anti-Money Laundering (AML) &amp; Anti-Pencucian Uang:</b> Kami <b>MENOLAK KERAS</b> "
+    "segala bentuk transaksi yang bersumber dari atau ditujukan untuk tindak pidana pencucian uang, "
+    "korupsi, penipuan dan lainnya yang sejenis.\n"
+    "10. <b>Larangan Transaksi Judi Online (Judol):</b> Bot ini <b>TIDAK MELAYANI</b> dan <b>MELARANG KERAS</b> "
+    "segala bentuk deposit maupun withdraw yang terindikasi bersumber dari atau ditujukan ke "
+    "situs/aplikasi judi online dalam bentuk apa pun."
 )
 
 ORDER_SUMMARY_BUY = (
@@ -70,7 +76,7 @@ ORDER_SUMMARY_SELL = (
     "• Bank / E-Wallet: {bank_name}\n"
     "• No Rekening: <code>{bank_acc}</code>\n"
     "• Atas Nama: {bank_holder}\n\n"
-    "⏰ <b>Jam Layanan:</b> 08.00 - 22.00 WIB\n"
+    "⏰ <b>Jam Layanan:</b> 08.00 - 23.59 WIB\n"
     "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan rupiah diproses manual pada jam layanan atau saat admin online).</i>\n\n"
     "Silakan klik konfirmasi di bawah untuk memproses penjualan."
 )

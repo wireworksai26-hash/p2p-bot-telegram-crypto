@@ -161,7 +161,7 @@ class TestAngkaSamaDenganKode(unittest.TestCase):
 
     def test_jam_layanan_jual(self):
         self.assertIn("08.00", _plain(GUIDE_TOPICS["jual"][1]))
-        self.assertIn("22.00", _plain(GUIDE_TOPICS["jual"][1]))
+        self.assertIn("23.59", _plain(GUIDE_TOPICS["jual"][1]))
 
 
 class TestNamaTombolAda(unittest.TestCase):
