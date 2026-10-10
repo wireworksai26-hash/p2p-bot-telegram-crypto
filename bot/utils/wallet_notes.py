@@ -18,10 +18,6 @@ EXCHANGE_LOGOS = (
 )
 
 
-def _bsc() -> str:
-    return tg_emoji("NET_BSC", "🟡")
-
-
 def _exchange_names() -> str:
     parts = []
     for key, name in EXCHANGE_LOGOS:
@@ -38,10 +34,3 @@ def exchange_send_note() -> str:
         f"Kirim dari <b>Alamat Wallet Web3 Pribadi</b>."
     )
 
-
-def exchange_receive_note() -> str:
-    """Untuk layar input alamat penerima (Beli / tujuan Convert): bot mengirim koin KE user."""
-    return (
-        f"🚫 <i>Jangan isi alamat deposit exchange seperti {_bsc()} Cwallet atau sejenisnya; "
-        f"koin bisa tersangkut. Pakai alamat wallet pribadi.</i>"
-    )

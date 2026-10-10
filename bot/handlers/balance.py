@@ -320,8 +320,7 @@ async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_T
 
 async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mengecek status pembayaran topup secara manual saat user mengklik tombol."""
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query  # dijawab di tiap jalur di bawah (toast / pop-up), bukan di awal
 
     topup_id = query.data.replace("check_topup_", "")
     db = SessionLocal()
@@ -391,25 +390,29 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 keyboard = [[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]]
                 await query.message.reply_text(success_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         else:
-            # Pembayaran belum terdeteksi saat tombol diklik (karena delay sync 10-30s)
-            not_found_text = (
-                f"⏳ <b>Sedang Memeriksa Mutasi Otomatis...</b>\n\n"
-                f"🎫 ID Topup: <code>{topup_id}</code>\n"
-                f"💵 Total Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
-                f"⚡ <b>Sistem Topup bekerja 100% OTOMATIS.</b>\n"
-                f"Mutasi QRIS biasanya membutuhkan waktu sekitar 10–30 detik untuk tersinkronisasi dari bank/e-wallet Anda ke sistem.\n\n"
-                f"👉 Saldo Anda akan otomatis bertambah ke akun tanpa perlu konfirmasi manual. Anda juga dapat menekan tombol <b>🔄 Cek Ulang</b> di bawah.\n\n"
-                f"<i>(Opsi bantuan: Jika nominal transfer berbeda atau butuh bantuan darurat, Anda bisa kirim foto bukti transfer ke chat ini).</i>"
+            # Belum terdeteksi (delay sync 10-30 dtk): perbarui status di pesan tagihan yang SAMA,
+            # bukan kirim pesan baru tiap klik (terlihat seperti spam).
+            from bot.utils.telegram_utils import refresh_message_status, relabel_recheck_button, wib_clock
+            stamp = wib_clock()
+            status = (
+                f"⏳ <b>Status:</b> pembayaran belum terdeteksi · dicek {stamp} WIB\n"
+                f"<i>Topup berjalan otomatis; mutasi QRIS butuh 10-30 detik. Tekan Cek Ulang lagi, "
+                f"atau kirim foto bukti transfer ke chat ini bila nominalnya berbeda.</i>"
             )
-            keyboard = [
-                [InlineKeyboardButton("Cek Ulang", callback_data=f"check_topup_{topup_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305"))],
-                [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-            ]
-            await query.message.reply_text(
-                not_found_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
+            updated = await refresh_message_status(
+                query, status, relabel_recheck_button(query.message.reply_markup, "check_topup_"))
+            if updated:
+                await query.answer("⏳ Belum terdeteksi")
+            else:
+                await query.answer(
+                    f"⏳ Pembayaran belum terdeteksi (dicek {stamp} WIB). Mutasi QRIS butuh 10-30 detik, "
+                    f"coba lagi sebentar lagi.", show_alert=True)
+    except Exception as exc:
+        logger.error("Error check_topup_payment_manual %s: %s", topup_id, exc, exc_info=True)
+        try:
+            await query.answer("❌ Terjadi kesalahan saat memeriksa pembayaran. Coba lagi.", show_alert=True)
+        except Exception:
+            pass
     finally:
         db.close()
 

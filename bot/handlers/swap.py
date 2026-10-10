@@ -44,7 +44,7 @@ from bot.utils.formatter import format_crypto, format_crypto_copy
 from bot.utils.telegram_utils import notify_admins
 from bot.utils.flow_guard import block_if_busy
 from bot.utils.messages import WALLET_DUPLICATE_WARNING, WALLET_LOCK_NOTE
-from bot.utils.wallet_notes import exchange_send_note, exchange_receive_note
+from bot.utils.wallet_notes import exchange_send_note
 from services import quote_guard
 from bot.utils.emojis import (
     E_SWAP,
@@ -499,10 +499,19 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Nominal koin = presisi deposit (tanpa kode unik). Rupiah dihitung ulang dari jumlah
     # yang benar-benar disetor (bukan input mentah).
-    from services.deposit_amount import base_amount
-    src_amount = float(base_amount(src_sym, src_amount))
-    if src_amount > 0 and src_market_price:
-        nominal_idr = int(Decimal(str(src_amount)) * Decimal(str(src_market_price)))
+    from services.deposit_amount import base_amount, quantum
+    from decimal import ROUND_UP
+    rupiah_driven = mode == "IDR" or (mode == "USD" and src_sym.upper() not in USD_COINS)
+    if rupiah_driven and nominal_idr > 0 and src_market_price:
+        # User mengetik nominal Rupiah: koin dibulatkan KE ATAS ke presisi deposit supaya nilainya
+        # tidak jatuh di bawah nominal itu (dulu dibulatkan ke bawah: Rp 5.000 jadi Rp 4.999 dan
+        # ditolak sebagai di bawah minimum). Nominal yang dicatat tetap angka yang diketik.
+        exact = Decimal(nominal_idr) / Decimal(str(src_market_price))
+        src_amount = float(exact.quantize(quantum(src_sym), rounding=ROUND_UP))
+    else:
+        src_amount = float(base_amount(src_sym, src_amount))
+        if src_amount > 0 and src_market_price:
+            nominal_idr = int(Decimal(str(src_amount)) * Decimal(str(src_market_price)))
 
     # Hitung Fee Convert Tier (Min Rp 6.000, Max Rp 1.010.000)
     try:
@@ -552,8 +561,7 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>{src_amount:.6f} {src_sym} ({src_net})</b> (~Rp {nominal_idr:,})\n"
         f"Fee Convert: <b>Rp {fee_idr:,}</b>{gas_surcharge_note(tgt_sym, tgt_net)}\n"
         f"Estimasi yang diterima: <b>{tgt_amount:.6f} {tgt_sym} ({tgt_net})</b>\n\n"
-        f"Silakan masukkan <b>Alamat Wallet {tgt_sym} ({tgt_net})</b> tujuan milikmu:\n\n"
-        f"{exchange_receive_note()}",
+        f"Silakan masukkan <b>Alamat Wallet {tgt_sym} ({tgt_net})</b> tujuan milikmu:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )

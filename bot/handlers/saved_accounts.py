@@ -57,7 +57,7 @@ CHAIN_EMOJIS = {
 CHAIN_TITLES = {
     "EVM": "EVM (BSC / ETH / Polygon / Arbitrum / Base)",
     "SOLANA": "Solana (SOL)",
-    "TRON": "Tron (TRC20 / TRX)",
+    "TRON": "TRON (TRX)",
     "SUI": "SUI Network",
     "APTOS": "Aptos (APT)",
     "TON": "The Open Network (TON)",
@@ -69,6 +69,11 @@ CHAIN_TITLES = {
 # ============================================================
 # 1. ALAMAT WALLET VIEW (Phase 7 Enhanced Grouped View)
 # ============================================================
+
+def _net_label(network) -> str:
+    """Nama jaringan untuk tampilan: nama simpanan lama "TRC20" ditampilkan sebagai "TRON"."""
+    return "TRON" if str(network or "").upper() == "TRC20" else str(network or "")
+
 
 def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_balance") -> tuple[str, InlineKeyboardMarkup]:
     """Menyusun teks dan keyboard untuk menu Alamat Wallet yang dikelompokkan per chain."""
@@ -89,7 +94,7 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
                 InlineKeyboardButton("➕ Solana", callback_data="act_add_wallet_SOLANA"),
             ],
             [
-                InlineKeyboardButton("➕ TRON (TRC20)", callback_data="act_add_wallet_TRON"),
+                InlineKeyboardButton("➕ TRON", callback_data="act_add_wallet_TRON"),
                 InlineKeyboardButton("➕ TON", callback_data="act_add_wallet_TON"),
             ],
             [
@@ -110,7 +115,7 @@ def build_saved_wallets_view(telegram_id: int, db, back_callback: str = "menu_ba
 
             for w in wallets:
                 short_addr = f"{w.wallet_address[:6]}...{w.wallet_address[-4:]}" if len(w.wallet_address) > 12 else w.wallet_address
-                net_badge = f" [{w.network}]" if w.network else ""
+                net_badge = f" [{_net_label(w.network)}]" if w.network else ""
                 default_badge = " ⭐ <b>Default</b>" if w.is_default else ""
                 label_badge = f" — <i>{_esc(w.label)}</i>" if w.label else ""
                 lines.append(f"  {wallet_counter}. <code>{_esc(w.wallet_address)}</code>{net_badge}{default_badge}{label_badge}")
@@ -259,7 +264,7 @@ async def prompt_add_saved_wallet(update: Update, context: ContextTypes.DEFAULT_
             "Kirimkan <b>Alamat Wallet</b> Anda di room chat ini. Sistem akan secara otomatis mendeteksi jaringan yang sesuai.\n\n"
             "• Contoh <b>EVM (BSC / ETH / Polygon)</b>:\n"
             "  <code>0x71C839556CB3250b716773B3aBE329a4a796c9c6</code>\n"
-            "• Contoh <b>TRON (TRC20)</b>:\n"
+            "• Contoh <b>TRON</b>:\n"
             "  <code>TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t</code>\n"
             "• Contoh <b>SOLANA</b>:\n"
             "  <code>9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM</code>\n"
@@ -358,7 +363,7 @@ async def show_set_default_wallet_menu(update: Update, context: ContextTypes.DEF
     keyboard = []
     for w in wallets:
         short = f"{w.wallet_address[:6]}...{w.wallet_address[-4:]}" if len(w.wallet_address) > 12 else w.wallet_address
-        net = f" [{w.network}]" if w.network else ""
+        net = f" [{_net_label(w.network)}]" if w.network else ""
         def_tag = " ⭐ (Default)" if w.is_default else ""
         keyboard.append([
             InlineKeyboardButton(f"⭐ Jadikan Default: {short}{net}{def_tag}", callback_data=f"act_set_default_{w.id}")
@@ -464,7 +469,7 @@ async def show_delete_wallet_menu(update: Update, context: ContextTypes.DEFAULT_
     keyboard = []
     for w in wallets:
         short = f"{w.wallet_address[:6]}...{w.wallet_address[-4:]}" if len(w.wallet_address) > 12 else w.wallet_address
-        net = f" ({w.network})" if w.network else ""
+        net = f" ({_net_label(w.network)})" if w.network else ""
         keyboard.append([
             InlineKeyboardButton(f"❌ Hapus: {short}{net}", callback_data=f"act_del_wallet_{w.id}")
         ])

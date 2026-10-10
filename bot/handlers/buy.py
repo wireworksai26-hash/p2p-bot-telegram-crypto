@@ -55,10 +55,12 @@ from bot.keyboards.crypto_select import (
 )
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr, validate_wallet_address, validate_crypto_amount
-from bot.utils.wallet_notes import exchange_receive_note
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
 from bot.utils.messages import ORDER_SUMMARY_BUY
-from bot.utils.telegram_utils import safe_edit_message, safe_send_message, notify_admins
+from bot.utils.telegram_utils import (
+    safe_edit_message, safe_send_message, notify_admins,
+    refresh_message_status, relabel_recheck_button, wib_clock,
+)
 from bot.utils.flow_guard import block_if_busy
 from bot.utils.manual_payout import manual_payout_button
 from bot.utils.emojis import (
@@ -488,8 +490,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"{qris_mdr_note(nominal_idr)}\n\n"
                 f"• Nilai Koin Diterima: <b>{format_idr(received_idr)}</b>\n\n"
                 f"Silakan ketik <b>Alamat Wallet {symbol} ({network})</b> Anda penerima koin:\n"
-                f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>\n\n"
-                f"{exchange_receive_note()}"
+                f"<i>⚠️ Pastikan Anda mengirimkan alamat wallet yang benar di network {network}!</i>"
             ),
             reply_markup=InlineKeyboardMarkup(input_wallet_keyboard),
             parse_mode="HTML"
@@ -1386,8 +1387,7 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     Verifikasi via riwayat transaksi Gopiz (nominal match). Jika terdeteksi
     -> finalisasi otomatis (paid + send crypto).
     """
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query  # dijawab di tiap jalur di bawah (toast / pop-up), bukan di awal
 
     order_id = query.data.replace("check_buy_payment_", "")
     user_id = update.effective_user.id
@@ -1427,23 +1427,22 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             ))
             return
 
-        # Jika belum terdeteksi otomatis (misal delay sync mutasi GoPay)
-        not_detected_text = (
-            f"⏳ <b>Pembayaran sedang disinkronisasi...</b>\n\n"
-            f"ID Order: <code>{order.order_id}</code>\n"
-            f"Total Nominal: <b>{format_idr(order.total_idr)}</b>\n\n"
-            f"Mutasi QRIS GoPay biasanya membutuhkan waktu 30-60 detik untuk sinkron.\n\n"
-            f"👉 Silakan klik tombol <b>🔄 Cek Ulang</b> dalam beberapa saat, atau langsung <b>kirim screenshot/foto bukti transfer</b> ke chat ini untuk diproses manual oleh Admin."
+        # Belum terdeteksi (delay sync mutasi GoPay): perbarui status di pesan QRIS yang SAMA,
+        # bukan kirim pesan baru tiap klik (terlihat seperti spam).
+        stamp = wib_clock()
+        status = (
+            f"⏳ <b>Status:</b> pembayaran belum terdeteksi · dicek {stamp} WIB\n"
+            f"<i>Mutasi QRIS butuh 30-60 detik. Tekan Cek Ulang lagi, atau kirim foto bukti "
+            f"transfer ke chat ini untuk diproses admin.</i>"
         )
-        keyboard = [
-            [InlineKeyboardButton("Cek Ulang", callback_data=f"check_buy_payment_{order.order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305"))],
-            [get_owner_button()]
-        ]
-        await query.message.reply_text(
-            not_detected_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
+        updated = await refresh_message_status(
+            query, status, relabel_recheck_button(query.message.reply_markup, "check_buy_payment_"))
+        if updated:
+            await query.answer("⏳ Belum terdeteksi")
+        else:
+            await query.answer(
+                f"⏳ Pembayaran belum terdeteksi (dicek {stamp} WIB). Mutasi QRIS butuh 30-60 detik, "
+                f"coba lagi sebentar lagi.", show_alert=True)
     except Exception as e:
         logger.error(f"Error check_buy_payment {order_id}: {e}", exc_info=True)
         try:

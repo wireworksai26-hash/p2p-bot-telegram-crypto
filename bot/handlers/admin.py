@@ -1233,7 +1233,7 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
 
     import secrets
     topup_id = f"TREASURY-{int(datetime.utcnow().timestamp())}-{secrets.token_hex(3).upper()}"
-    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.ORDER_EXPIRE_MINUTES)
 
     db = SessionLocal()
     try:
@@ -1291,7 +1291,7 @@ async def generate_and_send_treasury_qris(update: Update, context: ContextTypes.
         f"💵 <b>Nominal Masuk Kas:</b> <b>{format_idr(amount)}</b>\n"
         f"💰 <b>Total Transfer:</b> <b>{format_idr(final_amount)}</b>"
         f"{mdr_line}\n"
-        f"⏰ <b>Batas Waktu:</b> 30 Menit\n\n"
+        f"⏰ <b>Batas Waktu:</b> {settings.ORDER_EXPIRE_MINUTES} Menit\n\n"
         f"📌 <b>Cara Bayar:</b>\n"
         f"1. Scan QRIS di atas dengan <b>BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA, ShopeePay</b>, dll.\n"
         f"2. Nominal <b>{format_idr(final_amount)}</b> akan terisi otomatis.\n"
@@ -3871,9 +3871,9 @@ NETWORK_ALIASES: dict[str, tuple[str, list[str]]] = {
     "MATIC": ("Polygon", ["USDT", "USDC", "POL"]),
     "SOLANA": ("Solana", ["SOL", "USDT", "USDC"]),
     "SOL": ("Solana", ["SOL", "USDT", "USDC"]),
-    "TRON": ("TRON", ["TRX", "USDT"]),
-    "TRX": ("TRON", ["TRX", "USDT"]),
-    "TRC20": ("TRON", ["TRX", "USDT"]),
+    "TRON": ("TRON", ["TRX"]),
+    "TRX": ("TRON", ["TRX"]),
+    "TRC20": ("TRON", ["TRX"]),
     "TON": ("TON", ["TON", "USDT"]),
     "SUI": ("Sui", ["SUI"]),
     "APTOS": ("Aptos", ["APT"]),
@@ -4538,13 +4538,23 @@ async def admin_recheck_swap_callback(update: Update, context: ContextTypes.DEFA
         if order.status != "WAITING_CRYPTO_DEPOSIT":
             await query.answer(f"Status order: {order.status}. Tidak ada yang perlu dicek ulang.", show_alert=True)
             return
-        await query.answer("Memeriksa ulang deposit on-chain...")
         from services.detector import deposit_detector
         await deposit_detector._process_order(db, order, context.application, trusted=False)
         db.refresh(order)
-        await query.message.reply_text(
-            f"Status order {order.order_id}: {order.status}. Pengecekan standar saja; deposit yang "
-            f"mencurigakan tidak dikirim otomatis. Foto tidak mengesahkan deposit.")
+        # Hasil ditampilkan di pesan yang SAMA (blok status diperbarui), bukan pesan baru tiap klik.
+        from bot.utils.telegram_utils import refresh_message_status, wib_clock
+        stamp = wib_clock()
+        status = (
+            f"🔄 <b>Dicek {stamp} WIB</b> — status order: <code>{html.escape(str(order.status))}</code>\n"
+            f"<i>Pengecekan standar saja; deposit yang mencurigakan tidak dikirim otomatis. "
+            f"Foto tidak mengesahkan deposit.</i>"
+        )
+        if await refresh_message_status(query, status):
+            await query.answer(f"Status: {order.status}")
+        else:
+            await query.answer(
+                f"Status order {order.order_id}: {order.status} (dicek {stamp} WIB). "
+                f"Pengecekan standar saja.", show_alert=True)
     except Exception as e:
         logger.error(f"Error admin_recheck_swap_callback {order_id}: {e}", exc_info=True)
         await query.answer(f"❌ Error: {e}", show_alert=True)

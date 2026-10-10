@@ -10,7 +10,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:TEST_ONLY")
 os.environ.setdefault("ADMIN_CHAT_IDS", "1")
 
-from bot.utils.wallet_notes import exchange_receive_note, exchange_send_note  # noqa: E402
+from bot.utils.wallet_notes import exchange_send_note  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,32 +55,15 @@ class IsiCatatan(unittest.TestCase):
         for key in ("EXCH_GATE", "EXCH_BYBIT", "EXCH_BITGET", "EXCH_CWALLET"):
             self.assertRegex(CUSTOM_EMOJI_IDS[key], r"^\d{15,}$")
 
-    def test_catatan_terima_menyebut_exchange_dan_cwallet(self):
-        text = _plain(exchange_receive_note())
-        self.assertIn("Cwallet", text)
-        self.assertIn("exchange", text.lower())
-
-    def test_catatan_terima_menyebut_exchange_dan_cwallet(self):
-        text = _plain(exchange_receive_note())
-        self.assertIn("Cwallet", text)
-        self.assertIn("exchange", text.lower())
-
-    def test_catatan_terima_ikon_bsc_ada_sebelum_kata_cwallet(self):
-        before = exchange_receive_note().split("Cwallet")[0]
-        self.assertTrue(
-            "<tg-emoji" in before or "🟡" in before,
-            "harus ada ikon BSC (emoji kustom atau 🟡) tepat sebelum kata Cwallet",
-        )
-
     def test_tulisan_tidak_menyalin_kompetitor(self):
-        for note in (exchange_send_note(), exchange_receive_note()):
-            self.assertNotIn("addres exchange", note.lower())
-            self.assertNotIn("cwallet / dll", note.lower())
+        note = exchange_send_note()
+        self.assertNotIn("addres exchange", note.lower())
+        self.assertNotIn("cwallet / dll", note.lower())
 
     def test_html_seimbang(self):
-        for note in (exchange_send_note(), exchange_receive_note()):
-            for tag in ("b", "i", "tg-emoji"):
-                self.assertEqual(note.count(f"<{tag}"), note.count(f"</{tag}>"), tag)
+        note = exchange_send_note()
+        for tag in ("b", "i", "tg-emoji"):
+            self.assertEqual(note.count(f"<{tag}"), note.count(f"</{tag}>"), tag)
 
 
 class TerpasangDiLayar(unittest.TestCase):
@@ -91,9 +74,12 @@ class TerpasangDiLayar(unittest.TestCase):
         self.assertIn("exchange_send_note()", self._src("bot/handlers/sell.py"))
         self.assertIn("exchange_send_note()", self._src("bot/handlers/swap.py"))
 
-    def test_input_alamat_beli_dan_convert_memakai_catatan_terima(self):
-        self.assertIn("exchange_receive_note()", self._src("bot/handlers/buy.py"))
-        self.assertIn("exchange_receive_note()", self._src("bot/handlers/swap.py"))
+    def test_input_alamat_penerima_beli_dan_convert_tanpa_catatan_exchange(self):
+        # Revisi client: catatan exchange hanya di layar setoran Jual/Convert, bukan input alamat penerima.
+        self.assertNotIn("exchange_receive_note", self._src("bot/handlers/buy.py"))
+        self.assertNotIn("exchange_receive_note", self._src("bot/handlers/swap.py"))
+        from bot.utils import wallet_notes
+        self.assertFalse(hasattr(wallet_notes, "exchange_receive_note"))
 
     def test_caption_foto_jual_tetap_di_bawah_batas_telegram(self):
         # Layar order Jual dikirim sebagai caption foto QR: maksimal 1024 karakter setelah HTML diurai.

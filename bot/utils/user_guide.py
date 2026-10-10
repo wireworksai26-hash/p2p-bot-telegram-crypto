@@ -33,7 +33,7 @@ GUIDE_TOPICS = {
         "• Jual → data <b>rekening bank / e-wallet</b> (Nama Bank, No Rekening, Atas Nama) dan koin di wallet-mu.\n"
         "• Convert → alamat <b>wallet tujuan</b> dan koin di wallet-mu.\n\n"
         "<b>3 aturan emas agar selalu berhasil:</b>\n"
-        "1️⃣ <b>Jaringan harus sama.</b> Pilih jaringan (BSC, TRON, dll.) yang sama dengan yang kamu pakai di wallet.\n"
+        "1️⃣ <b>Jaringan harus sama.</b> Pilih jaringan (BSC, Polygon, dll.) yang sama dengan yang kamu pakai di wallet.\n"
         "2️⃣ <b>Nominal harus persis</b> seperti yang tertulis di bot.\n"
         "3️⃣ <b>Salin-tempel</b> alamat dan hash, jangan diketik manual.\n\n"
         "Pilih topik di bawah untuk panduan lengkap tiap transaksi."
@@ -149,7 +149,7 @@ GUIDE_TOPICS = {
     "tips": ("✅ Tips Agar Berhasil", (
         "✅ <b>TIPS AGAR TRANSAKSI BERHASIL</b>\n\n"
         "<b>Sebelum kirim koin (Jual / Convert)</b>\n"
-        "☑️ <b>Jaringan sama persis.</b> USDT di BSC beda dengan USDT di TRON. Salah jaringan = koin "
+        "☑️ <b>Jaringan sama persis.</b> USDT di BSC beda dengan USDT di Polygon. Salah jaringan = koin "
         "bisa hilang.\n"
         "☑️ <b>Token yang benar.</b> Kirim token yang kamu pilih (mis. USDT), bukan koin gas "
         "(BNB/ETH/POL). Koin gas tidak bisa diverifikasi otomatis.\n"

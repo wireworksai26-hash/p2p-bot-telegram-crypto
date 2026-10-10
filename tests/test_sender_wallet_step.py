@@ -100,6 +100,16 @@ class SenderStepE2E(unittest.IsolatedAsyncioTestCase):
         finally:
             db.close()
 
+    async def test_beli_input_alamat_penerima_tanpa_catatan_exchange(self):
+        await self.say(USER, "/start")
+        await self.tap(USER, "menu_buy")
+        await self.tap(USER, "buy_sym_USDT")
+        await self.tap(USER, "buy_net_USDT_BSC")
+        shown = await self.say(USER, "50000")
+        self.assertIn("Alamat Wallet", shown)
+        self.assertNotIn("Cwallet", shown)
+        self.assertNotIn("exchange", shown.lower())
+
     async def test_convert_meminta_wallet_pengirim_setelah_wallet_tujuan(self):
         await self.say(USER, "/start")
         await self.tap(USER, "start_swap", from_screen=False)
@@ -107,7 +117,10 @@ class SenderStepE2E(unittest.IsolatedAsyncioTestCase):
         await self.tap(USER, "swap_src_net_BSC", from_screen=False)
         await self.tap(USER, "swap_tgt_sym_ETH", from_screen=False)
         await self.tap(USER, "swap_tgt_net_BASE", from_screen=False)
-        await self.say(USER, "20")
+        target_prompt = await self.say(USER, "20")
+        self.assertIn("Alamat Wallet", target_prompt)
+        self.assertNotIn("Cwallet", target_prompt)  # input wallet tujuan: tanpa catatan exchange
+        self.assertNotIn("exchange", target_prompt.lower())
         shown = await self.say(USER, "0x" + "c" * 40)
         self.assertIn("Alamat Wallet Pengirim", shown)
         self.assertIn("Cwallet", shown)

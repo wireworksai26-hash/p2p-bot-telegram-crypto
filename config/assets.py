@@ -56,7 +56,6 @@ STOCK_ASSETS = [
     ("USDT", "SOLANA"),
     ("USDC", "SOLANA"),
     ("TRX", "TRON"),
-    ("USDT", "TRON"),
     ("TON", "TON"),
     ("USDT", "TON"),
     ("SUI", "SUI"),

@@ -31,7 +31,7 @@ COIN_FULL_NAMES = {
 NETWORK_LABELS = {
     "BSC": "BNB Smart Chain (BEP20)", "BASE": "Base Mainnet", "ARB": "Arbitrum One",
     "POLYGON": "Polygon (POL)", "ETH": "Ethereum (ERC20)", "SOLANA": "Solana Mainnet",
-    "TRON": "TRON (TRC20)", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
+    "TRON": "TRON", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
     "ROBINHOOD": "Robinhood", "SUI": "Sui Mainnet", "APTOS": "Aptos Mainnet",
     "AVAX": "Avalanche C-Chain", "KAIA": "Kaia Network", "BERA": "Berachain",
     "HYPEREVM": "HyperEVM",
@@ -75,7 +75,7 @@ async def fetch_usd_prices(symbols: list[str]) -> dict[str, float]:
 
 CHAIN_SHORT_LABELS = {
     "BSC": "BEP20", "ETH": "ERC20", "POLYGON": "Poly", "ARB": "Arb", "BASE": "Base",
-    "SOLANA": "Solana", "TRON": "TRC20", "TON": "TON", "OPTIMISM": "OP",
+    "SOLANA": "Solana", "TRON": "TRON", "TON": "TON", "OPTIMISM": "OP",
     "ROBINHOOD": "Robinhood", "SUI": "Sui", "APTOS": "Aptos", "AVAX": "Avax",
     "KAIA": "Kaia", "BERA": "Bera", "HYPEREVM": "HyperEVM",
 }

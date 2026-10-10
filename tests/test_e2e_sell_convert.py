@@ -502,18 +502,48 @@ class TestE2EConvertFlow(unittest.IsolatedAsyncioTestCase):
             state = await swap_input_amount(update, context)
 
         self.assertEqual(state, SWAP_INPUT_TARGET_ADDR)
-        # Rp 100.000 -> USDT dibulatkan ke bawah ke presisi deposit (4 desimal, tanpa kode unik),
-        # Rupiah dihitung ulang dari jumlah yang benar-benar disetor.
+        # Rp 100.000 -> USDT dibulatkan KE ATAS ke presisi deposit (4 desimal, tanpa kode unik) agar
+        # nilainya tidak di bawah nominal; nominal yang dicatat tetap persis Rp 100.000.
         src = context.user_data["swap_src_amount"]
         usdt_px = mock_prices["USDT"]["market_price_idr"]
-        self.assertEqual(src, float(Decimal(str(100_000 / usdt_px)).quantize(Decimal("0.0001"), rounding="ROUND_DOWN")))
-        nominal = int(Decimal(str(src)) * Decimal(str(usdt_px)))
-        self.assertEqual(context.user_data["swap_nominal_idr"], nominal)
-        self.assertLessEqual(100_000 - nominal, usdt_px * 0.01)
+        self.assertEqual(src, float(Decimal(str(100_000 / usdt_px)).quantize(Decimal("0.0001"), rounding="ROUND_UP")))
+        nominal = context.user_data["swap_nominal_idr"]
+        self.assertEqual(nominal, 100_000)
+        self.assertGreaterEqual(int(Decimal(str(src)) * Decimal(str(usdt_px))), 100_000)  # koin yang disetor cukup
         expected_fee = calculate_fee_idr(nominal, "CONVERT", symbol="SOL", network="SOLANA", is_outgoing=True)
         self.assertEqual(context.user_data["swap_fee_idr"], expected_fee)
         expected_tgt = (nominal - expected_fee) / 2_160_000.0
         self.assertAlmostEqual(context.user_data["swap_tgt_amount"], expected_tgt, places=6)
+
+    async def test_convert_nominal_pas_minimum_5000_diterima_dan_tercatat_5000(self):
+        """Dulu Rp 5.000 ditolak (koin dibulatkan ke bawah -> Rp 4.999) dan harus diketik 5001."""
+        for usdt_px in (16_000.0, 16_432.0, 17_915.0, 16_789.0, 15_917.0):
+            for text in ("5000", "5.000", "5k", "Rp 5000"):
+                with self.subTest(price=usdt_px, text=text):
+                    update = SimpleNamespace(message=AsyncMock(text=text),
+                                             effective_user=SimpleNamespace(id=self.user_id))
+                    context = SimpleNamespace(user_data={
+                        "swap_src_symbol": "USDT", "swap_src_network": "BSC",
+                        "swap_tgt_symbol": "SOL", "swap_tgt_network": "SOLANA",
+                        "swap_input_mode": "IDR"})
+                    prices = self._mock_prices()
+                    prices["USDT"] = dict(prices["USDT"], market_price_idr=usdt_px, usdt_idr_rate=usdt_px)
+                    with patch("services.price_service.price_service.get_price", side_effect=lambda s: prices.get(s)):
+                        state = await swap_input_amount(update, context)
+                    self.assertEqual(state, SWAP_INPUT_TARGET_ADDR, f"Rp 5.000 harus diterima ({text})")
+                    self.assertEqual(context.user_data["swap_nominal_idr"], 5000)
+                    self.assertGreaterEqual(
+                        int(Decimal(str(context.user_data["swap_src_amount"])) * Decimal(str(usdt_px))), 5000)
+
+    async def test_convert_di_bawah_minimum_tetap_ditolak(self):
+        update = SimpleNamespace(message=AsyncMock(text="4999"), effective_user=SimpleNamespace(id=self.user_id))
+        context = SimpleNamespace(user_data={
+            "swap_src_symbol": "USDT", "swap_src_network": "BSC",
+            "swap_tgt_symbol": "SOL", "swap_tgt_network": "SOLANA", "swap_input_mode": "IDR"})
+        mock_prices = self._mock_prices()
+        with patch("services.price_service.price_service.get_price", side_effect=lambda s: mock_prices.get(s)):
+            state = await swap_input_amount(update, context)
+        self.assertEqual(state, SWAP_INPUT_AMOUNT)
 
     async def test_convert_rejects_self_dealing_wallet(self):
         """Uji validasi alamat tujuan: menolak jika user memasukkan alamat hot wallet milik bot sendiri."""

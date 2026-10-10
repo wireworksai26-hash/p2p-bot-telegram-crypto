@@ -91,7 +91,9 @@ class Settings:
     ADMIN_GROUP_ID = int(_admin_group) if _admin_group and _admin_group.lstrip("-").isdigit() else None
 
     # App logic configurations
-    ORDER_EXPIRE_MINUTES = int(os.getenv("ORDER_EXPIRE_MINUTES", 10))
+    # Semua layanan (Beli/QRIS, topup, Jual, Convert) berlaku 10 menit. SENGAJA tidak dibaca dari
+    # env: nilai lama (15/30) yang tertinggal di .env/Railway pernah membuat teks dan batas waktu salah.
+    ORDER_EXPIRE_MINUTES = 10
     # Aturan turnover (OPSIONAL, bawaan MATI): bila true, saldo hasil topup QRIS sejak tanggal
     # TOPUP_TURNOVER_START (YYYY-MM-DD) hanya bisa dipakai belanja dan tidak bisa ditarik.
     # Bawaan mati karena syarat withdraw sekarang: minimal 1 transaksi selesai + batas harian.

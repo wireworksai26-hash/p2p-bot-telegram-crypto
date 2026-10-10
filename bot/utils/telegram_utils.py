@@ -6,8 +6,12 @@ Menangani edit pesan inline yang aman: jika pesan gagal di-edit
 fallback otomatis ke reply_text agar tidak memicu error global bot.
 """
 
+import html as _html
 import logging
+import re
+from datetime import datetime, timedelta
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,73 @@ async def safe_edit_message(query, text: str, reply_markup=None, parse_mode="HTM
                 "Gagal edit & reply pesan (query=%s): edit_err=%s reply_err=%s",
                 getattr(query, "id", "?"), edit_err, reply_err,
             )
+
+
+STATUS_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+_CAPTION_LIMIT = 1024
+_TEXT_LIMIT = 4096
+
+
+def wib_clock() -> str:
+    """Jam sekarang WIB (HH:MM:SS) untuk penanda "terakhir dicek"."""
+    return (datetime.utcnow() + timedelta(hours=7)).strftime("%H:%M:%S")
+
+
+def relabel_recheck_button(markup, callback_prefix: str, label: str = "Cek Ulang"):
+    """Salin keyboard dengan tombol berawalan callback_prefix diberi label baru (isi lain tak berubah)."""
+    if markup is None:
+        return None
+    from bot.utils.emojis import CUSTOM_EMOJI_IDS
+
+    rows = []
+    for row in markup.inline_keyboard:
+        new_row = []
+        for button in row:
+            if button.callback_data and str(button.callback_data).startswith(callback_prefix):
+                new_row.append(InlineKeyboardButton(
+                    label, callback_data=button.callback_data,
+                    icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("SWAP", "5310107765874632305")))
+            else:
+                new_row.append(button)
+        rows.append(new_row)
+    return InlineKeyboardMarkup(rows)
+
+
+async def refresh_message_status(query, status_html: str, reply_markup=None) -> bool:
+    """Perbarui blok status di pesan yang SAMA (teks biasa atau caption foto) — tidak membuat pesan baru.
+
+    Dipakai tombol "Cek Ulang": tiap klik menimpa blok status di bawah pesan (dengan jam cek terbaru),
+    bukan menambah pesan duplikat yang terlihat seperti spam. Return True bila pesan sudah menampilkan
+    status itu; False bila tidak bisa diedit (mis. melewati batas panjang) sehingga pemanggil memakai
+    pop-up (query.answer) sebagai gantinya.
+    """
+    message = getattr(query, "message", None)
+    if message is None:
+        return False
+    is_caption = getattr(message, "caption", None) is not None and not getattr(message, "text", None)
+    base = (getattr(message, "caption_html", None) if is_caption else getattr(message, "text_html", None)) or ""
+    if STATUS_DIVIDER in base:
+        base = base.split(STATUS_DIVIDER)[0]
+    base = base.rstrip()
+    new_text = f"{base}\n\n{STATUS_DIVIDER}\n{status_html}"
+    limit = _CAPTION_LIMIT if is_caption else _TEXT_LIMIT
+    if len(re.sub(r"<[^>]+>", "", _html.unescape(new_text))) > limit:
+        return False
+    markup = reply_markup if reply_markup is not None else getattr(message, "reply_markup", None)
+    try:
+        if is_caption:
+            await query.edit_message_caption(caption=new_text, parse_mode="HTML", reply_markup=markup)
+        else:
+            await query.edit_message_text(text=new_text, parse_mode="HTML", reply_markup=markup)
+        return True
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return True  # isi sama persis (klik di detik yang sama): status sudah tampil
+        logger.warning("Gagal memperbarui status pesan: %s", exc)
+        return False
+    except Exception as exc:
+        logger.warning("Gagal memperbarui status pesan: %s", exc)
+        return False
 
 
 async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML",

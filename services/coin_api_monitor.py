@@ -278,14 +278,14 @@ class CoinAPIMonitor:
                 "id": "NONEVM_TRON",
                 "category": "NONEVM_RPC",
                 "name": "TronGrid (TRON)",
-                "symbol": "TRX / USDT",
+                "symbol": "TRX",
                 "network": "TRON",
                 "url": settings.TRX_RPC,
                 "env_var": "TRX_RPC",
                 "fallback_urls": [
                     "https://api.trongrid.io",
                 ],
-                "impact": "Transaksi koin TRX dan USDT jaringan TRON tidak dapat diproses.",
+                "impact": "Transaksi koin TRX jaringan TRON tidak dapat diproses.",
             },
             {
                 "id": "NONEVM_TON",

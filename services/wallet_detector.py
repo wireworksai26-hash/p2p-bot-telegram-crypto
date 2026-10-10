@@ -35,7 +35,7 @@ NETWORK_PATTERNS: dict[str, dict] = {
         "chains": ["TRC20"],
         "pattern": re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$"),
         "emoji": "🔴",
-        "label": "Tron (TRC20)",
+        "label": "TRON",
     },
     "SUI": {
         "chain_type": "SUI",
@@ -83,7 +83,7 @@ NETWORK_DISPLAY = {
     "ARBITRUM": "Arbitrum",
     "BASE":     "Base",
     "SOLANA":   "Solana",
-    "TRC20":    "Tron (TRC20)",
+    "TRC20":    "TRON",
     "SUI":      "SUI",
     "APTOS":    "Aptos",
     "TON":      "TON",
