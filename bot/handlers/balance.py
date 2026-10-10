@@ -194,6 +194,15 @@ async def handle_custom_nominal_input(update: Update, context: ContextTypes.DEFA
 async def generate_and_send_qris(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int) -> int:
     """Menyajikan invoice topup QRIS statis (pembayaran manual) kepada user."""
     user = update.effective_user
+    # Nominal ketik sendiri berupa pesan teks, jadi tidak tertangkap gerbang pause (yang memeriksa
+    # tombol/perintah); cek di sini agar invoice baru tidak dibuat selama maintenance.
+    if user.id not in settings.ADMIN_CHAT_IDS:
+        from services.system_pause import active_pause, block_text
+        info = active_pause()
+        if info is not None:
+            target = update.callback_query.message if update.callback_query else update.message
+            await target.reply_text(block_text(info), parse_mode="HTML")
+            return ConversationHandler.END
     status_msg = None
     if update.callback_query:
         status_msg = await update.callback_query.edit_message_text("⏳ <i>Menyiapkan invoice pembayaran...</i>", parse_mode="HTML")

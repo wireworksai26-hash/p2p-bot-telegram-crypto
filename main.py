@@ -583,6 +583,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler(["admin", "tokoadmin"], admin_handler))
     from bot.handlers.admin_maintenance import maintenance_command_handler
     application.add_handler(CommandHandler(["maintenance", "mt"], maintenance_command_handler))
+    from bot.handlers.admin_pause import pause_command_handler
+    application.add_handler(CommandHandler(["pause", "jeda"], pause_command_handler))
     from bot.handlers.admin import (
         refresh_menu_command_handler, guide_command_handler, user_guide_command_handler,
     )
@@ -958,6 +960,18 @@ def setup_scheduler():
         coalesce=True,
     )
 
+    # --- Pause & jadwal maintenance: pengumuman, pengingat, mulai/selesai otomatis (every 30s) ---
+    scheduler.add_job(
+        _job_system_pause,
+        "interval",
+        seconds=30,
+        id="system_pause",
+        name="Maintenance schedule: reminders, auto pause & resume",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
 
     logger.info("APScheduler started with background jobs")
@@ -1077,6 +1091,17 @@ async def _job_expire_orders():
             db.close()
     except Exception as exc:
         logger.error("Order expiry job failed: %s", exc, exc_info=True)
+
+
+async def _job_system_pause():
+    """Jalankan jadwal maintenance (pengumuman, pengingat 60/10 menit, pause & buka otomatis)."""
+    try:
+        from services.bot_runtime import bot_app
+        from services.system_pause import tick
+        if bot_app:
+            await tick(bot_app)
+    except Exception as exc:
+        logger.error("Job jadwal maintenance gagal: %s", exc, exc_info=True)
 
 
 async def _job_check_coin_apis():

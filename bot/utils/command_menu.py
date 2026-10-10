@@ -34,6 +34,7 @@ ADMIN_COMMAND_MENU = [
     ("campaign", "Campaign & giveaway"),
     ("setreferral", "Atur program referral"),
     ("broadcast", "Siaran pesan ke semua user"),
+    ("pause", "Pause transaksi & jadwal maintenance + pengingat"),
     ("ban", "Blokir user: /ban USER_ID"),
     ("unban", "Buka blokir user: /unban USER_ID"),
     ("testtesti", "Tes koneksi channel testimoni"),

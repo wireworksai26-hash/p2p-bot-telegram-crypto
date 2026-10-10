@@ -247,6 +247,29 @@ class GopaySession(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class MaintenanceWindow(Base):
+    """Pause global (maintenance / update sistem): transaksi BARU dijeda selama [start_at, end_at).
+
+    Order yang sudah berjalan tetap diproses. announce=True untuk jadwal yang diumumkan ke user
+    (pengumuman, pengingat 60 & 10 menit, kabar aktif kembali); pause mendadak tanpa broadcast.
+    """
+    __tablename__ = 'maintenance_windows'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    start_at = Column(DateTime, nullable=False)                # UTC
+    end_at = Column(DateTime, nullable=True)                   # UTC; None = sampai admin menekan Lanjutkan
+    note = Column(String(300), nullable=True)
+    announce = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="scheduled", nullable=False)  # scheduled | active | done | cancelled
+    announced_at = Column(DateTime, nullable=True)
+    reminded_60_at = Column(DateTime, nullable=True)
+    reminded_10_at = Column(DateTime, nullable=True)
+    resumed_notified_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ChainMaintenance(Base):
     """Penanda maintenance per jaringan (NETWORK) atau koin (COIN): order BARU ditutup, order berjalan tetap diproses."""
     __tablename__ = 'chain_maintenance'

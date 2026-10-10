@@ -83,6 +83,9 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
             InlineKeyboardButton("📡 Status API & RPC", callback_data="admin_panel_check_apis"),
         ],
         [
+            InlineKeyboardButton("⏸ Pause & Jadwal Maintenance", callback_data="admin_panel_pause"),
+        ],
+        [
             InlineKeyboardButton("🛠 Maintenance Chain/Koin", callback_data="admin_panel_maint"),
         ],
         [
@@ -2525,6 +2528,10 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
             await query.answer("⏳ Menyiapkan file spreadsheet (.CSV)...", show_alert=False)
             await _send_weekly_report_csv(context.bot, query.message.chat_id, db, days)
+
+        elif data == "admin_panel_pause" or data.startswith("admin_panel_pause_"):
+            from bot.handlers.admin_pause import handle_pause_callback
+            await handle_pause_callback(query, data, user_id, context)
 
         elif data == "admin_panel_maint" or data.startswith("admin_panel_mt_"):
             from bot.handlers.admin_maintenance import handle_maintenance_callback
@@ -5178,6 +5185,11 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
 
     try:
         _expire_stale_reward_wizard(context)
+
+        # 0. Jadwal maintenance (setelah tombol 🗓 Jadwalkan di panel Pause)
+        from bot.handlers.admin_pause import handle_schedule_text
+        if await handle_schedule_text(update, context):
+            return True
 
         # 0a. Kirim Reward — daftar penerima + nominal (satu orang per baris)
         if context.user_data.get("admin_awaiting_reward_list"):
