@@ -333,10 +333,25 @@ async def _alert_admins_testimony_stuck(bot, order_id: str) -> None:
     try:
         from bot.utils.telegram_utils import notify_admins
         error = html.escape(_last_error.get(order_id, "tidak diketahui"))
+        detail = f"Order: <code>{html.escape(order_id)}</code>"
+        try:
+            from database.connection import SessionLocal
+            from database.models import Order
+            from bot.utils.admin_alert import order_detail_block
+            db = SessionLocal()
+            try:
+                order = db.query(Order).filter(Order.order_id == order_id).first()
+                if order:
+                    detail = order_detail_block(order, db)
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.warning("Detail order %s untuk alert testimoni tidak tersedia: %s", order_id, exc)
         await notify_admins(
             bot,
-            f"⚠️ <b>TESTIMONI GAGAL TERKIRIM</b>\n\n"
-            f"Order: <code>{html.escape(order_id)}</code>\n"
+            f"⚠️ <b>TESTIMONI GAGAL TERKIRIM KE CHANNEL</b>\n\n"
+            f"{detail}\n\n"
+            f"Transaksi user tetap aman; yang gagal hanya posting testimoni.\n"
             f"Sudah dicoba {_SWEEP_MAX_ATTEMPTS}x. Penyebab terakhir:\n<code>{error}</code>\n\n"
             f"Cek bahwa bot adalah <b>admin channel testimoni</b> dengan izin posting, lalu kirim manual: "
             f"<code>/posttesti {html.escape(order_id)}</code>",

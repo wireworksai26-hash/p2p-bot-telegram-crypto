@@ -224,7 +224,7 @@ class TestSubmitDepositHash(HashCase):
     async def test_hash_ditolak_onchain_tidak_disimpan_dan_admin_tidak_dikabari(self):
         result, update, fast, notify = await self._submit(
             HASH_1, {"verified": False, "amount": 0.0, "from_address": "",
-                     "reason": "Nominal deposit kurang: diterima 9 USDT, dibutuhkan 10 USDT."})
+                     "reason": "Penerima tidak cocok."})
         self.assertEqual(result, "retry")
         self.assertIsNone(self._stored_hash())
         notify.assert_not_called()
@@ -232,6 +232,18 @@ class TestSubmitDepositHash(HashCase):
         teks = update.message.reply_text.call_args.args[0]
         self.assertIn("Deposit Belum Bisa Diverifikasi", teks)
         self.assertIn("10.0000", teks, "user diberi tahu nominal tepat yang harus dikirim")
+
+    async def test_nominal_kurang_disimpan_dan_admin_dikabari(self):
+        # Koin sudah masuk wallet deposit; dulu ditolak diam-diam sehingga admin tidak pernah tahu.
+        result, update, fast, notify = await self._submit(
+            HASH_1, {"verified": False, "amount": 0.0, "from_address": "",
+                     "reason": "Nominal deposit kurang: diterima 9 USDT, dibutuhkan 10 USDT."})
+        self.assertEqual(result, "done")
+        self.assertEqual(self._stored_hash(), HASH_1)
+        notify.assert_awaited_once()
+        alert = notify.await_args.args[1]
+        self.assertIn("DEPOSIT PERLU DICEK MANUAL", alert)
+        self.assertIn("diterima 9 USDT, dibutuhkan 10 USDT", alert)
 
     async def test_hash_menunggu_konfirmasi_disimpan_dan_dipantau(self):
         result, _, fast, notify = await self._submit(

@@ -100,8 +100,11 @@ async def submit_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         lolos = bool((hasil or {}).get("verified"))
         alasan = (hasil or {}).get("reason") or ""
+        # Koin sudah masuk ke wallet deposit, hanya nominalnya beda. Dulu user disuruh kirim
+        # hash lain dan admin tidak pernah tahu; sekarang hash disimpan dan diputuskan admin.
+        nominal_beda = not lolos and alasan.startswith("Nominal deposit")
 
-        if not lolos and not _is_pending_reason(alasan):
+        if not lolos and not nominal_beda and not _is_pending_reason(alasan):
             await message.reply_text(
                 f"❌ <b>Deposit Belum Bisa Diverifikasi</b>\n\n"
                 f"Order ID: <code>{_esc(order.order_id)}</code>\n"
@@ -116,6 +119,23 @@ async def submit_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         order.deposit_tx_hash = tx_hash
         db.commit()
+
+        def _sudah_dieskalasi():
+            return db.query(AuditLog.id).filter(
+                AuditLog.order_id == order.order_id,
+                AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW",
+                AuditLog.details.like(f"Hash {tx_hash}:%"),
+            ).first() is not None
+
+        if nominal_beda:
+            # Detector mengeskalasi ke admin dan mengabari user (nominal diterima vs seharusnya).
+            await deposit_detector._process_order(db, order, context.application)
+            if not _sudah_dieskalasi():
+                await message.reply_text(
+                    "⏳ TX Hash tersimpan. Bot masih memeriksa transaksimu; "
+                    "kamu akan menerima notifikasi begitu terverifikasi.", reply_markup=_menu_keyboard())
+            return "done"
+
         await message.reply_text(
             f"✅ <b>TX Hash Diterima!</b>\n\n"
             f"Order ID: <code>{_esc(order.order_id)}</code>\n"
@@ -126,20 +146,19 @@ async def submit_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="HTML", reply_markup=_menu_keyboard())
 
         if lolos:
+            # Eskalasi baru sudah mengabari user dari detector; pesan di bawah hanya untuk hash
+            # yang dulu sudah dieskalasi (dikirim ulang) agar user tetap dapat jawaban.
+            dieskalasi_sebelumnya = _sudah_dieskalasi()
             await deposit_detector._process_order(db, order, context.application)
             db.refresh(order)
             if order.status in ("WAITING_CRYPTO_DEPOSIT", "expired"):
-                escalated = db.query(AuditLog.id).filter(
-                    AuditLog.order_id == order.order_id,
-                    AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW",
-                    AuditLog.details.like(f"Hash {tx_hash}:%"),
-                ).first()
-                if escalated:
-                    await message.reply_text(
-                        "🕵️ <b>Deposit sedang dicek admin</b>\n\n"
-                        "Transaksimu terdeteksi di blockchain, tetapi perlu dicocokkan manual oleh admin "
-                        "sebelum diproses. Kamu akan menerima notifikasi setelah selesai. 🙏",
-                        parse_mode="HTML")
+                if _sudah_dieskalasi():
+                    if dieskalasi_sebelumnya:
+                        await message.reply_text(
+                            "🕵️ <b>Deposit sedang dicek admin</b>\n\n"
+                            "Transaksimu terdeteksi di blockchain, tetapi perlu dicocokkan manual oleh admin "
+                            "sebelum diproses. Kamu akan menerima notifikasi setelah selesai. 🙏",
+                            parse_mode="HTML")
                 else:
                     await message.reply_text(
                         "⏳ TX Hash tersimpan. Bot masih memeriksa transaksimu; "

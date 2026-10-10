@@ -996,15 +996,13 @@ async def input_deposit_hash(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def _notify_admin_deposit_pending(order, deposit_proof, photo_file_id, context):
     """Notifikasi informatif ke admin dilengkapi tombol Approve jika verifikasi instan dibutuhkan."""
     try:
+        from bot.utils.admin_alert import order_detail_block
         admin_msg = (
-            f"📥 <b>[DEPOSIT SETORAN SWAP DITERIMA]</b>\n\n"
-            f"ID Order: <code>{order.order_id}</code>\n"
-            f"User: <code>{order.telegram_id}</code>\n"
-            f"Deposit Asal: <b>{format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)}</b> ({order.network})\n"
-            f"Koin Tujuan: <b>{format_crypto_copy(order.target_crypto_amount, order.target_crypto_symbol, exact=True)}</b> ({order.target_network})\n"
-            f"Wallet Tujuan: <code>{order.buyer_wallet}</code>\n"
+            f"📥 <b>USER MENGIRIM BUKTI DEPOSIT CONVERT</b>\n\n"
+            f"{order_detail_block(order)}\n\n"
             f"Bukti/TX Hash: <code>{_esc(str(deposit_proof or '-'))}</code>\n\n"
-            f"ℹ️ <i>Belum terverifikasi. Tombol admin hanya memeriksa ulang blockchain, bukan menyetujui foto sebagai deposit.</i>"
+            f"ℹ️ <i>Belum terverifikasi. Bot memeriksa blockchain otomatis; tombol Cek Ulang hanya "
+            f"menjalankan pemeriksaan itu sekarang, bukan menyetujui foto sebagai deposit.</i>"
         )
         admin_keyboard = InlineKeyboardMarkup([
             [

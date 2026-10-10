@@ -19,6 +19,7 @@ from database import crud
 from bot.utils.telegram_utils import notify_admins, safe_send_message
 from bot.utils.formatter import format_crypto
 from bot.utils.manual_payout import manual_payout_button
+from bot.utils.admin_alert import order_detail_block
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,9 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                             bot,
                             (
                                 f"✅ <b>PAYOUT DIPULIHKAN OTOMATIS</b>\n\n"
-                                f"Order: <code>{order.order_id}</code>\n"
+                                f"{order_detail_block(order, db)}\n\n"
                                 f"TX: <code>{tx_hash}</code>\n"
-                                f"Receipt on-chain sukses; status kini COMPLETED."
+                                f"Receipt on-chain sukses; status kini COMPLETED. Tidak perlu tindakan."
                             ),
                             kind="ops",
                         )
@@ -230,8 +231,8 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                             await notify_admins(
                                 bot,
                                 (
-                                    f"🚨 <b>PAYOUT REVERT ON-CHAIN</b>\n\n"
-                                    f"Order: <code>{order.order_id}</code>\n"
+                                    f"🚨 <b>PAYOUT REVERT ON-CHAIN — KOIN BELUM SAMPAI KE USER</b>\n\n"
+                                    f"{order_detail_block(order, db)}\n\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
                                     f"Kirim ulang secara manual setelah verifikasi, lalu tekan tombol "
                                     f"di bawah dan kirim SS transfer agar diteruskan ke user."
@@ -257,7 +258,7 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                 bot,
                                 (
                                     f"⚠️ <b>PAYOUT BELUM TERKONFIRMASI > {MAX_AGE_HOURS} JAM</b>\n\n"
-                                    f"Order: <code>{order.order_id}</code>\n"
+                                    f"{order_detail_block(order, db)}\n\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
                                     f"Cek manual sebelum mengambil tindakan. Jika koin dikirim manual, "
                                     f"tekan tombol di bawah dan kirim SS transfer."

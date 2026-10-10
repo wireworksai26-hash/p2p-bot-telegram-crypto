@@ -18,7 +18,7 @@ from telegram.ext import ContextTypes
 
 from config.settings import settings
 from database.connection import SessionLocal
-from database.crud import get_orders_by_user
+from database.crud import deposit_review_order_ids, get_orders_by_user
 from database.models import Order
 from bot.utils.formatter import format_crypto, format_datetime, format_idr
 
@@ -36,7 +36,10 @@ def _type_label(order) -> str:
     return _TYPE_LABEL.get((order.order_type or "buy").lower(), (order.order_type or "-").capitalize())
 
 
-def _status_label(order) -> str:
+def _status_label(order, in_review: bool = False) -> str:
+    if in_review:
+        # Koin user sudah masuk dan menunggu keputusan admin: jangan tampil "Expired".
+        return "🕵️ Deposit dicek admin"
     return _STATUS_LABEL.get((order.status or "").lower(), (order.status or "-").upper())
 
 
@@ -55,7 +58,7 @@ def _asset_label(order) -> str:
     return f"{amount} ({order.network})"
 
 
-def build_report_template(order) -> str:
+def build_report_template(order, in_review: bool = False) -> str:
     """Template pesan polos (tanpa HTML) untuk diteruskan user ke admin."""
     tx_hash = (order.payout_tx_hash or order.tx_hash or order.deposit_tx_hash or "").strip() or "-"
     lines = [
@@ -66,7 +69,7 @@ def build_report_template(order) -> str:
         f"Aset: {_asset_label(order)}",
         f"Nominal: {format_idr(order.total_idr)}",
         f"Pembayaran: {_payment_label(order)}",
-        f"Status: {_status_label(order)}",
+        f"Status: {_status_label(order, in_review)}",
         f"Waktu Order: {format_datetime(order.created_at)}",
     ]
     if order.completed_at:
@@ -91,9 +94,10 @@ async def report_issue_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     db = SessionLocal()
     try:
         orders = get_orders_by_user(db, telegram_id=update.effective_user.id, limit=_PICK_LIMIT)
+        review_ids = deposit_review_order_ids(db, [o.order_id for o in orders])
         rows = [
             [InlineKeyboardButton(
-                f"{_type_label(o)} · {o.order_id} · {_status_label(o)}"[:60],
+                f"{_type_label(o)} · {o.order_id} · {_status_label(o, o.order_id in review_ids)}"[:60],
                 callback_data=f"report_order_{o.order_id}")]
             for o in orders
         ]
@@ -120,7 +124,7 @@ async def report_order_detail(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not order or order.telegram_id != update.effective_user.id:
             await query.answer("Order tidak ditemukan.", show_alert=True)
             return
-        template = build_report_template(order)
+        template = build_report_template(order, bool(deposit_review_order_ids(db, [order.order_id])))
     finally:
         db.close()
 

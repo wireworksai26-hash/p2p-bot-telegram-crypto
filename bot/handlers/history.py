@@ -36,6 +36,7 @@ STATUS_EMOJIS = {
     "failed": "🚨 Failed",
     "manual_review": "⚙️ Manual Review",
 }
+REVIEW_LABEL = "🕵️ Deposit dicek admin"
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -61,9 +62,20 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not orders:
             text_lines.append("<i>Anda belum pernah melakukan transaksi di bot ini.</i>")
         else:
+            from database.crud import deposit_review_order_ids
+            review_ids = deposit_review_order_ids(db, [o.order_id for o in orders])
             for idx, order in enumerate(orders, 1):
-                order_type_str = f"{E_CART()} BELI" if order.order_type == "buy" else f"{E_DOLLAR()} JUAL"
-                status_str = STATUS_EMOJIS.get(order.status.lower(), order.status.upper())
+                if order.order_type == "buy":
+                    order_type_str = f"{E_CART()} BELI"
+                elif order.order_type == "swap":
+                    order_type_str = "🔄 CONVERT"
+                else:
+                    order_type_str = f"{E_DOLLAR()} JUAL"
+                if order.order_id in review_ids:
+                    # Koin user sudah masuk, menunggu keputusan admin — bukan "Expired".
+                    status_str = REVIEW_LABEL
+                else:
+                    status_str = STATUS_EMOJIS.get(order.status.lower(), order.status.upper())
                 
                 # Format crypto amount
                 crypto_str = format_crypto(float(order.crypto_amount), order.crypto_symbol)

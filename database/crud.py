@@ -1875,11 +1875,44 @@ def get_recent_audit_logs(db: Session, limit: int = 15) -> list:
     return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
 
 
+ADMIN_QUEUE_STATUSES = ("pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED")
+DEPOSIT_REVIEW_ACTION = "DEPOSIT_HASH_NEEDS_REVIEW"
+
+
+def deposit_review_filter():
+    """Order Jual/Convert yang deposit-nya sudah dieskalasi ke admin dan belum diputuskan.
+
+    Termasuk yang sudah 'expired' (lewat 10 menit): koin user sudah masuk wallet, jadi
+    order itu tidak boleh hilang dari Antrean Order hanya karena waktunya habis.
+    """
+    reviewed = _reviewed_order_ids_select()
+    return (Order.order_type.in_(("sell", "swap"))
+            & Order.status.in_(("WAITING_CRYPTO_DEPOSIT", "expired"))
+            & Order.order_id.in_(reviewed))
+
+
+def _reviewed_order_ids_select():
+    from sqlalchemy import select
+    return select(AuditLog.order_id).where(AuditLog.action == DEPOSIT_REVIEW_ACTION)
+
+
+def admin_queue_filter():
+    """Filter Antrean Order admin: status aktif + deposit yang menunggu keputusan admin."""
+    return Order.status.in_(ADMIN_QUEUE_STATUSES) | deposit_review_filter()
+
+
+def deposit_review_order_ids(db: Session, order_ids) -> set:
+    """Subset order_ids yang deposit-nya sedang menunggu keputusan admin."""
+    order_ids = [oid for oid in order_ids if oid]
+    if not order_ids:
+        return set()
+    rows = db.query(Order.order_id).filter(Order.order_id.in_(order_ids), deposit_review_filter()).all()
+    return {row[0] for row in rows}
+
+
 def get_pending_orders_count(db: Session) -> int:
     """Menghitung total order yang berstatus pending/menunggu review."""
-    return db.query(Order).filter(
-        Order.status.in_(["pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"])
-    ).count()
+    return db.query(Order).filter(admin_queue_filter()).count()
 
 
 # ============================================================

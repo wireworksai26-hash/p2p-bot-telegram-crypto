@@ -125,16 +125,20 @@ class TestCopyableAmounts(unittest.TestCase):
             Base.metadata.drop_all(bind=engine)
 
     def test_pesan_admin_jual_dan_convert_memakai_helper(self):
-        for rel, needles in (
-            ("bot/handlers/sell.py", ("format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)",)),
-            ("bot/handlers/swap.py", ("format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)",
-                                      "format_crypto_copy(order.target_crypto_amount, order.target_crypto_symbol, exact=True)")),
-            ("services/detector.py", ("format_crypto_copy(verified.get('amount')",
-                                      "format_crypto_copy(order.target_crypto_amount or 0, order.target_crypto_symbol, exact=True)")),
-        ):
-            text = (ROOT / rel).read_text(encoding="utf-8")
-            for n in needles:
-                self.assertIn(n, text, rel)
+        # Alert admin Jual/Convert memakai blok detail standar (bot/utils/admin_alert.py),
+        # yang menaruh angka koin persis di <code> agar bisa disalin.
+        from types import SimpleNamespace
+        from bot.utils.admin_alert import order_detail_block
+        swap = SimpleNamespace(order_id="SWAP-1", order_type="swap", telegram_id=1, crypto_symbol="USDC",
+                               network="BASE", crypto_amount=Decimal("5.1234"), target_crypto_symbol="BNB",
+                               target_network="BSC", target_crypto_amount=Decimal("0.012345"),
+                               buyer_wallet="0xabc", total_idr=80000, payment_method=None,
+                               status="WAITING_CRYPTO_DEPOSIT", created_at=None)
+        block = order_detail_block(swap)
+        self.assertIn("<code>5.1234</code> USDC", block)
+        self.assertIn("<code>0.01234500</code> BNB", block)
+        for rel in ("bot/handlers/sell.py", "bot/handlers/swap.py", "services/detector.py"):
+            self.assertIn("order_detail_block(", (ROOT / rel).read_text(encoding="utf-8"), rel)
 
 
 # ── 5. Menu default tidak menahan /start ─────────────────────────────────────

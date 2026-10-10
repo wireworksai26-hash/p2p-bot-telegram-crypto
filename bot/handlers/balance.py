@@ -441,12 +441,14 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
             pass
 
         # 1. Forward foto bukti topup ke Admin
+        from bot.utils.admin_alert import user_label
         admin_caption = (
-            f"📸 <b>BUKTI TRANSFER DITERIMA (TOPUP)</b>\n\n"
+            f"📸 <b>BUKTI TRANSFER TOPUP SALDO BOT DARI USER</b>\n\n"
             f"ID Topup: <code>{topup.topup_id}</code>\n"
-            f"User: {_esc(update.effective_user.name)} (ID: <code>{user_id}</code>)\n"
+            f"User: {user_label(user_id, user=update.effective_user)}\n"
             f"Total Nominal: <b>{format_idr(topup.amount_idr)}</b>\n\n"
-            f"Tekan tombol <b>Approve</b> di bawah jika pembayaran valid untuk menambah saldo user secara otomatis."
+            f"Cek mutasi GoPay: dana sudah masuk? Bila ya, tekan <b>Approve</b> untuk menambah saldo "
+            f"user. Bila tidak ada, tekan <b>Tolak</b>."
         )
         admin_keyboard = InlineKeyboardMarkup([
             [

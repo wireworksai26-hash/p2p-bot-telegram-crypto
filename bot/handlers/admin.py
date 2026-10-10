@@ -208,13 +208,17 @@ def build_admin_stats_text(db) -> str:
 
 def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
     """Membangun teks antrean order pending beserta tombol aksi interaktif."""
+    from bot.utils.admin_alert import order_title, user_label
     orders = (
         db.query(Order)
-        .filter(Order.status.in_(["pending", "paid", "payout_processing", "manual_review", "WAITING_CRYPTO_DEPOSIT", "PAYOUT_QUEUED"]))
+        .filter(crud.admin_queue_filter())
         .order_by(Order.created_at.desc())
         .limit(10)
         .all()
     )
+    review_ids = crud.deposit_review_order_ids(db, [o.order_id for o in orders])
+    users = {u.telegram_id: u for u in db.query(User).filter(
+        User.telegram_id.in_({o.telegram_id for o in orders})).all()} if orders else {}
 
     if not orders:
         text = (
@@ -235,19 +239,26 @@ def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
 
     action_buttons = []
     for idx, o in enumerate(orders, 1):
-        o_type = "🛒 BELI" if o.order_type == "buy" else ("💵 JUAL" if o.order_type == "sell" else "💱 SWAP")
         crypto_str = format_crypto_copy(o.crypto_amount or 0, o.crypto_symbol, exact=True)
+        in_review = o.order_id in review_ids
+        status_line = f"   🚦 Status: <code>{o.status.upper()}</code>"
+        if in_review:
+            status_line += "\n   🕵️ <b>DEPOSIT MASUK, PERLU DICEK ADMIN</b> (lihat alert DEPOSIT PERLU DICEK)"
 
         text_lines.append(
-            f"<b>{idx}. {o.order_id}</b> ({o_type})\n"
-            f"   🚦 Status: <code>{o.status.upper()}</code>\n"
+            f"<b>{idx}. {o.order_id}</b>\n"
+            f"   {_esc(order_title(o))}\n"
+            f"{status_line}\n"
             f"   🪙 Koin: {crypto_str} ({o.network})\n"
             f"   💳 Nilai: <code>{format_idr(o.total_idr or 0)}</code>\n"
-            f"   👤 User ID: <code>{o.telegram_id}</code>\n"
+            f"   👤 User: {user_label(o.telegram_id, user=users.get(o.telegram_id))}\n"
         )
 
-        # Tambahkan tombol aksi per order
-        if o.order_type == "sell" and o.status in ["paid", "pending", "manual_review", "WAITING_CRYPTO_DEPOSIT"]:
+        # Tombol hanya untuk aksi yang memang bisa dijalankan pada status order ini.
+        if o.order_type == "sell" and in_review:
+            action_buttons.append([InlineKeyboardButton(
+                f"✅ Konfirmasi Deposit {o.order_id[-6:]}", callback_data=f"admin_verify_sell_deposit_{o.order_id}")])
+        elif o.order_type == "sell" and o.status in ["paid", "pending", "manual_review", "WAITING_CRYPTO_DEPOSIT"]:
             action_buttons.append([
                 InlineKeyboardButton(f"📸 Upload Bukti {o.order_id[-6:]}", callback_data=f"admin_upload_proof_{o.order_id}"),
                 InlineKeyboardButton(f"✅ Konfirmasi {o.order_id[-6:]}", callback_data=f"admin_confirm_sell_{o.order_id}"),
@@ -259,13 +270,16 @@ def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
             ])
             if o.status == "manual_review":
                 action_buttons.append([InlineKeyboardButton(f"📸 SS Transfer Manual {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
-        elif o.order_type == "swap" and o.status in ["paid", "pending", "manual_review", "WAITING_CRYPTO_DEPOSIT"]:
+        elif o.order_type == "swap" and o.status == "manual_review":
+            # Deposit sudah diterima: tidak bisa ditolak/approve otomatis, selesaikan lewat SS transfer.
+            action_buttons.append([InlineKeyboardButton(f"📸 SS Transfer Manual {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
+        elif o.order_type == "swap" and o.status in ["WAITING_CRYPTO_DEPOSIT", "expired"]:
             action_buttons.append([
                 InlineKeyboardButton(f"✅ Approve Swap {o.order_id[-6:]}", callback_data=f"admin_approve_swap_{o.order_id}"),
                 InlineKeyboardButton(f"❌ Reject Swap {o.order_id[-6:]}", callback_data=f"admin_reject_swap_{o.order_id}"),
             ])
-            if o.status == "manual_review":
-                action_buttons.append([InlineKeyboardButton(f"📸 SS Transfer Manual {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
+            if in_review:
+                action_buttons.append([InlineKeyboardButton(f"🛠 Proses Manual {o.order_id[-6:]}", callback_data=f"admin_swap_manual_{o.order_id}")])
 
     action_buttons.append([
         InlineKeyboardButton("🔄 Refresh Antrean", callback_data="admin_panel_orders"),
@@ -3382,12 +3396,19 @@ async def admin_verify_sell_deposit_callback(update: Update, context: ContextTyp
         late_warning = (
             "⚠️ <b>DEPOSIT TELAT</b> — angka terkunci di bawah sudah tidak berlaku bila harga turun. "
             "Transfer sesuai harga terkini (lihat pesan eskalasi).\n\n" if late else "")
+        amount_off = db.query(AuditLog.id).filter(
+            AuditLog.order_id == order_id, AuditLog.action == "DEPOSIT_HASH_NEEDS_REVIEW",
+            AuditLog.details.like("%Nominal deposit%")).first()
+        if amount_off:
+            late_warning += ("⚠️ <b>NOMINAL DEPOSIT TIDAK SESUAI</b> — angka Rupiah di bawah dihitung dari "
+                             "nominal order. Transfer sesuai koin yang benar-benar diterima (lihat alert "
+                             "DEPOSIT PERLU DICEK).\n\n")
 
+        from bot.utils.admin_alert import order_detail_block
         await query.answer("✅ Deposit ditandai terverifikasi. Lanjutkan transfer Rupiah.", show_alert=False)
         await query.message.reply_text(
-            f"💰 <b>DEPOSIT SELL TERVERIFIKASI (MANUAL)</b>\n\n{late_warning}"
-            f"Order: <code>{_esc(order_id)}</code>\n"
-            f"User ID: <code>{order.telegram_id}</code>\n"
+            f"💰 <b>DEPOSIT JUAL TERVERIFIKASI (MANUAL)</b>\n\n{late_warning}"
+            f"{order_detail_block(order, db)}\n\n"
             f"‼️ <b>TRANSFER RUPIAH:</b> <b>{format_idr(order.total_idr)}</b> ke rekening:\n"
             f"<code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
             f"Setelah transfer, tekan tombol di bawah.",
@@ -4494,8 +4515,10 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
             await query.answer("Order selesai atau sudah memiliki referensi broadcast. Periksa status/receipt; jangan kirim ulang.", show_alert=True)
             return
 
-        if order.order_type != "swap" or order.status not in ("WAITING_CRYPTO_DEPOSIT", "CRYPTO_CONFIRMED"):
-            await query.answer("Order tidak dapat diproses otomatis dalam status ini.", show_alert=True)
+        # expired tetap boleh: deposit yang dieskalasi sering baru diputuskan setelah 10 menit lewat.
+        if order.order_type != "swap" or order.status not in ("WAITING_CRYPTO_DEPOSIT", "expired", "CRYPTO_CONFIRMED"):
+            hint = (" Selesaikan lewat 📸 Kirim SS Transfer Manual." if order.status == "manual_review" else "")
+            await query.answer(f"Order berstatus {order.status} — tidak dapat diproses otomatis.{hint}", show_alert=True)
             return
         if not confirmed:
             await query.answer()
@@ -4515,13 +4538,25 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
             return
         await query.answer("Memeriksa ulang deposit on-chain...")
         from services.detector import deposit_detector
-        if order.status == "WAITING_CRYPTO_DEPOSIT":
+        if order.status in ("WAITING_CRYPTO_DEPOSIT", "expired"):
             # trusted: admin sudah memastikan pemilik deposit / kurs (eskalasi detector).
             await deposit_detector._process_order(db, order, context.application, trusted=True)
         else:
             await deposit_detector._execute_payout(db, order, context.application)
         db.refresh(order)
-        await query.message.reply_text(f"Status order {order.order_id}: {order.status}. Foto saja tidak mengesahkan deposit.")
+        if order.status in ("WAITING_CRYPTO_DEPOSIT", "expired"):
+            await query.message.reply_text(
+                f"⚠️ <b>Order <code>{html.escape(order.order_id)}</code> belum bisa diproses otomatis</b>\n\n"
+                f"Deposit tidak lolos verifikasi (mis. nominal tidak sesuai, TX belum confirmed, atau belum "
+                f"ada TX hash). Koin tujuan <b>tidak</b> dikirim.\n\n"
+                f"Bila deposit memang milik user ini tapi nominalnya beda, tekan <b>🛠 Proses Manual</b> "
+                f"lalu kirim koin sendiri.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                    "🛠 Proses Manual", callback_data=f"admin_swap_manual_{order.order_id}")]]),
+            )
+        else:
+            await query.message.reply_text(f"Status order {order.order_id}: {order.status}. Foto saja tidak mengesahkan deposit.")
     except Exception as e:
         logger.error(f"Error admin_approve_swap_callback {order_id}: {e}", exc_info=True)
         await query.answer(f"❌ Error: {e}", show_alert=True)
@@ -4591,22 +4626,121 @@ async def admin_reject_swap_callback(update: Update, context: ContextTypes.DEFAU
         ).update({"status": "CANCELLED"}, synchronize_session=False)
         db.commit()
         if changed != 1:
-            await query.answer("⛔ Deposit convert sudah terkonfirmasi/diproses — tidak bisa ditolak. "
-                               "Gunakan Approve atau proses manual.", show_alert=True)
+            current = crud.get_order_by_id(db, order_id)
+            status = current.status if current else "-"
+            if status == "manual_review":
+                message = ("⛔ Deposit convert ini SUDAH DITERIMA (status MANUAL_REVIEW) — tidak bisa ditolak. "
+                           "Kirim koin manual lalu tekan 📸 Kirim SS Transfer Manual.")
+            else:
+                message = f"⛔ Order berstatus {status} — tidak bisa ditolak dari sini."
+            await query.answer(message, show_alert=True)
             return
         order = crud.get_order_by_id(db, order_id)
         if order:
             from bot.utils.telegram_utils import safe_send_message
             await safe_send_message(
                 context.bot, order.telegram_id,
-                f"❌ <b>Pesanan Swap {order_id} Dibatalkan</b>\n\n"
-                f"Bukti transfer deposit tidak dapat diverifikasi oleh admin. "
-                f"Silakan hubungi admin jika terdapat kekeliruan."
+                f"❌ <b>Pesanan Convert {order_id} Dibatalkan Admin</b>\n\n"
+                f"Deposit untuk order ini tidak dapat diproses. Jika kamu sudah mengirim koin, "
+                f"hubungi admin dengan menyertakan Order ID dan TX hash."
             )
         await query.answer("Swap berhasil ditolak/dibatalkan.")
         await _finish_admin_action(query, "❌ <b>DITOLAK OLEH ADMIN</b>")
     except Exception as e:
         logger.error(f"Error admin_reject_swap_callback {order_id}: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+async def admin_swap_manual_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol "🛠 Proses Manual": deposit convert sah tapi tidak bisa diproses otomatis
+    (mis. nominal kurang/lebih). Order dipindah ke manual_review dan hash deposit dikunci ke
+    order ini; admin lalu mengirim koin sendiri dan menyelesaikannya lewat SS transfer manual.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from database.models import DepositClaim
+    from services import tx_verifier
+    from services.detector import DepositDetector
+    from bot.utils.admin_alert import order_detail_block
+    from bot.utils.manual_payout import manual_payout_button
+    from bot.utils.telegram_utils import safe_send_message
+
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+
+    order_id = query.data.replace("admin_swap_manual_", "").strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order or order.order_type != "swap":
+            await query.answer("❌ Order convert tidak ditemukan.", show_alert=True)
+            return
+        if order.status not in ("WAITING_CRYPTO_DEPOSIT", "expired"):
+            hint = (" Sudah manual: kirim koin lalu tekan 📸 Kirim SS Transfer Manual."
+                    if order.status == "manual_review" else "")
+            await query.answer(f"ℹ️ Order berstatus {order.status} — tidak dipindah.{hint}", show_alert=True)
+            return
+        raw_hash = (order.deposit_tx_hash or order.tx_hash or "").strip()
+        if not raw_hash or raw_hash.startswith("PHOTO:"):
+            await query.answer("⛔ Order ini belum punya TX hash deposit. Minta user mengirim TX hash dulu.",
+                               show_alert=True)
+            return
+        try:
+            tx_hash = tx_verifier.normalize_tx_hash(order.network, raw_hash)
+        except ValueError:
+            tx_hash = raw_hash
+        if DepositDetector._is_hash_used(db, tx_hash, exclude_order=order_id):
+            await query.answer("⛔ Hash ini sudah dipakai order lain. Periksa manual.", show_alert=True)
+            return
+
+        old_status = order.status
+        try:
+            if not db.query(DepositClaim).filter(DepositClaim.order_id == order_id).first():
+                db.add(DepositClaim(network=order.network.upper(), tx_hash=tx_hash, order_id=order_id))
+                db.flush()
+            changed = db.query(Order).filter(Order.order_id == order_id, Order.status == old_status).update(
+                {"status": "manual_review", "deposit_tx_hash": tx_hash,
+                 "failure_reason": "Deposit diproses manual oleh admin (tidak bisa diproses otomatis)."},
+                synchronize_session=False)
+            if changed != 1:
+                db.rollback()
+                await query.answer("ℹ️ Status order berubah, coba muat ulang.", show_alert=True)
+                return
+            db.add(AuditLog(
+                telegram_id=order.telegram_id, action="SWAP_MANUAL_PROCESS",
+                order_id=order_id, from_status=old_status, to_status="manual_review",
+                details=f"Admin {user_id} memproses deposit convert secara manual. Hash: {tx_hash}",
+            ))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            await query.answer("⛔ Hash ini sudah dipakai order lain. Periksa manual.", show_alert=True)
+            return
+
+        db.refresh(order)
+        await safe_send_message(
+            context.bot, order.telegram_id,
+            f"🛠 <b>Order Convert <code>{html.escape(order_id)}</code> diproses manual oleh admin</b>\n\n"
+            "Deposit kamu sudah kami terima. Admin akan mengirim koin dan bukti transfernya di sini. 🙏")
+        await query.answer("Order dipindah ke proses manual.")
+        await _finish_admin_action(query, "🛠 <b>DIPROSES MANUAL OLEH ADMIN</b>")
+        await query.message.reply_text(
+            f"🛠 <b>PROSES MANUAL CONVERT</b>\n\n{order_detail_block(order, db)}\n\n"
+            f"TX deposit: <code>{html.escape(tx_hash)}</code>\n\n"
+            f"Kirim koin ke wallet tujuan sesuai keputusanmu (nominal penuh / sesuai deposit yang "
+            f"benar-benar diterima / refund ke user), lalu tekan tombol di bawah dan kirim SS transfer.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[manual_payout_button(order_id)]]),
+        )
+    except Exception as e:
+        logger.error(f"Error admin_swap_manual_callback {order_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Gagal memindahkan order ke proses manual.", show_alert=True)
+        except Exception:
+            pass
     finally:
         db.close()
 

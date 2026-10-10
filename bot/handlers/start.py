@@ -473,6 +473,10 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.admin import admin_reject_swap_callback
         await admin_reject_swap_callback(update, context)
 
+    elif data.startswith("admin_swap_manual_"):
+        from bot.handlers.admin import admin_swap_manual_callback
+        await admin_swap_manual_callback(update, context)
+
     elif data.startswith("admin_sellorders_"):
         from bot.handlers.admin import sellorders_handler
         await sellorders_handler(update, context)

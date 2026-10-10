@@ -1018,7 +1018,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 "referral_discount_pct": discount_pct,
                 "discount_amount_idr": discount_amount,
             }
-            create_order(db, order_data)
+            new_order = create_order(db, order_data)
 
             # Konsumsi kuota diskon jika ada
             _consume_discount_if_needed()
@@ -1073,15 +1073,13 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 )
 
             # Notify admins
+            from bot.utils.admin_alert import order_detail_block
             admin_alert = (
-                f"🔔 <b>ORDER BARU DIBUAT (BUY - GoPay QRIS)</b>\n\n"
-                f"Order ID: <code>{order_id}</code>\n"
-                f"User: {_esc(update.effective_user.name)} (ID: {user_id})\n"
-                f"Koin: {format_crypto(crypto_amount, symbol)} ({network})\n"
-                f"Total Pembayaran: <b>{format_idr(final_total_idr)}</b> (Kode Unik: {unique_code}"
-                f"{f', Pajak QRIS: {format_idr(mdr_idr)}' if mdr_idr else ''})\n"
-                f"Metode: GOPAY_QRIS\n"
-                f"Wallet: <code>{buyer_wallet}</code>"
+                f"🔔 <b>ORDER BELI BARU — MENUNGGU PEMBAYARAN QRIS</b>\n\n"
+                f"{order_detail_block(new_order, db)}\n"
+                f"Rincian bayar: kode unik {unique_code}"
+                f"{f', pajak QRIS {format_idr(mdr_idr)}' if mdr_idr else ''}\n\n"
+                f"<i>Info saja — belum perlu tindakan sampai user membayar.</i>"
             )
             await notify_admins(context.bot, admin_alert, kind="beli")
 
@@ -1295,13 +1293,12 @@ async def finalize_gopay_buy_payment(
             else:
                 pay_label = (order.payment_method or "Manual").upper()
 
+            from bot.utils.admin_alert import order_detail_block
+            db.refresh(order)
             admin_msg = (
-                f"🚨 <b>MANUAL REVIEW REQUIRED ({pay_label})</b>\n\n"
-                f"Order: <code>{order.order_id}</code>\n"
-                f"User: {order.telegram_id}\n"
-                f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
-                f"Wallet: <code>{order.buyer_wallet}</code>\n"
-                f"Error: {result['error_message']}{jejak}\n\n"
+                f"🚨 <b>PENGIRIMAN KOIN GAGAL — PERLU DIKIRIM MANUAL ({pay_label})</b>\n\n"
+                f"{order_detail_block(order, db)}\n\n"
+                f"Error: {_esc(str(result['error_message']))}{jejak}\n\n"
                 f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual, lalu "
                 f"tekan tombol di bawah dan kirim SS transfer agar diteruskan ke user."
             )
@@ -1333,12 +1330,11 @@ async def _escalate_interrupted_payout(db, order, bot) -> None:
         new_status="manual_review",
         failure_reason="Payout terputus (bot restart) — cek on-chain sebelum kirim ulang",
     )
+    from bot.utils.admin_alert import order_detail_block
+    db.refresh(order)
     admin_msg = (
         f"🚨 <b>PAYOUT TERPUTUS — CEK DULU SEBELUM KIRIM ULANG</b>\n\n"
-        f"Order: <code>{order.order_id}</code>\n"
-        f"User: {order.telegram_id}\n"
-        f"Crypto: {order.crypto_amount} {order.crypto_symbol} ({order.network})\n"
-        f"Wallet: <code>{_esc(order.buyer_wallet or '')}</code>\n\n"
+        f"{order_detail_block(order, db)}\n\n"
         f"Bot berhenti saat sedang mengirim koin, jadi transaksi <b>mungkin sudah terkirim</b>.\n"
         f"Cek riwayat masuk wallet tujuan di explorer. Jika belum ada, tekan "
         f"<b>Approve &amp; Kirim Crypto</b>; jika sudah ada, selesaikan manual."
@@ -1477,14 +1473,12 @@ async def handle_transfer_proof(update: Update, context: ContextTypes.DEFAULT_TY
             logger.warning("Gagal simpan bukti transfer %s: %s", order.order_id, exc)
 
         # 1. Forward foto bukti ke seluruh Admin dengan tombol Approve & Reject
+        from bot.utils.admin_alert import order_detail_block
         admin_caption = (
-            f"📸 <b>BUKTI TRANSFER DITERIMA (BUY)</b>\n\n"
-            f"ID Order: <code>{order.order_id}</code>\n"
-            f"User: {_esc(update.effective_user.name)} (ID: <code>{user_id}</code>)\n"
-            f"Total Nominal: <b>{format_idr(order.total_idr)}</b>\n"
-            f"Koin: {format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({order.network})\n"
-            f"Wallet Target: <code>{order.buyer_wallet}</code>\n\n"
-            f"Tekan tombol <b>Approve</b> di bawah jika pembayaran valid untuk memicu pengiriman crypto otomatis."
+            f"📸 <b>BUKTI TRANSFER QRIS DARI USER (BELI)</b>\n\n"
+            f"{order_detail_block(order, db)}\n\n"
+            f"Cek mutasi GoPay: dana <b>{format_idr(order.total_idr)}</b> sudah masuk? Bila ya, tekan "
+            f"<b>Approve</b> untuk mengirim koin otomatis. Bila tidak ada, tekan <b>Tolak</b>."
         )
         admin_keyboard = InlineKeyboardMarkup([
             [

@@ -875,13 +875,10 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except Exception:
             pass
 
+        from bot.utils.admin_alert import order_detail_block
         caption = (
-            f"📸 <b>BUKTI TRANSFER PENJUALAN (SELL)</b>\n\n"
-            f"Order: <code>{order.order_id}</code>\n"
-            f"User ID: <code>{order.telegram_id}</code>\n"
-            f"Crypto: {format_crypto_copy(order.crypto_amount, order.crypto_symbol, exact=True)} ({order.network})\n"
-            f"Rupiah Bersih: <b>{format_idr(order.total_idr)}</b>\n"
-            f"Rekening: <code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
+            f"📸 <b>USER MENGIRIM FOTO BUKTI DEPOSIT (JUAL)</b>\n\n"
+            f"{order_detail_block(order, db)}\n\n"
             f"<i>⚠️ Foto bukan konfirmasi blockchain. Jangan transfer Rupiah sebelum ada notifikasi DEPOSIT TERVERIFIKASI.</i>"
         )
         delivered = False
@@ -892,7 +889,10 @@ async def handle_sell_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             except Exception:
                 logger.warning("Gagal forward bukti sell ke tujuan admin.")
         if not delivered:
-            await notify_admins(context.bot, f"Bukti foto tersimpan untuk order {order.order_id}; penerusan foto gagal.", order_type="sell", kind="jual")
+            await notify_admins(
+                context.bot,
+                f"{caption}\n\n<b>Foto gagal diteruskan ke sini</b>, tapi sudah tersimpan di data order.",
+                order_type="sell", kind="jual")
 
         keyboard = [
             [InlineKeyboardButton("Kirim TX Hash", callback_data="sell_input_tx", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("HISTORY", "5373251851074415873"))],

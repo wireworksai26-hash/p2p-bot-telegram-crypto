@@ -314,10 +314,11 @@ async def withdraw_confirm_handler(update: Update, context: ContextTypes.DEFAULT
         parse_mode="HTML",
     )
 
+    from bot.utils.admin_alert import user_label
     admin_text = (
-        "💸 <b>PERMINTAAN WITHDRAW BARU</b>\n\n"
+        "💸 <b>PERMINTAAN WITHDRAW SALDO BOT BARU</b>\n\n"
         f"🎫 ID: <code>WD-{req_id}</code>\n"
-        f"User: {_esc(user.full_name or '-')} (<code>{user.id}</code>)\n"
+        f"User: {user_label(user.id, user=user)}\n"
         f"Nominal: <b>{format_idr(req_amount)}</b>\n"
         f"Tujuan: <b>{_esc(bank_name)}</b>\n"
         f"No: <code>{_esc(acc_no)}</code>\n"
