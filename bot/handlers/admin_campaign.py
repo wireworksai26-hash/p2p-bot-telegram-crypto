@@ -177,14 +177,12 @@ async def campaign_command_handler(update: Update, context: ContextTypes.DEFAULT
 
 
 async def campaign_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Router callback interaktif untuk alur campaign."""
-    query = update.callback_query
-    if query:
-        try:
-            await query.answer()
-        except Exception:
-            pass
+    """Router callback interaktif untuk alur campaign.
 
+    Tidak menjawab query di awal: menu_callback_handler menutup spinner di akhir, sehingga
+    pop-up di bawah (template/campaign tidak ditemukan, dll.) tetap bisa tampil.
+    """
+    query = update.callback_query
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return

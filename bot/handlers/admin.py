@@ -2207,7 +2207,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         elif data.startswith("admin_reward_exec_"):
             from services import reward_service as rs
             batch_id = int(data.rsplit("_", 1)[1])
-            await query.answer("⏳ Mengirim reward...")
+            # Tanpa pop-up progres: query hanya bisa dijawab sekali, dan jawaban itu dipakai untuk hasil.
             result = await rs.execute_batch(db, context.bot, batch_id, user_id)
             _clear_reward_flags(context)
             if result["ok"]:
@@ -2281,7 +2281,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await query.answer("Periode Top Spender tidak valid.", show_alert=True)
                 return
 
-            await query.answer("⏳ Sedang memproses pembagian reward Top Spender...", show_alert=False)
+            # Tanpa pop-up progres: query hanya bisa dijawab sekali, dan jawaban itu dipakai untuk hasil.
             from services.campaign_service import execute_top_spender_campaign
             bot_me = await context.bot.get_me() if context.bot else None
             bot_username = bot_me.username if bot_me else "TokoKoinID_bot"
@@ -2344,7 +2344,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 await query.answer("Jumlah pemenang atau nominal hadiah tidak valid.", show_alert=True)
                 return
 
-            await query.answer("🎲 Mengundi & membagikan saldo pemenang...", show_alert=False)
+            # Tanpa pop-up progres: query hanya bisa dijawab sekali, dan jawaban itu dipakai untuk hasil.
             from services.campaign_service import execute_random_winner_campaign
             bot_me = await context.bot.get_me() if context.bot else None
             bot_username = bot_me.username if bot_me else "TokoKoinID_bot"

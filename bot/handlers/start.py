@@ -245,14 +245,25 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """
     Catch-all CallbackQueryHandler untuk menangani tombol menu statis.
     Mengarahkan menu_* callback ke fungsinya masing-masing.
+
+    Callback query hanya bisa dijawab SEKALI; jawaban kedua ditolak Telegram (BadRequest).
+    Dulu router menjawab di awal, sehingga query.answer(...) milik handler (pop-up hasil,
+    tombol Reject/Approve admin, dst.) selalu gagal dan handler berhenti di tengah jalan.
+    Sekarang handler menjawab lebih dulu; router hanya menutup spinner bila belum dijawab.
     """
     query = update.callback_query
-    if query:
-        try:
-            await query.answer()
-        except Exception:
-            pass
-    
+    try:
+        await _route_menu_callback(update, context)
+    finally:
+        if query:
+            try:
+                await query.answer()
+            except Exception:
+                pass  # sudah dijawab oleh handler
+
+
+async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
     data = query.data if query else None
     logger.info(f"Callback query received: {data}")
 

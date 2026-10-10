@@ -1,8 +1,11 @@
 """Reject manual di Antrean Order: order yang ditolak harus hilang dari daftar.
 
-Bug: order Beli Saldo Bot berstatus manual_review butuh konfirmasi "✅ Ya, Refund Saldo" yang
-dikirim sebagai pesan terpisah. Setelah "Ya", hanya pesan konfirmasi yang diedit; panel Antrean
-Order tidak dimuat ulang sehingga order yang sudah rejected tetap terlihat di tempatnya.
+Bug 1 (akar masalah): menu_callback_handler menjawab callback di awal. Telegram hanya menerima
+satu jawaban per callback, jadi query.answer(...) di handler Reject selalu BadRequest: order sudah
+rejected di DB tetapi panel tidak dimuat ulang, dan konfirmasi refund Saldo Bot tidak pernah muncul.
+
+Bug 2: konfirmasi "✅ Ya, Refund Saldo" dikirim sebagai pesan terpisah. Setelah "Ya", hanya pesan
+konfirmasi yang diedit; panel Antrean Order tidak dimuat ulang.
 """
 import os
 import unittest
@@ -10,6 +13,8 @@ from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+from telegram.error import BadRequest
 
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
@@ -112,6 +117,44 @@ class RejectRefreshesQueue(unittest.IsolatedAsyncioTestCase):
         await self._press("admin_reject_buy_ORD-GP", queue)
         refreshed = queue.edit_text.await_args.kwargs["text"]
         self.assertNotIn("ORD-GP", refreshed)
+
+
+class OnceQuery:
+    """Callback query yang meniru Telegram: jawaban kedua ditolak BadRequest."""
+
+    def __init__(self, data, message):
+        self.data = data
+        self.message = message
+        self.from_user = SimpleNamespace(id=1)
+        self.answers = []
+        self.edit_message_text = AsyncMock()
+
+    async def answer(self, text=None, show_alert=False, **_):
+        if self.answers:
+            raise BadRequest("Query is too old and response timeout expired or query id is invalid")
+        self.answers.append(text)
+
+
+class RejectLewatRouter(RejectRefreshesQueue):
+    """Klik tombol sungguhan lewat catch-all router (menu_callback_handler)."""
+
+    async def _press(self, data, message):
+        from bot.handlers.start import menu_callback_handler
+        query = OnceQuery(data, message)
+        update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
+        context = SimpleNamespace(bot=AsyncMock(), user_data={})
+        with patch("bot.utils.telegram_utils.safe_send_message", new=AsyncMock()):
+            await menu_callback_handler(update, context)
+        return query
+
+    async def test_popup_hasil_reject_tampil_bukan_jawaban_kosong_router(self):
+        self._add(_order("ORD-POP", "pending", "GOPAY_QRIS", paid=False))
+        query = await self._press("admin_reject_buy_ORD-POP", self._queue_message())
+        self.assertEqual(query.answers, ["Order berhasil ditolak."])
+
+    async def test_tombol_tanpa_jawaban_handler_tetap_dijawab_router(self):
+        query = await self._press("menu_snk", _msg("menu"))
+        self.assertEqual(len(query.answers), 1)
 
 
 if __name__ == "__main__":

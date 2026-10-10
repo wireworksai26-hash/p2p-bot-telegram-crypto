@@ -234,7 +234,8 @@ class TestNavigasiDanRouting(unittest.IsolatedAsyncioTestCase):
     async def test_topik_tidak_dikenal(self):
         query = await self._route("guide_xyz")
         query.edit_message_text.assert_not_called()
-        self.assertTrue(query.answer.await_args_list[-1].kwargs.get("show_alert"))
+        # Telegram hanya menampilkan jawaban PERTAMA; jawaban penutup router sesudahnya ditolak.
+        self.assertTrue(query.answer.await_args_list[0].kwargs.get("show_alert"))
 
 
 if __name__ == "__main__":
