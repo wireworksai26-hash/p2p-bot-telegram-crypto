@@ -725,9 +725,13 @@ async def _route_transfer_proof(update: Update, context) -> None:
     from bot.handlers.buy import handle_transfer_proof
     from bot.handlers.balance import handle_topup_transfer_proof
 
+    # Foto yang diposting di channel (mis. channel testi) datang sebagai channel_post
+    # tanpa pengirim: update.message dan effective_user bernilai None.
+    if not update.message or not update.effective_user:
+        return
     user_id = update.effective_user.id
     # Guard: jangan pernah tangani pesan /broadcast di router bukti transfer
-    caption = (update.message.caption or "").strip() if update.message else ""
+    caption = (update.message.caption or "").strip()
     if caption.lower().startswith("/broadcast"):
         return
 
@@ -771,8 +775,10 @@ async def error_handler(update: object, context) -> None:
 
     logger.error("Unhandled exception: %s", err, exc_info=err)
 
-    # Notify user (if we know who they are)
-    if update and isinstance(update, Update) and update.effective_chat:
+    # Notify user hanya di chat pribadi: di channel testi / grup pesan error ini terlihat publik.
+    # Admin tetap menerima detail error lewat notify_admins di bawah.
+    if (update and isinstance(update, Update) and update.effective_chat
+            and update.effective_chat.type == "private"):
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
