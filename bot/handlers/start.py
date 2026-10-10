@@ -64,6 +64,10 @@ def build_welcome_message(user, db_user, total_users: int, total_success: int) -
         f"{E_CHART()} <b>STATISTIK BOT</b>\n"
         f"├── {E_USER()} <b>Total Pengguna</b> : <b>{total_users:,} Member</b>\n"
         f"└── {E_CHECK()} <b>Total Transaksi</b>: <b>{total_success:,}x Berhasil</b>\n\n"
+        f"🤖 <b>BOT TETAP BEROPERASI 24/7</b>\n"
+        f"⏰ <b>Jam Operasional Admin:</b> 08.00 – 23.59 WIB\n"
+        f"<i>Kendala seperti transaksi error, stok koin menipis, pengecekan manual, dan pencairan Rupiah "
+        f"(Jual) diproses admin pada jam operasional.</i>\n\n"
         f"Silakan pilih menu di bawah untuk memulai transaksi:"
     )
 
