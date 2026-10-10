@@ -425,6 +425,10 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.buy import check_buy_payment
         await check_buy_payment(update, context)
 
+    elif data.startswith("cancel_buy_order_"):
+        from bot.handlers.buy import cancel_buy_order_callback
+        await cancel_buy_order_callback(update, context)
+
     elif data.startswith("admin_approve_buy_"):
         from bot.handlers.admin import admin_approve_buy_callback
         await admin_approve_buy_callback(update, context)

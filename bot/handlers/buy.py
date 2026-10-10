@@ -94,12 +94,63 @@ PAYMENT_METHOD_LABELS = {
     "GOPAY_QRIS": "QRIS GoPay (All E-Wallet & Bank)",
 }
 
+
+def qris_payment_keyboard(order_id: str) -> InlineKeyboardMarkup:
+    """Tombol di bawah QRIS order Beli: cek pembayaran, batalkan order, menu."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Saya Sudah Transfer", callback_data=f"check_buy_payment_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
+        [InlineKeyboardButton("❌ Batalkan Order", callback_data=f"cancel_buy_order_{order_id}")],
+        [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
+        [get_owner_button()],
+    ])
+
+
+async def _block_if_unpaid_qris(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Satu order QRIS belum dibayar per user: selesaikan atau batalkan dulu sebelum order baru.
+
+    Tanpa ini user bisa menumpuk QRIS yang tidak dibayar (order sampah yang menghabiskan kode
+    unik pembayaran). True bila user diblokir dan sudah diberi tahu.
+    """
+    from bot.utils.formatter import format_datetime
+    db = SessionLocal()
+    try:
+        pending = get_pending_gopay_order_for_user(db, update.effective_user.id)
+        if not pending:
+            return False
+        if pending.expired_at and pending.expired_at > datetime.utcnow():
+            deadline = f"⏰ <b>Berlaku sampai</b>: {format_datetime(pending.expired_at)}\n"
+        else:
+            deadline = "⏰ Batas waktu sudah lewat, order sedang dicek terakhir sebelum kedaluwarsa.\n"
+        text = (
+            "⏳ <b>Masih ada order Beli yang belum dibayar</b>\n\n"
+            f"🎫 <b>ID Order</b>: <code>{_esc(pending.order_id)}</code>\n"
+            f"🪙 <b>Koin</b>: {format_crypto(float(pending.crypto_amount), pending.crypto_symbol)} ({_esc(pending.network)})\n"
+            f"💵 <b>Total Bayar</b>: <b>{format_idr(pending.total_idr)}</b>\n"
+            f"{deadline}\n"
+            "Selesaikan pembayaran order ini, atau batalkan dulu sebelum membuat order baru."
+        )
+        markup = qris_payment_keyboard(pending.order_id)
+    finally:
+        db.close()
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        await safe_edit_message(query, text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    return True
+
 async def start_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Entry point alur Beli dari klik tombol menu utama.
     """
     if await block_if_busy("buy", update, context):
         return None
+    if await _block_if_unpaid_qris(update, context):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     
@@ -120,6 +171,8 @@ async def start_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     if await block_if_busy("buy", update, context):
         return None
+    if await _block_if_unpaid_qris(update, context):
+        return ConversationHandler.END
     await update.message.reply_text(
         text=(
             f"{E_CART()} <b>BELI CRYPTOCURRENCY</b>\n\n"
@@ -771,6 +824,11 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
     user_id = update.effective_user.id
 
+    # Cek ulang saat order akan dibuat: alur Beli lain yang dibuka sebelum QRIS sebelumnya
+    # terbit tidak boleh menghasilkan QRIS kedua.
+    if await _block_if_unpaid_qris(update, context):
+        return ConversationHandler.END
+
     from services.chain_maintenance import blocked_reason, maintenance_text
     reason = blocked_reason(context.user_data.get("buy_symbol"), context.user_data.get("buy_network"))
     if reason:
@@ -1043,11 +1101,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"4. Koin crypto akan <b>otomatis terkirim</b> ke wallet Anda seketika setelah pembayaran terdeteksi!\n\n"
                 f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>"
             )
-            keyboard = [
-                [InlineKeyboardButton("Saya Sudah Transfer", callback_data=f"check_buy_payment_{order_id}", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
-                [InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))],
-                [get_owner_button()]
-            ]
+            payment_markup = qris_payment_keyboard(order_id)
             from services.qris_generator import get_qris_image_stream
             qris_stream = get_qris_image_stream(final_total_idr)
             sent = False
@@ -1058,7 +1112,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                         photo=qris_stream,
                         caption=caption,
                         parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
+                        reply_markup=payment_markup
                     )
                     sent = True
                 except Exception as pe:
@@ -1069,7 +1123,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                     chat_id=user_id,
                     text=caption,
                     parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    reply_markup=payment_markup
                 )
 
             # Notify admins
@@ -1443,6 +1497,106 @@ async def check_buy_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error(f"Error check_buy_payment {order_id}: {e}", exc_info=True)
         try:
             await query.answer("❌ Terjadi kesalahan saat memeriksa pembayaran. Coba lagi.", show_alert=True)
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+async def cancel_buy_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol '❌ Batalkan Order' QRIS Beli: konfirmasi -> cek pembayaran terakhir -> batalkan.
+
+    Sebelum membatalkan, gateway QRIS dicek sekali lagi: bila ternyata sudah dibayar, order
+    diproses (bukan dibatalkan); bila gateway tidak bisa memastikan, pembatalan ditahan agar
+    uang user tidak nyangkut di order yang sudah batal.
+    """
+    query = update.callback_query
+    raw = query.data.removeprefix("cancel_buy_order_")
+    action, order_id = "ask", raw
+    if raw.startswith("yes_"):
+        action, order_id = "yes", raw[4:]
+    elif raw.startswith("no_"):
+        action, order_id = "no", raw[3:]
+
+    db = SessionLocal()
+    try:
+        order = get_order_by_id(db, order_id)
+        if not order or order.telegram_id != update.effective_user.id or order.order_type != "buy":
+            await query.answer("❌ Order tidak ditemukan.", show_alert=True)
+            return
+        if action == "no":
+            await safe_edit_message(query, "👍 Order tetap aktif. Silakan selesaikan pembayaran QRIS-nya.")
+            return
+        if order.status != "pending" or order.payment_method != "GOPAY_QRIS":
+            await query.answer(f"ℹ️ Order sudah berstatus {str(order.status).upper()} — tidak bisa dibatalkan.",
+                               show_alert=True)
+            return
+        if action == "ask":
+            await query.answer()
+            await query.message.reply_text(
+                f"❓ <b>Batalkan order <code>{_esc(order.order_id)}</code>?</b>\n\n"
+                f"Kalau kamu <b>sudah transfer</b>, jangan dibatalkan. Tekan <b>Saya Sudah Transfer</b> "
+                f"di pesan QRIS.\nSetelah dibatalkan, QRIS lama tidak berlaku lagi.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Ya, Batalkan", callback_data=f"cancel_buy_order_yes_{order.order_id}"),
+                    InlineKeyboardButton("🔙 Tidak", callback_data=f"cancel_buy_order_no_{order.order_id}"),
+                ]]),
+                # Dibalas ke pesan QRIS agar setelah "Ya" QRIS lama bisa ditandai tidak berlaku.
+                do_quote=True,
+            )
+            return
+
+        paid = await gopay_service.confirm_payment(
+            db, amount=int(order.total_idr), ref_id=order.order_id,
+            kind="buy", created_at=order.created_at,
+        )
+        if paid:
+            asyncio.create_task(_run_finalize_background(order.order_id, context.bot, allow_expired_payment=True))
+            await safe_edit_message(
+                query, "✅ <b>Pembayaranmu ternyata sudah masuk</b>, jadi order <b>tidak</b> dibatalkan. "
+                       "Koin sedang dikirim ke wallet kamu.")
+            return
+        if paid is None:
+            await safe_edit_message(
+                query, "⚠️ <b>Status pembayaran belum bisa dipastikan</b> (layanan cek QRIS sedang bermasalah), "
+                       "jadi order belum dibatalkan. Coba lagi beberapa menit lagi, atau tunggu order "
+                       "kedaluwarsa otomatis.")
+            return
+
+        changed = db.query(Order).filter(
+            Order.order_id == order.order_id, Order.status == "pending", Order.paid_at.is_(None),
+        ).update({"status": "cancelled", "failure_reason": "Dibatalkan oleh pengguna"}, synchronize_session=False)
+        db.commit()
+        if changed != 1:
+            await safe_edit_message(query, "ℹ️ Status order sudah berubah. Cek pesan terbaru dari bot.")
+            return
+        release_order_inventory(db, order.order_id)
+        logger.info("Order %s dibatalkan oleh user %s", order.order_id, order.telegram_id)
+
+        qris_message = getattr(query.message, "reply_to_message", None)
+        if qris_message is not None:
+            tag = "\n\n❌ <b>Order dibatalkan — QRIS ini tidak berlaku lagi, jangan dibayar.</b>"
+            try:
+                if qris_message.caption is not None:
+                    await qris_message.edit_caption(caption=f"{qris_message.caption_html}{tag}", parse_mode="HTML")
+                else:
+                    await qris_message.edit_text(text=f"{qris_message.text_html or ''}{tag}", parse_mode="HTML")
+            except Exception as exc:
+                logger.debug("Tandai QRIS batal %s gagal: %s", order.order_id, exc)
+        await safe_edit_message(
+            query,
+            f"✅ <b>Order <code>{_esc(order.order_id)}</code> dibatalkan.</b>\n\n"
+            f"QRIS lama tidak berlaku lagi, jangan dibayar. Sekarang kamu bisa membuat order baru.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Beli Lagi", callback_data="menu_buy")],
+                [InlineKeyboardButton("Menu Utama", callback_data="menu_back")],
+            ]),
+        )
+    except Exception as e:
+        logger.error(f"Error cancel_buy_order_callback {order_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Gagal membatalkan order. Coba lagi.", show_alert=True)
         except Exception:
             pass
     finally:
