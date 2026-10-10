@@ -465,6 +465,10 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.admin import admin_manual_payout_callback
         await admin_manual_payout_callback(update, context)
 
+    elif data.startswith(("admin_manual_ss_", "admin_manual_tx_", "admin_manual_done_", "admin_manual_doneok_")):
+        from bot.handlers.admin import admin_manual_option_callback
+        await admin_manual_option_callback(update, context)
+
     elif data.startswith("admin_approve_swap_"):
         from bot.handlers.admin import admin_approve_swap_callback
         await admin_approve_swap_callback(update, context)

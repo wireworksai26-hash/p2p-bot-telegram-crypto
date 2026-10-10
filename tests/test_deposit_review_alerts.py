@@ -165,7 +165,7 @@ class TombolAdminConvert(_Base):
     async def test_reject_manual_review_menjelaskan_jalan_keluar(self):
         self._add(_swap("SWAP-RJ", status="manual_review"))
         query, _ = await self._press(admin.admin_reject_swap_callback, "admin_reject_swap_SWAP-RJ")
-        self.assertIn("SS Transfer Manual", query.answer.await_args.args[0])
+        self.assertIn("Selesaikan Pengiriman Manual", query.answer.await_args.args[0])
 
 
 class StatusDiAkunUser(_Base):

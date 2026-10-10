@@ -272,10 +272,10 @@ def build_admin_orders_view(db) -> tuple[str, InlineKeyboardMarkup]:
                 InlineKeyboardButton(f"❌ Reject {o.order_id[-6:]}", callback_data=f"admin_reject_buy_{o.order_id}"),
             ])
             if o.status == "manual_review":
-                action_buttons.append([InlineKeyboardButton(f"📸 SS Transfer Manual {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
+                action_buttons.append([InlineKeyboardButton(f"✅ Selesaikan Pengiriman {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
         elif o.order_type == "swap" and o.status == "manual_review":
             # Deposit sudah diterima: tidak bisa ditolak/approve otomatis, selesaikan lewat SS transfer.
-            action_buttons.append([InlineKeyboardButton(f"📸 SS Transfer Manual {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
+            action_buttons.append([InlineKeyboardButton(f"✅ Selesaikan Pengiriman {o.order_id[-6:]}", callback_data=f"admin_manual_sent_{o.order_id}")])
         elif o.order_type == "swap" and o.status in ["WAITING_CRYPTO_DEPOSIT", "expired"]:
             action_buttons.append([
                 InlineKeyboardButton(f"✅ Approve Swap {o.order_id[-6:]}", callback_data=f"admin_approve_swap_{o.order_id}"),
@@ -3617,8 +3617,113 @@ async def handle_admin_upload_proof(update: Update, context: ContextTypes.DEFAUL
         db.close()
 
 
+_MANUAL_PHOTO_FLAG = "admin_awaiting_payout_proof_order_id"
+_MANUAL_TXHASH_FLAG = "admin_awaiting_payout_txhash_order_id"
+_MANUAL_OPTION_PREFIXES = ("admin_manual_doneok_", "admin_manual_done_", "admin_manual_ss_", "admin_manual_tx_")
+
+
+def _manual_payout_target(order) -> tuple:
+    """(jumlah koin, jaringan) yang dikirim ke user: koin tujuan untuk Convert."""
+    if order.order_type == "swap":
+        return (format_crypto(float(order.target_crypto_amount or 0), order.target_crypto_symbol or ""),
+                order.target_network)
+    return format_crypto(float(order.crypto_amount or 0), order.crypto_symbol or ""), order.network
+
+
+def _manual_payout_options(order_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Kirim Screenshot Transfer", callback_data=f"admin_manual_ss_{order_id}")],
+        [InlineKeyboardButton("🔗 Kirim TX Hash Transfer", callback_data=f"admin_manual_tx_{order_id}")],
+        [InlineKeyboardButton("✅ Sudah Dikirim, Tanpa Bukti", callback_data=f"admin_manual_done_{order_id}")],
+    ])
+
+
+def _complete_manual_payout(db, order_id: str, admin_id: int, proof: str, tx_hash: str = None) -> tuple:
+    """Klaim atomik lalu tandai COMPLETED. Return (order, None) atau (None, (jenis_error, pesan))."""
+    from bot.utils.manual_payout import manual_payout_block_reason
+    order = crud.get_order_by_id(db, order_id)
+    reason = manual_payout_block_reason(order)
+    if reason:
+        return None, ("blocked", reason)
+    # Klaim atomik: cegah balapan dengan Approve/finalize otomatis yang berjalan bersamaan.
+    old_status = order.status
+    claimed = db.query(Order).filter(
+        Order.order_id == order_id, Order.status == old_status,
+    ).update({"status": "payout_processing", "updated_at": datetime.utcnow()}, synchronize_session=False)
+    db.commit()
+    if claimed != 1:
+        return None, ("changed", "ℹ️ Status order baru saja berubah. Muat ulang order lalu coba lagi.")
+    extra = {"payout_tx_hash": tx_hash, "tx_hash": tx_hash} if tx_hash else {}
+    crud.update_order_status(db, order_id, new_status="completed", completed_at=datetime.utcnow(),
+                             failure_reason=None, **extra)
+    crud.release_order_inventory(db, order_id, consumed=True)
+    db.add(AuditLog(
+        telegram_id=order.telegram_id,
+        action="PAYOUT_MANUAL_PROOF",
+        order_id=order_id,
+        from_status=old_status,
+        to_status="completed",
+        details=f"Admin {admin_id} mengirim crypto manual ({proof}).",
+    ))
+    db.commit()
+    db.refresh(order)
+    return order, None
+
+
+async def _notify_manual_payout_user(bot, order, proof_line: str, photo_file_id: str = None) -> bool:
+    """Kabari user bahwa koin sudah dikirim admin. True bila pesan sampai."""
+    crypto_str, network = _manual_payout_target(order)
+    text = (
+        f"🎉 <b>CRYPTO TELAH DITRANSFER OLEH ADMIN!</b>\n\n"
+        f"Transaksi Anda berhasil. Pengiriman otomatis sempat terkendala, sehingga koin "
+        f"dikirim <b>manual oleh admin</b> ke wallet Anda.\n\n"
+        f"📝 <b>ID Order:</b> <code>{html.escape(order.order_id)}</code>\n"
+        f"🪙 <b>Jumlah:</b> <b>{crypto_str}</b> ({html.escape(str(network or '-'))})\n"
+        f"🏦 <b>Wallet Tujuan:</b> <code>{html.escape(order.buyer_wallet or '-')}</code>\n\n"
+        + (f"{proof_line}\n\n" if proof_line else "")
+        + f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
+        f"Silakan periksa saldo wallet Anda.\n\n"
+        f"Terimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
+        f"Testimoni : t.me/TokoKoinID\n"
+        f"Channel : t.me/ROBHSN_STORE_SELLER"
+    )
+    menu_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
+    ]])
+    try:
+        if photo_file_id:
+            await bot.send_photo(chat_id=order.telegram_id, photo=photo_file_id, caption=text,
+                                 reply_markup=menu_keyboard, parse_mode="HTML")
+        else:
+            await bot.send_message(chat_id=order.telegram_id, text=text, reply_markup=menu_keyboard,
+                                   parse_mode="HTML", disable_web_page_preview=True)
+        return True
+    except Exception as send_err:
+        logger.error(f"Gagal mengirim kabar pengiriman manual ke user {order.telegram_id}: {send_err}")
+        return False
+
+
+def _manual_payout_admin_report(order, title: str, sent_to_user: bool) -> str:
+    return (
+        f"✅ <b>{title}</b>\n\n"
+        f"Order ID: <code>{_esc(order.order_id)}</code>\n"
+        f"User ID: <code>{order.telegram_id}</code>\n"
+        f"Status Order: <b>COMPLETED</b>\n"
+        f"Pengiriman ke user: {'Sukses' if sent_to_user else 'Gagal (User memblokir bot/chat error)'}"
+    )
+
+
+def _schedule_manual_testimony(bot, order, db) -> None:
+    try:
+        from services.testimony_service import schedule_transaction_testimony
+        schedule_transaction_testimony(bot, order, db=db)
+    except Exception as texc:
+        logger.warning(f"Gagal trigger testimony order {order.order_id}: {texc}")
+
+
 async def admin_manual_payout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tombol Admin: payout crypto gagal (mis. RPC error) → admin kirim manual lalu upload SS transfer."""
+    """Tombol "Selesaikan Pengiriman Manual": payout crypto gagal (mis. RPC error) → admin kirim manual,
+    lalu menyelesaikan order dengan screenshot (langsung kirim foto), TX hash, atau tanpa bukti."""
     from bot.utils.manual_payout import CALLBACK_PREFIX, manual_payout_block_reason
 
     query = update.callback_query
@@ -3636,8 +3741,10 @@ async def admin_manual_payout_callback(update: Update, context: ContextTypes.DEF
             return
 
         context.user_data.pop("admin_awaiting_proof_order_id", None)
-        context.user_data["admin_awaiting_payout_proof_order_id"] = order_id
-        await query.answer("📸 Kirim foto SS transfer ke chat ini.", show_alert=False)
+        context.user_data.pop(_MANUAL_TXHASH_FLAG, None)
+        # Bawaan tetap screenshot: foto yang dikirim admin setelah ini langsung diproses.
+        context.user_data[_MANUAL_PHOTO_FLAG] = order_id
+        await query.answer("Kirim foto SS, atau pilih TX hash / tanpa bukti.", show_alert=False)
 
         if order.order_type == "swap":
             amount_str = f"{format_crypto_copy(order.target_crypto_amount or 0, order.target_crypto_symbol or '', exact=True)} ({order.target_network})"
@@ -3651,15 +3758,18 @@ async def admin_manual_payout_callback(update: Update, context: ContextTypes.DEF
                 f"Cek explorer dulu. Jika koin sebenarnya sudah masuk ke wallet tujuan, JANGAN kirim ulang.\n"
             )
         await query.message.reply_text(
-            f"📸 <b>KIRIM SS TRANSFER MANUAL</b>\n\n"
+            f"✅ <b>SELESAIKAN PENGIRIMAN MANUAL</b>\n\n"
             f"Order ID: <code>{_esc(order_id)}</code>\n"
             f"Koin: <b>{amount_str}</b>\n"
             f"Wallet Tujuan: <code>{_esc(order.buyer_wallet or '-')}</code>\n"
             f"{warning}\n"
-            f"👉 <b>Kirim koin dari wallet Anda, lalu kirim FOTO / SCREENSHOT bukti transfer ke chat ini.</b>\n"
-            f"Bot akan meneruskan foto ke user dengan catatan transaksi berhasil ditransfer oleh admin, "
-            f"dan order otomatis menjadi COMPLETED.",
+            f"👉 <b>Kirim koin dari wallet Anda dulu</b>, lalu pilih cara menyelesaikan:\n"
+            f"• <b>Screenshot</b>: langsung kirim FOTO bukti transfer ke chat ini.\n"
+            f"• <b>TX hash</b>: tekan 🔗 lalu kirim TX hash / link explorer.\n"
+            f"• <b>Tanpa bukti</b>: tekan ✅ bila koin sudah dikirim tapi tidak ada SS maupun TX hash.\n\n"
+            f"User menerima notifikasi transaksi sukses dan order otomatis menjadi COMPLETED.",
             parse_mode="HTML",
+            reply_markup=_manual_payout_options(order_id),
         )
     except Exception as e:
         logger.error(f"Error admin_manual_payout_callback {order_id}: {e}", exc_info=True)
@@ -3668,15 +3778,140 @@ async def admin_manual_payout_callback(update: Update, context: ContextTypes.DEF
         db.close()
 
 
-async def handle_admin_payout_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Foto SS transfer manual dari admin: teruskan ke user dan selesaikan order buy/convert."""
+async def admin_manual_option_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pilihan menu Selesaikan Pengiriman Manual: screenshot / TX hash / tanpa bukti (+ konfirmasi)."""
     from bot.utils.manual_payout import manual_payout_block_reason
 
+    query = update.callback_query
+    admin_id = query.from_user.id
+    if not is_admin(admin_id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+    action = next((p for p in _MANUAL_OPTION_PREFIXES if query.data.startswith(p)), None)
+    if action is None:
+        await query.answer("Tombol tidak dikenal.", show_alert=True)
+        return
+    order_id = query.data[len(action):].strip()
+
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        reason = manual_payout_block_reason(order)
+        if reason:
+            await query.answer(reason, show_alert=True)
+            return
+        context.user_data.pop(_MANUAL_PHOTO_FLAG, None)
+        context.user_data.pop(_MANUAL_TXHASH_FLAG, None)
+        crypto_str, network = _manual_payout_target(order)
+
+        if action == "admin_manual_ss_":
+            context.user_data[_MANUAL_PHOTO_FLAG] = order_id
+            await query.answer("📸 Kirim foto SS transfer ke chat ini.")
+            await query.message.reply_text(
+                f"📸 Kirim <b>FOTO / SCREENSHOT</b> bukti transfer order <code>{_esc(order_id)}</code> ke chat ini.",
+                parse_mode="HTML")
+        elif action == "admin_manual_tx_":
+            context.user_data[_MANUAL_TXHASH_FLAG] = order_id
+            await query.answer("🔗 Kirim TX hash ke chat ini.")
+            await query.message.reply_text(
+                f"🔗 Kirim <b>TX hash</b> (atau link explorer) transfer order <code>{_esc(order_id)}</code> "
+                f"di jaringan <b>{_esc(str(network or '-'))}</b> ke chat ini.\nKetik /cancel untuk batal.",
+                parse_mode="HTML")
+        elif action == "admin_manual_done_":
+            await query.answer()
+            await query.message.reply_text(
+                f"⚠️ <b>TANDAI SELESAI TANPA BUKTI?</b>\n\n"
+                f"Order: <code>{_esc(order_id)}</code>\n"
+                f"Koin: <b>{crypto_str}</b> ({_esc(str(network or '-'))})\n"
+                f"Wallet Tujuan: <code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
+                f"Pastikan koin <b>benar-benar sudah dikirim</b>. User akan menerima notifikasi transaksi "
+                f"sukses tanpa screenshot maupun TX hash, dan order menjadi COMPLETED.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                    "✅ Ya, Koin Sudah Dikirim", callback_data=f"admin_manual_doneok_{order_id}")]]),
+            )
+        else:
+            order, error = _complete_manual_payout(db, order_id, admin_id, "tanpa bukti")
+            if error:
+                await query.answer(error[1], show_alert=True)
+                return
+            sent = await _notify_manual_payout_user(context.bot, order, proof_line="")
+            _schedule_manual_testimony(context.bot, order, db)
+            await query.answer("Order ditandai selesai.")
+            await _finish_admin_action(query, "✅ <b>DITANDAI SELESAI OLEH ADMIN (TANPA BUKTI)</b>")
+            await query.message.reply_text(
+                _manual_payout_admin_report(order, "ORDER DITANDAI SELESAI (TANPA BUKTI)", sent), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error admin_manual_option_callback {order_id}: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Terjadi kesalahan.", show_alert=True)
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+async def handle_admin_payout_txhash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """TX hash transfer manual dari admin: teruskan ke user dan selesaikan order. True bila ditangani."""
+    from services import tx_verifier
+    from services.testimony_service import get_explorer_url_for_tx
+
+    order_id = context.user_data.get(_MANUAL_TXHASH_FLAG)
+    if not order_id or not update.message or not update.message.text:
+        return False
+    admin_id = update.effective_user.id
+    raw = update.message.text.strip()
+    db = SessionLocal()
+    try:
+        order = crud.get_order_by_id(db, order_id)
+        if not order:
+            context.user_data.pop(_MANUAL_TXHASH_FLAG, None)
+            await update.message.reply_text("❌ Order tidak ditemukan.")
+            return True
+        _, network = _manual_payout_target(order)
+        try:
+            tx_hash = tx_verifier.normalize_tx_hash(network, raw)
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                f"❌ Format TX hash tidak valid untuk jaringan <b>{_esc(str(network or '-'))}</b>. "
+                f"Kirim ulang TX hash / link explorer, atau /cancel.", parse_mode="HTML")
+            return True
+        duplicate = db.query(Order.order_id).filter(
+            Order.order_id != order_id, func.lower(Order.payout_tx_hash) == tx_hash.lower()).first()
+        if duplicate:
+            await update.message.reply_text(
+                f"⛔ TX hash ini sudah tercatat sebagai pengiriman order <code>{_esc(duplicate[0])}</code>. "
+                f"Kirim TX hash yang benar, atau /cancel.", parse_mode="HTML")
+            return True
+
+        context.user_data.pop(_MANUAL_TXHASH_FLAG, None)
+        order, error = _complete_manual_payout(db, order_id, admin_id, f"TX hash {tx_hash}", tx_hash=tx_hash)
+        if error:
+            await update.message.reply_text(f"⚠️ {error[1]} TX hash tidak diteruskan ke user.")
+            return True
+        url = get_explorer_url_for_tx(network, tx_hash)
+        proof = f"🔗 <b>TX Hash:</b> <code>{html.escape(tx_hash)}</code>"
+        if url:
+            proof += f"\n🌐 <a href=\"{html.escape(url)}\">Lihat di Explorer</a>"
+        sent = await _notify_manual_payout_user(context.bot, order, proof_line=proof)
+        _schedule_manual_testimony(context.bot, order, db)
+        await update.message.reply_text(
+            _manual_payout_admin_report(order, "TX HASH TRANSFER MANUAL DITERUSKAN!", sent), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error handle_admin_payout_txhash {order_id}: {e}", exc_info=True)
+        await update.message.reply_text("❌ Gagal memproses TX hash transfer manual.")
+    finally:
+        db.close()
+    return True
+
+
+async def handle_admin_payout_proof(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Foto SS transfer manual dari admin: teruskan ke user dan selesaikan order buy/convert."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
 
-    order_id = context.user_data.pop("admin_awaiting_payout_proof_order_id", None)
+    order_id = context.user_data.pop(_MANUAL_PHOTO_FLAG, None)
     if not order_id or not update.message or not update.message.photo:
         return
 
@@ -3684,88 +3919,18 @@ async def handle_admin_payout_proof(update: Update, context: ContextTypes.DEFAUL
 
     db = SessionLocal()
     try:
-        order = crud.get_order_by_id(db, order_id)
-        reason = manual_payout_block_reason(order)
-        if reason:
-            await update.message.reply_text(f"⚠️ {reason} Bukti tidak diteruskan ke user.")
+        order, error = _complete_manual_payout(db, order_id, user_id, "screenshot")
+        if error:
+            kind, message = error
+            await update.message.reply_text(
+                f"⚠️ {message} Bukti tidak diteruskan ke user." if kind == "blocked" else message)
             return
-
-        # Klaim atomik: cegah balapan dengan Approve/finalize otomatis yang berjalan bersamaan.
-        old_status = order.status
-        claimed = db.query(Order).filter(
-            Order.order_id == order_id, Order.status == old_status,
-        ).update({"status": "payout_processing", "updated_at": datetime.utcnow()}, synchronize_session=False)
-        db.commit()
-        if claimed != 1:
-            await update.message.reply_text("ℹ️ Status order baru saja berubah. Muat ulang order lalu coba lagi.")
-            return
-        db.refresh(order)
-        crud.update_order_status(
-            db, order_id, new_status="completed",
-            completed_at=datetime.utcnow(),
-            failure_reason=None,
-        )
-        crud.release_order_inventory(db, order_id, consumed=True)
-        db.add(AuditLog(
-            telegram_id=order.telegram_id,
-            action="PAYOUT_MANUAL_PROOF",
-            order_id=order_id,
-            from_status=old_status,
-            to_status="completed",
-            details=f"Admin {user_id} mengirim crypto manual dan mengunggah SS transfer.",
-        ))
-        db.commit()
-        db.refresh(order)
-
-        if order.order_type == "swap":
-            crypto_str = format_crypto(float(order.target_crypto_amount or 0), order.target_crypto_symbol or "")
-            network = order.target_network
-        else:
-            crypto_str = format_crypto(float(order.crypto_amount or 0), order.crypto_symbol or "")
-            network = order.network
-
-        user_caption = (
-            f"🎉 <b>CRYPTO TELAH DITRANSFER OLEH ADMIN!</b>\n\n"
-            f"Transaksi Anda berhasil. Pengiriman otomatis sempat terkendala, sehingga koin "
-            f"dikirim <b>manual oleh admin</b> ke wallet Anda.\n\n"
-            f"📝 <b>ID Order:</b> <code>{html.escape(order.order_id)}</code>\n"
-            f"🪙 <b>Jumlah:</b> <b>{crypto_str}</b> ({html.escape(str(network or '-'))})\n"
-            f"🏦 <b>Wallet Tujuan:</b> <code>{html.escape(order.buyer_wallet or '-')}</code>\n\n"
-            f"📸 <i>Screenshot bukti transfer terlampir di atas.</i>\n\n"
-            f"✅ <b>Status: SELESAI / COMPLETED</b>\n\n"
-            f"Silakan periksa saldo wallet Anda.\n\n"
-            f"Terimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
-            f"Testimoni : t.me/TokoKoinID\n"
-            f"Channel : t.me/ROBHSN_STORE_SELLER"
-        )
-        menu_keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
-        ]])
-
-        sent_to_user = False
-        try:
-            await context.bot.send_photo(
-                chat_id=order.telegram_id, photo=photo_file_id,
-                caption=user_caption, reply_markup=menu_keyboard, parse_mode="HTML",
-            )
-            sent_to_user = True
-        except Exception as send_err:
-            logger.error(f"Gagal mengirim SS transfer manual ke user {order.telegram_id}: {send_err}")
-
-        try:
-            from services.testimony_service import schedule_transaction_testimony
-            schedule_transaction_testimony(context.bot, order, db=db)
-        except Exception as texc:
-            logger.warning(f"Gagal trigger testimony order {order.order_id}: {texc}")
-
+        sent_to_user = await _notify_manual_payout_user(
+            context.bot, order, proof_line="📸 <i>Screenshot bukti transfer terlampir di atas.</i>",
+            photo_file_id=photo_file_id)
+        _schedule_manual_testimony(context.bot, order, db)
         await update.message.reply_text(
-            f"✅ <b>SS TRANSFER MANUAL DITERUSKAN!</b>\n\n"
-            f"Order ID: <code>{_esc(order_id)}</code>\n"
-            f"User ID: <code>{order.telegram_id}</code>\n"
-            f"Status Order: <b>COMPLETED</b>\n"
-            f"Pengiriman ke user: {'Sukses' if sent_to_user else 'Gagal (User memblokir bot/chat error)'}",
-            parse_mode="HTML",
-        )
+            _manual_payout_admin_report(order, "SS TRANSFER MANUAL DITERUSKAN!", sent_to_user), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error handle_admin_payout_proof {order_id}: {e}", exc_info=True)
         await update.message.reply_text("❌ Gagal memproses SS transfer manual.")
@@ -4524,7 +4689,7 @@ async def admin_approve_swap_callback(update: Update, context: ContextTypes.DEFA
 
         # expired tetap boleh: deposit yang dieskalasi sering baru diputuskan setelah 10 menit lewat.
         if order.order_type != "swap" or order.status not in ("WAITING_CRYPTO_DEPOSIT", "expired", "CRYPTO_CONFIRMED"):
-            hint = (" Selesaikan lewat 📸 Kirim SS Transfer Manual." if order.status == "manual_review" else "")
+            hint = (" Selesaikan lewat ✅ Selesaikan Pengiriman Manual." if order.status == "manual_review" else "")
             await query.answer(f"Order berstatus {order.status} — tidak dapat diproses otomatis.{hint}", show_alert=True)
             return
         if not confirmed:
@@ -4637,7 +4802,7 @@ async def admin_reject_swap_callback(update: Update, context: ContextTypes.DEFAU
             status = current.status if current else "-"
             if status == "manual_review":
                 message = ("⛔ Deposit convert ini SUDAH DITERIMA (status MANUAL_REVIEW) — tidak bisa ditolak. "
-                           "Kirim koin manual lalu tekan 📸 Kirim SS Transfer Manual.")
+                           "Kirim koin manual lalu tekan ✅ Selesaikan Pengiriman Manual.")
             else:
                 message = f"⛔ Order berstatus {status} — tidak bisa ditolak dari sini."
             await query.answer(message, show_alert=True)
@@ -4686,7 +4851,7 @@ async def admin_swap_manual_callback(update: Update, context: ContextTypes.DEFAU
             await query.answer("❌ Order convert tidak ditemukan.", show_alert=True)
             return
         if order.status not in ("WAITING_CRYPTO_DEPOSIT", "expired"):
-            hint = (" Sudah manual: kirim koin lalu tekan 📸 Kirim SS Transfer Manual."
+            hint = (" Sudah manual: kirim koin lalu tekan ✅ Selesaikan Pengiriman Manual."
                     if order.status == "manual_review" else "")
             await query.answer(f"ℹ️ Order berstatus {order.status} — tidak dipindah.{hint}", show_alert=True)
             return
@@ -4738,7 +4903,7 @@ async def admin_swap_manual_callback(update: Update, context: ContextTypes.DEFAU
             f"🛠 <b>PROSES MANUAL CONVERT</b>\n\n{order_detail_block(order, db)}\n\n"
             f"TX deposit: <code>{html.escape(tx_hash)}</code>\n\n"
             f"Kirim koin ke wallet tujuan sesuai keputusanmu (nominal penuh / sesuai deposit yang "
-            f"benar-benar diterima / refund ke user), lalu tekan tombol di bawah dan kirim SS transfer.",
+            f"benar-benar diterima / refund ke user), lalu tekan tombol di bawah dan kirim bukti (SS / TX hash), atau tandai selesai.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[manual_payout_button(order_id)]]),
         )
@@ -5189,6 +5354,10 @@ async def admin_interactive_text_router(update: Update, context: ContextTypes.DE
         # 0. Jadwal maintenance (setelah tombol 🗓 Jadwalkan di panel Pause)
         from bot.handlers.admin_pause import handle_schedule_text
         if await handle_schedule_text(update, context):
+            return True
+
+        # 0'. TX hash pengiriman manual (menu Selesaikan Pengiriman Manual → 🔗 Kirim TX Hash)
+        if await handle_admin_payout_txhash(update, context):
             return True
 
         # 0a. Kirim Reward — daftar penerima + nominal (satu orang per baris)

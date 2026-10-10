@@ -1,4 +1,4 @@
-"""bot/utils/manual_payout.py — Tombol "kirim SS transfer manual" untuk payout crypto yang gagal.
+"""bot/utils/manual_payout.py — Tombol "Selesaikan Pengiriman Manual" untuk payout crypto yang gagal (SS, TX hash, atau tanpa bukti).
 
 Dipakai saat auto-payout gagal (mis. RPC error): admin mengirim crypto sendiri dari wallet,
 lalu mengirim screenshot transfer ke bot. Bot meneruskannya ke user dan menyelesaikan order.
@@ -14,7 +14,7 @@ ALLOWED_STATUSES = ("manual_review", "payout_broadcasted")
 
 
 def manual_payout_button(order_id: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton("📸 Kirim SS Transfer Manual", callback_data=f"{CALLBACK_PREFIX}{order_id}")
+    return InlineKeyboardButton("✅ Selesaikan Pengiriman Manual", callback_data=f"{CALLBACK_PREFIX}{order_id}")
 
 
 def manual_payout_block_reason(order) -> str:

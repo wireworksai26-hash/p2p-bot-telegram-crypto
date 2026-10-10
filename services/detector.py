@@ -173,7 +173,7 @@ class DepositDetector:
                         f"{order_detail_block(order, db)}\n\n"
                         f"Bot berhenti saat mengirim, jadi koin <b>mungkin sudah terkirim</b>. Cek explorer "
                         f"wallet tujuan dulu. Bila belum masuk, kirim manual lalu tekan tombol di bawah "
-                        f"dan kirim SS transfer.",
+                        f"dan kirim bukti (SS / TX hash).",
                         reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                         kind="error", butuh_tindakan=True)
             return
@@ -559,7 +559,7 @@ class DepositDetector:
                             f"TX payout: <code>{_esc(str(order.payout_tx_hash or '-'))}</code>\n\n"
                             "Periksa receipt dan riwayat wallet terlebih dahulu. "
                             "Jangan kirim ulang jika status broadcast belum pasti.\n"
-                            "Jika koin dikirim manual, tekan tombol di bawah dan kirim SS transfer "
+                            "Jika koin dikirim manual, tekan tombol di bawah dan kirim bukti (SS / TX hash) "
                             "agar diteruskan ke user."
                         )
                         await notify_admins(
@@ -699,7 +699,7 @@ class DepositDetector:
                 buttons = [[manual, reject]]
                 steps = ("Nominal di luar toleransi, jadi bot <b>tidak bisa</b> mengirim koin otomatis.\n"
                          "• Deposit milik user ini → tekan <b>🛠 Proses Manual</b>, kirim koin sendiri "
-                         "(penuh / sesuai deposit diterima / refund), lalu kirim SS transfer.\n"
+                         "(penuh / sesuai deposit diterima / refund), lalu kirim bukti (SS / TX hash).\n"
                          "• Bukan milik user ini → tekan <b>❌ Tolak</b>.")
             else:
                 buttons = [[InlineKeyboardButton("✅ Proses Convert (sudah dicek)", callback_data=f"admin_approve_swap_{order.order_id}")],

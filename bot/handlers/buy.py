@@ -1354,7 +1354,7 @@ async def finalize_gopay_buy_payment(
                 f"{order_detail_block(order, db)}\n\n"
                 f"Error: {_esc(str(result['error_message']))}{jejak}\n\n"
                 f"Pembayaran sudah diterima tapi pengiriman crypto gagal. Kirim manual, lalu "
-                f"tekan tombol di bawah dan kirim SS transfer agar diteruskan ke user."
+                f"tekan tombol di bawah dan kirim bukti (SS / TX hash) agar diteruskan ke user."
             )
             buttons = [[manual_payout_button(order.order_id)]]
             if order.payment_method == "BOT_BALANCE" and not tx_hash_gagal:

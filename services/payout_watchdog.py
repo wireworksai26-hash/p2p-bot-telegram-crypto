@@ -235,7 +235,7 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                     f"{order_detail_block(order, db)}\n\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
                                     f"Kirim ulang secara manual setelah verifikasi, lalu tekan tombol "
-                                    f"di bawah dan kirim SS transfer agar diteruskan ke user."
+                                    f"di bawah dan kirim bukti (SS / TX hash) agar diteruskan ke user."
                                 ),
                                 reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                                 kind="error",
@@ -261,7 +261,7 @@ async def reconcile_broadcasted_payouts(bot=None) -> int:
                                     f"{order_detail_block(order, db)}\n\n"
                                     f"TX: <code>{tx_hash}</code>{' — ' + url if url else ''}\n"
                                     f"Cek manual sebelum mengambil tindakan. Jika koin dikirim manual, "
-                                    f"tekan tombol di bawah dan kirim SS transfer."
+                                    f"tekan tombol di bawah dan kirim bukti (SS / TX hash)."
                                 ),
                                 reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                                 kind="error",
