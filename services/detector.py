@@ -473,13 +473,24 @@ class DepositDetector:
             db.commit()
             db.refresh(order)
 
-            if not reserve_order_inventory(
-                db,
-                order.order_id,
-                order.target_network,
-                order.target_crypto_symbol,
-                Decimal(str(order.target_crypto_amount)),
-            ):
+            target_amount = Decimal(str(order.target_crypto_amount))
+            reserved = reserve_order_inventory(
+                db, order.order_id, order.target_network, order.target_crypto_symbol, target_amount)
+            if not reserved:
+                # Sama seperti Beli: data stok bisa basi (>15 menit) atau admin baru restock, jadi
+                # saldo on-chain disinkron ulang sekali sebelum order diserahkan ke admin.
+                from services.wallet_sync import sync_wallet_balances
+                stock_sym = ("MATIC" if (order.target_network or "").upper() == "POLYGON"
+                             and (order.target_crypto_symbol or "").upper() == "POL"
+                             else order.target_crypto_symbol)
+                try:
+                    await sync_wallet_balances([(stock_sym, order.target_network)])
+                except Exception as exc:
+                    logger.warning("Sinkron ulang stok %s (%s) gagal: %s", stock_sym, order.target_network, exc)
+                reserved = reserve_order_inventory(
+                    db, order.order_id, order.target_network, order.target_crypto_symbol, target_amount)
+            stock_out = not reserved
+            if stock_out:
                 result = {
                     "success": False,
                     "tx_hash": "",
@@ -551,32 +562,72 @@ class DepositDetector:
                 db.commit()
                 if bot_app:
                     try:
-                        admin_msg = (
-                            f"🚨 <b>AUTO-PAYOUT GAGAL (CONVERT)</b>\n\n"
-                            f"{order_detail_block(order, db)}\n\n"
-                            f"Deposit user sudah diterima; pengiriman koin tujuan gagal atau belum pasti.\n"
-                            f"Error: {_esc(str(order.failure_reason or '-'))}\n"
-                            f"TX payout: <code>{_esc(str(order.payout_tx_hash or '-'))}</code>\n\n"
-                            "Periksa receipt dan riwayat wallet terlebih dahulu. "
-                            "Jangan kirim ulang jika status broadcast belum pasti.\n"
-                            "Jika koin dikirim manual, tekan tombol di bawah dan kirim bukti (SS / TX hash) "
-                            "agar diteruskan ke user."
-                        )
+                        if stock_out:
+                            admin_msg, user_msg = self._stock_out_texts(db, order)
+                        else:
+                            admin_msg = (
+                                f"🚨 <b>AUTO-PAYOUT GAGAL (CONVERT)</b>\n\n"
+                                f"{order_detail_block(order, db)}\n\n"
+                                f"Deposit user sudah diterima; pengiriman koin tujuan gagal atau belum pasti.\n"
+                                f"Error: {_esc(str(order.failure_reason or '-'))}\n"
+                                f"TX payout: <code>{_esc(str(order.payout_tx_hash or '-'))}</code>\n\n"
+                                "Periksa receipt dan riwayat wallet terlebih dahulu. "
+                                "Jangan kirim ulang jika status broadcast belum pasti.\n"
+                                "Jika koin dikirim manual, tekan tombol di bawah dan kirim bukti (SS / TX hash) "
+                                "agar diteruskan ke user."
+                            )
+                            user_msg = (
+                                f"⏳ <b>Convert sedang diproses manual oleh admin</b>\n\n"
+                                f"Order: <code>{_esc(order.order_id)}</code>\n"
+                                f"✅ Deposit kamu sudah kami terima dan <b>aman</b>.\n"
+                                f"Pengiriman koin tujuan secara otomatis sedang terkendala, jadi admin akan "
+                                f"mengirimnya secara manual. Kamu akan menerima notifikasi begitu koin terkirim.\n\n"
+                                f"<b>Tidak perlu mengirim ulang.</b> 🙏"
+                            )
                         await notify_admins(
                             bot_app, admin_msg,
                             reply_markup=InlineKeyboardMarkup([[manual_payout_button(order.order_id)]]),
                             kind="convert", butuh_tindakan=True,
                         )
-                        await safe_send_message(
-                            bot_app,
-                            order.telegram_id,
-                            f"⏳ <b>Convert memerlukan bantuan admin</b>\n\n"
-                            f"Order: <code>{order.order_id}</code>\n"
-                            "Pembayaran/deposit sudah diterima, tetapi pengiriman koin tujuan "
-                            "belum dapat dilakukan otomatis. Silakan hubungi admin. 🙏",
-                        )
+                        await safe_send_message(bot_app, order.telegram_id, user_msg)
                     except Exception as exc:
                         logger.warning("Gagal notif admin payout gagal: %s", exc)
+
+    @staticmethod
+    def _stock_out_texts(db, order) -> tuple:
+        """(alert admin, kabar user) saat stok koin tujuan Convert habis setelah deposit user masuk."""
+        from database.crud import get_available_inventory
+        sym, net = order.target_crypto_symbol, order.target_network
+        target = format_crypto(float(order.target_crypto_amount or 0), sym)
+        deposit = format_crypto_copy(order.crypto_amount or 0, order.crypto_symbol, exact=True)
+        try:
+            available = get_available_inventory(db, net, sym)
+        except Exception:
+            available = None
+        available_text = format_crypto(float(available), sym) if available is not None else "belum terbaca"
+        admin_msg = (
+            f"📦 <b>STOK KOIN TUJUAN HABIS — CONVERT PERLU DIKIRIM MANUAL</b>\n\n"
+            f"{order_detail_block(order, db)}\n\n"
+            f"Deposit user <b>sudah masuk</b> ke wallet toko, tetapi stok tidak cukup untuk mengirim "
+            f"<b>{target}</b> ({_esc(str(net))}).\n"
+            f"Stok tersedia saat ini: <b>{available_text}</b>\n"
+            f"✅ <b>Belum ada koin yang terkirim</b>, jadi aman dikirim manual.\n\n"
+            f"<b>Langkah admin:</b>\n"
+            f"1. Kirim <b>{target}</b> ({_esc(str(net))}) ke wallet tujuan user di atas.\n"
+            f"2. Tekan <b>✅ Selesaikan Pengiriman Manual</b> lalu pilih screenshot / TX hash / tanpa bukti.\n"
+            f"3. Isi ulang stok {_esc(str(sym))} ({_esc(str(net))}) agar Convert berikutnya bisa otomatis lagi.\n\n"
+            f"<i>User sudah dikabari bahwa depositnya aman dan sedang menunggu pengiriman admin.</i>"
+        )
+        user_msg = (
+            f"⏳ <b>Convert sedang diproses manual oleh admin</b>\n\n"
+            f"Order: <code>{_esc(order.order_id)}</code>\n"
+            f"✅ Deposit <b>{deposit}</b> ({_esc(str(order.network))}) kamu sudah kami terima dan <b>aman</b>.\n"
+            f"📦 Stok {_esc(str(sym))} ({_esc(str(net))}) sedang habis, jadi <b>{target}</b> belum bisa "
+            f"dikirim otomatis.\n\n"
+            f"Admin akan mengirim koinmu secara manual. Kamu akan menerima notifikasi begitu koin terkirim.\n\n"
+            f"<b>Tidak perlu mengirim ulang.</b> 🙏"
+        )
+        return admin_msg, user_msg
 
     # ---------------- Guard hash kiriman user ----------------
     @staticmethod
