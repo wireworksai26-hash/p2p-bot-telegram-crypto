@@ -4186,23 +4186,27 @@ async def refreshwallet_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def _finish_admin_action(query, tag: str) -> None:
-    """Tandai pesan admin setelah approve/reject. Pesan foto -> caption, notifikasi teks -> teks;
-    bila pesannya Antrean Order, antrean dimuat ulang (bukan diganti satu order)."""
+    """Tandai pesan admin (tempat tombol diklik) setelah approve/reject."""
+    await _mark_admin_message(query.message, tag)
+
+
+async def _mark_admin_message(msg, tag: str) -> None:
+    """Pesan foto -> caption, notifikasi teks -> teks; bila pesannya Antrean Order,
+    antrean dimuat ulang (bukan diganti satu order)."""
     try:
-        msg = query.message
         if msg is None:
             return
         if msg.caption is not None:
-            await query.edit_message_caption(caption=f"{msg.caption_html}\n\n{tag}", parse_mode="HTML")
+            await msg.edit_caption(caption=f"{msg.caption_html}\n\n{tag}", parse_mode="HTML")
         elif "ANTREAN ORDER AKTIF" in (msg.text or ""):
             db = SessionLocal()
             try:
                 text, markup = build_admin_orders_view(db)
             finally:
                 db.close()
-            await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+            await msg.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
         else:
-            await query.edit_message_text(text=f"{msg.text_html or ''}\n\n{tag}", parse_mode="HTML")
+            await msg.edit_text(text=f"{msg.text_html or ''}\n\n{tag}", parse_mode="HTML")
     except Exception as edit_err:
         logger.debug(f"Tandai pesan admin gagal (aksi tetap berjalan): {edit_err}")
 
@@ -4288,6 +4292,8 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("✅ Ya, Refund Saldo", callback_data=f"admin_reject_buy_yes_{order_id}"),
                     ]]),
+                    # Dibalas ke pesan asal agar setelah "Ya" pesan itu (Antrean Order) ikut diperbarui.
+                    do_quote=True,
                 )
                 return
             refund = crud.reject_and_refund_bot_balance_order(db, order_id, user_id)
@@ -4317,7 +4323,12 @@ async def admin_reject_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 f"Dana sebesar <b>{format_idr(refund_amount)}</b> telah otomatis dikembalikan ke <b>Saldo Bot</b> Anda.",
             )
             await query.answer("Order ditolak & Saldo Bot berhasil di-refund ke user.")
-            await _finish_admin_action(query, "❌ <b>DITOLAK OLEH ADMIN (SALDO DI-REFUND)</b>")
+            tag = "❌ <b>DITOLAK OLEH ADMIN (SALDO DI-REFUND)</b>"
+            await _finish_admin_action(query, tag)
+            if order_id_confirmed:
+                # Tombol "Ya" ada di pesan konfirmasi terpisah; pesan asal (Antrean Order / notifikasi
+                # manual review) juga diperbarui agar order yang sudah ditolak tidak tertinggal di sana.
+                await _mark_admin_message(getattr(query.message, "reply_to_message", None), tag)
             return
 
         if order.payment_method == "GOPAY_QRIS":
