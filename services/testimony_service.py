@@ -79,6 +79,8 @@ def get_explorer_url_for_tx(network: Optional[str], tx_hash: Optional[str]) -> s
         "TRC20": f"https://tronscan.org/#/transaction/{clean_hash}",
         "TRON": f"https://tronscan.org/#/transaction/{clean_hash}",
         "SUI": f"https://suiscan.xyz/mainnet/tx/{clean_hash}",
+        # AptosSender tidak punya config["explorer"]; format URL sama dengan explorer_url payout-nya.
+        "APTOS": f"https://explorer.aptoslabs.com/txn/{clean_hash}?network=mainnet",
         "TON": f"https://tonviewer.com/transaction/{clean_hash}",
         "BTC": f"https://mempool.space/tx/{clean_hash}",
         "BITCOIN": f"https://mempool.space/tx/{clean_hash}",
