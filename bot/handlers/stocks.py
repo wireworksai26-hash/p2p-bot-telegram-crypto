@@ -64,13 +64,7 @@ async def fetch_usd_prices(symbols: list[str]) -> dict[str, float]:
         except Exception:
             pass
         return symbol, 0.0
-    async def fetch_idr_rate():
-        try:
-            info = await price_service.get_price("USDT")
-            return "_IDR", float((info or {}).get("market_price_idr", 0))
-        except Exception:
-            return "_IDR", 0.0
-    return dict(await asyncio.gather(fetch_idr_rate(), *(fetch(symbol) for symbol in symbols)))
+    return dict(await asyncio.gather(*(fetch(symbol) for symbol in symbols)))
 
 
 CHAIN_SHORT_LABELS = {
@@ -103,18 +97,19 @@ def format_stock_qty(balance: float) -> str:
     return f"{balance:.4g}"
 
 
-def format_rp_compact(value: float) -> str:
-    """Rupiah ringkas: Rp467 · Rp269rb · Rp1,2jt · Rp1,8M (miliar)."""
-    value = round(max(float(value), 0.0))
-    if value < 1000:
-        return f"Rp{value}"
-    if round(value / 1000) < 1000:
-        return f"Rp{round(value / 1000)}rb"
-    for divisor, unit in ((1_000_000, "jt"), (1_000_000_000, "M")):
+def format_usd_compact(value: float) -> str:
+    """Nilai USD ringkas: $0 · <$0.01 · $13.28 · $1.2k · $1.8M (tanpa pemisah ribuan)."""
+    value = max(float(value), 0.0)
+    if value == 0:
+        return "$0"
+    if value < 0.01:
+        return "<$0.01"
+    if round(value, 2) < 1000:
+        return f"${value:.2f}"
+    for divisor, unit in ((1_000, "k"), (1_000_000, "M")):
         scaled = round(value / divisor, 1)
         if scaled < 1000 or unit == "M":
-            text = f"{scaled:.1f}".replace(".", ",").removesuffix(",0")
-            return f"Rp{text}{unit}"
+            return f"${scaled:.1f}".removesuffix(".0") + unit
 
 
 def _stock_row(label: str, emoji: str, wallet, prices: dict, now) -> tuple[float, str]:
@@ -123,10 +118,10 @@ def _stock_row(label: str, emoji: str, wallet, prices: dict, now) -> tuple[float
     balance = float(wallet.balance or 0)
     fresh = wallet_balance_is_fresh(wallet, now)
     if fresh:
-        usd = balance * prices.get(symbol, 0)
-        idr_rate = prices.get("_IDR", 0)
-        rupiah = format_rp_compact(usd * idr_rate) if idr_rate > 0 and (usd > 0 or balance == 0) else ""
-        cells = f"{label:<9}{format_stock_qty(balance):>9}  {rupiah}".rstrip()
+        price = prices.get(symbol, 0)
+        usd = balance * price
+        value = format_usd_compact(usd) if price > 0 or balance == 0 else ""
+        cells = f"{label:<9}{format_stock_qty(balance):>9}  {value}".rstrip()
         return usd, f"{emoji} <code>{escape(cells)}</code>"
     if network in MANUAL_PAYOUT_NETWORKS:
         # Jaringan kirim manual (admin): tidak ada saldo otomatis, jangan tampilkan error.
@@ -145,8 +140,7 @@ def _stock_card(title_html: str, rows: list[tuple[float, str]]) -> str:
 def build_stock_pages(balances, prices: dict, now=None) -> list[str]:
     """Kartu ringkas (blockquote expandable) per grup; dipecah bila melebihi batas pesan.
 
-    `prices`: harga USD per simbol, plus kunci opsional "_IDR" (kurs USD->IDR)
-    untuk kolom nilai Rupiah.
+    `prices`: harga USD per simbol untuk kolom nilai USD.
     """
     now = now or datetime.utcnow()
     grouped = {}

@@ -349,7 +349,7 @@ class Presentation(unittest.TestCase):
         self.assertNotIn("Gagal membaca saldo", text)
         self.assertNotIn("(Kosong)", text)
 
-    def test_kartu_ringkas_qty_dan_rupiah(self):
+    def test_kartu_ringkas_qty_dan_usd(self):
         now = datetime.utcnow()
 
         def fresh(net, sym, bal):
@@ -357,22 +357,25 @@ class Presentation(unittest.TestCase):
 
         rows = [fresh("BSC", "USDT", 13.28), fresh("TON", "USDT", 15.04),
                 fresh("BASE", "ETH", 0.0105), fresh("SOLANA", "SOL", 0.0996)]
-        prices = {"USDT": 1.0, "ETH": 4000.0, "SOL": 130.0, "_IDR": 17900.0}
+        prices = {"USDT": 1.0, "ETH": 4000.0, "SOL": 130.0}
         text = "\n".join(build_stock_pages(rows, prices, now))
-        self.assertRegex(text, r"TON\s+15\.04\s+Rp269rb")
-        self.assertRegex(text, r"BEP20\s+13\.28\s+Rp238rb")
-        self.assertRegex(text, r"Base\s+0\.0105\s+Rp7\d\drb")
+        self.assertRegex(text, r"TON\s+15\.04\s+\$15\.04")
+        self.assertRegex(text, r"BEP20\s+13\.28\s+\$13\.28")
+        self.assertRegex(text, r"Base\s+0\.0105\s+\$42\.00")
+        self.assertRegex(text, r"SOL\s+0\.0996\s+\$12\.95")
+        self.assertNotIn("Rp", text)
         self.assertLess(text.index("TON "), text.index("BEP20"))  # nilai terbesar di atas
         self.assertIn("<b>USDT + CHAIN</b>", text)
         self.assertIn("<b>Token Lainnya</b>", text)
 
-    def test_format_rp_compact(self):
-        self.assertEqual(stocks.format_rp_compact(467), "Rp467")
-        self.assertEqual(stocks.format_rp_compact(269_300), "Rp269rb")
-        self.assertEqual(stocks.format_rp_compact(1_250_000), "Rp1,2jt")
-        self.assertEqual(stocks.format_rp_compact(2_000_000), "Rp2jt")
-        self.assertEqual(stocks.format_rp_compact(999_600), "Rp1jt")       # bukan "Rp1000rb"
-        self.assertEqual(stocks.format_rp_compact(1_791_500_000), "Rp1,8M")  # bukan "Rp1791,5jt"
+    def test_format_usd_compact(self):
+        self.assertEqual(stocks.format_usd_compact(0), "$0")
+        self.assertEqual(stocks.format_usd_compact(0.004), "<$0.01")
+        self.assertEqual(stocks.format_usd_compact(13.28), "$13.28")
+        self.assertEqual(stocks.format_usd_compact(5), "$5.00")
+        self.assertEqual(stocks.format_usd_compact(999.996), "$1k")        # bukan "$1000.00"
+        self.assertEqual(stocks.format_usd_compact(1_250), "$1.2k")
+        self.assertEqual(stocks.format_usd_compact(1_791_500), "$1.8M")    # bukan "$1791.5k"
 
     def test_format_stock_qty_tanpa_pemisah_ribuan(self):
         self.assertEqual(stocks.format_stock_qty(100_000), "100000")
