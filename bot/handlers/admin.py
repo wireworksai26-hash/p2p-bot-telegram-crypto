@@ -4235,10 +4235,19 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     full_text = broadcast_msg or ""
 
-    db = SessionLocal()
+    global _broadcast_task
+    if _broadcast_task is not None and not _broadcast_task.done():
+        await message.reply_text(
+            "⏳ Broadcast sebelumnya masih berjalan. Tunggu laporan selesai sebelum mengirim broadcast baru.")
+        return
+
     try:
-        users = crud.get_users_by_segment(db, segment)
-        if not users:
+        db = SessionLocal()
+        try:
+            targets = [u.telegram_id for u in crud.get_users_by_segment(db, segment)]
+        finally:
+            db.close()
+        if not targets:
             await message.reply_text(f"ℹ️ Tidak ada user pada segment {_segment_label(segment)}.")
             return
 
@@ -4249,21 +4258,32 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         else:
             mode = "Teks"
 
-        import time as _time
-        start_ts = _time.monotonic()
-
         await message.reply_text(
-            f"⏳ Mengirim siaran ({mode}) ke {len(users)} pengguna...\n"
-            f"📌 Segment: {_segment_label(segment)}"
+            f"⏳ Mengirim siaran ({mode}) ke {len(targets)} pengguna di latar belakang...\n"
+            f"📌 Segment: {_segment_label(segment)}\n"
+            f"Bot tetap melayani user selama broadcast berjalan. Laporan dikirim di sini setelah selesai."
         )
+        coro = _run_broadcast(context.bot, message, targets, full_text, photo_file_id, is_document, segment, mode)
+        application = getattr(context, "application", None)
+        _broadcast_task = application.create_task(coro) if application else asyncio.create_task(coro)
+    except Exception as e:
+        logger.error(f"Error broadcast: {e}", exc_info=True)
+        await message.reply_text("❌ Terjadi kesalahan saat mengirim broadcast.")
 
-        success_count = 0
-        fail_count = 0
 
-        for index, u in enumerate(users, start=1):
-            if await _send_broadcast_to_user(
-                context.bot, u.telegram_id, full_text, photo_file_id, is_document=is_document
-            ):
+# Broadcast berjalan di latar belakang. Dulu loop pengiriman di-await di dalam handler; karena bot
+# memproses update satu per satu, user lain tidak dilayani sampai broadcast selesai (bot terlihat
+# mati belasan menit untuk ribuan user).
+_broadcast_task = None
+
+
+async def _run_broadcast(bot, message, targets, full_text, photo_file_id, is_document, segment, mode) -> None:
+    import time as _time
+    start_ts = _time.monotonic()
+    success_count = fail_count = 0
+    try:
+        for index, telegram_id in enumerate(targets, start=1):
+            if await _send_broadcast_to_user(bot, telegram_id, full_text, photo_file_id, is_document=is_document):
                 success_count += 1
             else:
                 fail_count += 1
@@ -4271,11 +4291,10 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 await asyncio.sleep(BROADCAST_PACE_SECONDS)
 
         elapsed = _time.monotonic() - start_ts
-
         await message.reply_text(
             f"📊 <b>LAPORAN BROADCAST SELESAI</b>\n\n"
             f"📌 Segment: {_segment_label(segment)}\n"
-            f"📤 Total target   : <code>{len(users)} user</code>\n"
+            f"📤 Total target   : <code>{len(targets)} user</code>\n"
             f"✅ Terkirim        : <code>{success_count} user</code>\n"
             f"❌ Gagal (blocked) : <code>{fail_count} user</code>\n"
             f"⏱  Durasi         : <code>{elapsed:.1f} detik</code>\n"
@@ -4284,9 +4303,12 @@ async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
     except Exception as e:
         logger.error(f"Error broadcast: {e}", exc_info=True)
-        await message.reply_text("❌ Terjadi kesalahan saat mengirim broadcast.")
-    finally:
-        db.close()
+        try:
+            await message.reply_text(
+                f"❌ Broadcast berhenti karena error setelah {success_count} terkirim dan {fail_count} gagal "
+                f"dari {len(targets)} user.")
+        except Exception:
+            pass
 
 
 async def ban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

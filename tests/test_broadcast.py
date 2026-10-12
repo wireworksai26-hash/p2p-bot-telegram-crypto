@@ -211,6 +211,14 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg.document = None
         return msg
 
+    async def _broadcast(self, update, ctx):
+        """Handler hanya menjadwalkan pengiriman di latar belakang; tunggu sampai selesai."""
+        import bot.handlers.admin as admin_mod
+        admin_mod._broadcast_task = None
+        await broadcast_handler(update, ctx)
+        if admin_mod._broadcast_task is not None:
+            await admin_mod._broadcast_task
+
     def _run(self, message, admin=True, bot=None):
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=999),
@@ -231,7 +239,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         """No segment flag → all non-banned users."""
         bot = AsyncMock()
         update, ctx = self._run(self._msg(), bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
         # Should send to 2 non-banned users
         self.assertEqual(bot.send_message.await_count, 2)
 
@@ -242,7 +250,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
             self._msg(text="/broadcast --balance Saldo menunggu!"),
             bot=bot,
         )
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
         self.assertEqual(bot.send_message.await_count, 1)  # Only alice
 
     async def test_broadcast_report_includes_segment(self):
@@ -252,7 +260,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
             self._msg(text="/broadcast --balance Test"),
             bot=bot,
         )
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
         report = update.message.reply_text.call_args_list[-1].args[0]
         self.assertIn("LAPORAN BROADCAST", report)
         self.assertIn("Bersaldo", report)
@@ -264,7 +272,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
             self._msg(text="/broadcast --buyers"),
             bot=bot,
         )
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
         bot.send_message.assert_not_awaited()
         text = update.message.reply_text.call_args.args[0]
         self.assertIn("kosong", text)
@@ -272,7 +280,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
     async def test_non_admin_ditolak(self):
         bot = AsyncMock()
         update, ctx = self._run(self._msg(), admin=False, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
         bot.send_message.assert_not_awaited()
 
     async def test_broadcast_photo_direct(self):
@@ -282,7 +290,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast Promo Foto Langsung")
         msg.document = None
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_photo.await_count, 2)
         call_kwargs = bot.send_photo.call_args_list[0].kwargs
@@ -300,7 +308,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg.document = None
         msg.reply_to_message = replied_msg
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_photo.await_count, 2)
         call_kwargs = bot.send_photo.call_args_list[0].kwargs
@@ -317,7 +325,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg.document = None
         msg.reply_to_message = replied_msg
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_photo.await_count, 2)
         call_kwargs = bot.send_photo.call_args_list[0].kwargs
@@ -330,7 +338,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --balance Khusus yang punya saldo")
         msg.document = None
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         # Only alice has balance > 0
         self.assertEqual(bot.send_photo.await_count, 1)
@@ -345,7 +353,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg = self._msg(text=None, photo=[], caption="/broadcast Promo Dokumen Gambar")
         msg.document = doc_obj
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_document.await_count, 2)
         call_kwargs = bot.send_document.call_args_list[0].kwargs
@@ -360,7 +368,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg = self._msg(text=None, photo=[photo_obj], caption=f"/broadcast {long_text}")
         msg.document = None
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         # 2 users -> 2 send_photo (without full caption) + 2 send_message (with full text)
         self.assertEqual(bot.send_photo.await_count, 2)
@@ -382,7 +390,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
 
         bot.send_photo = AsyncMock(side_effect=mock_send_photo)
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         # It should have called send_photo twice per user (HTML then fallback plain text)
         self.assertEqual(bot.send_photo.await_count, 4)
@@ -394,7 +402,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         bot = AsyncMock()
         msg = self._msg(text="/broadcast --ready Base")
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_message.await_count, 2)
         sent_text = bot.send_message.call_args_list[0].kwargs["text"]
@@ -411,7 +419,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         msg = self._msg(text=None, photo=[photo_obj], caption="/broadcast --ready Base")
         msg.document = None
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_photo.await_count, 2)
         caption = bot.send_photo.call_args_list[0].kwargs["caption"]
@@ -425,7 +433,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         bot = AsyncMock()
         msg = self._msg(text="/broadcast Koin Ready Boskyuh")
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         self.assertEqual(bot.send_message.await_count, 2)
         sent_text = bot.send_message.call_args_list[0].kwargs["text"]
@@ -437,7 +445,7 @@ class TestBroadcastWithSegment(unittest.IsolatedAsyncioTestCase):
         bot = AsyncMock()
         msg = self._msg(text="/broadcast --ready")
         update, ctx = self._run(msg, bot=bot)
-        await broadcast_handler(update, ctx)
+        await self._broadcast(update, ctx)
 
         bot.send_message.assert_not_awaited()
         guide = update.message.reply_text.call_args.args[0]
