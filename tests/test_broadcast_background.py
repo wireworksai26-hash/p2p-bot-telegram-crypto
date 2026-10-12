@@ -57,11 +57,11 @@ class BroadcastLatarBelakang(unittest.IsolatedAsyncioTestCase):
         async def slow_send(bot, telegram_id, *args, **kwargs):
             await release.wait()
             sent.append(telegram_id)
-            return True
+            return "ok"
 
         message = _message()
         update = SimpleNamespace(effective_user=SimpleNamespace(id=1), message=message)
-        with patch.object(admin_mod, "_send_broadcast_to_user", new=slow_send):
+        with patch.object(admin_mod, "_deliver_broadcast", new=slow_send):
             await asyncio.wait_for(admin_mod.broadcast_handler(update, SimpleNamespace(bot=AsyncMock(), args=[])),
                                    timeout=2)
             self.assertEqual(sent, [], "handler tidak boleh menunggu pengiriman")
@@ -89,7 +89,7 @@ class BroadcastLatarBelakang(unittest.IsolatedAsyncioTestCase):
         message = _message()
         update = SimpleNamespace(effective_user=SimpleNamespace(id=1), message=message)
         context = SimpleNamespace(bot=AsyncMock(), args=[], application=SimpleNamespace(create_task=create_task))
-        with patch.object(admin_mod, "_send_broadcast_to_user", new=AsyncMock(return_value=True)):
+        with patch.object(admin_mod, "_deliver_broadcast", new=AsyncMock(return_value="ok")):
             await admin_mod.broadcast_handler(update, context)
             await created[0]
         self.assertEqual(len(created), 1)
