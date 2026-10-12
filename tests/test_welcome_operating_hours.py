@@ -1,4 +1,4 @@
-"""Dashboard user: bot jalan 24/7, kendala diproses admin pada jam operasional 08.00–23.59 WIB."""
+"""Dashboard user: bot beroperasi 24 jam setiap hari, kendala diproses admin pada jam operasional 08.00–23.59 WIB."""
 import os
 import unittest
 from types import SimpleNamespace
@@ -17,11 +17,11 @@ class JamOperasionalDiDashboard(unittest.TestCase):
     def test_teks_24_7_tebal_dan_jam_operasional_admin(self):
         text = build_welcome_message(SimpleNamespace(first_name="Budi"),
                                      SimpleNamespace(balance_idr=0, total_orders=0), 10, 5)
-        self.assertIn("<b>BOT TETAP BEROPERASI 24/7</b>", text)
+        self.assertIn("<b>BOT BEROPERASI 24 JAM SETIAP HARI</b>", text)
         self.assertIn("08.00 – 23.59 WIB", text)
         for kendala in ("transaksi error", "stok koin menipis", "pencairan Rupiah"):
             self.assertIn(kendala, text)
-        self.assertLess(text.index("24/7"), text.index("Silakan pilih menu"))
+        self.assertLess(text.index("24 JAM SETIAP HARI"), text.index("Silakan pilih menu"))
 
 
 if __name__ == "__main__":
