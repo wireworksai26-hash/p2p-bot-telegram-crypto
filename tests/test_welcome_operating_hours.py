@@ -19,8 +19,7 @@ class JamOperasionalDiDashboard(unittest.TestCase):
                                      SimpleNamespace(balance_idr=0, total_orders=0), 10, 5)
         self.assertIn("<b>BOT BEROPERASI 24 JAM SETIAP HARI</b>", text)
         self.assertIn("08.00 – 23.59 WIB", text)
-        for kendala in ("transaksi error", "stok koin menipis", "pencairan Rupiah"):
-            self.assertIn(kendala, text)
+        self.assertIn("Apabila ada kendala atau pertanyaan bisa Chat Admin di Jam Operasional 🙏🏻", text)
         self.assertLess(text.index("24 JAM SETIAP HARI"), text.index("Silakan pilih menu"))
 
 
