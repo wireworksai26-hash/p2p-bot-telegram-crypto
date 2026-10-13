@@ -940,14 +940,15 @@ def setup_scheduler():
         coalesce=True,
     )
 
-    # --- Low Balance Alert (configurable, default every 6 hours) ---
-    if getattr(settings, "ENABLE_LOW_BALANCE_ALERT", False):
+    # --- Peringatan stok menipis (aktif bawaan; matikan dengan STOCK_ALERT_ENABLED=false) ---
+    from services.stock_alert import ENABLED as STOCK_ALERT_ENABLED
+    if STOCK_ALERT_ENABLED:
         scheduler.add_job(
             _job_low_balance_alert,
             "interval",
-            hours=int(getattr(settings, "LOW_BALANCE_ALERT_HOURS", 6)),
+            minutes=5,
             id="low_balance_alert",
-            name="Alert admins if wallet balance is low",
+            name="Alert admins when coin stock runs low",
             max_instances=1,
             coalesce=True,
         )
@@ -1125,32 +1126,12 @@ async def _job_sync_wallet_balances():
 
 
 async def _job_low_balance_alert():
-    """Check wallet balances and alert admins if any are below threshold."""
+    """Peringatan stok koin menipis ke admin (lihat services/stock_alert.py)."""
     try:
-        from database.crud import get_low_balance_wallets
-
-        db = SessionLocal()
-        try:
-            low_wallets = get_low_balance_wallets(db)
-            if low_wallets:
-                from services.bot_runtime import bot_app
-                from bot.utils.telegram_utils import notify_admins
-                if bot_app:
-                    msg_lines = ["⚠️ <b>Low Balance Alert</b>\n"]
-                    for wallet in low_wallets:
-                        try:
-                            val = float(wallet.balance or 0)
-                            formatted_val = f"{val:.4f}".rstrip("0").rstrip(".") if val != 0 else "0"
-                        except Exception:
-                            formatted_val = str(wallet.balance)
-                        msg_lines.append(
-                            f"• {wallet.network} ({wallet.symbol}): {formatted_val}"
-                        )
-                    alert_msg = "\n".join(msg_lines)
-
-                    await notify_admins(bot_app, alert_msg, kind="topup")
-        finally:
-            db.close()
+        from services.bot_runtime import bot_app
+        from services.stock_alert import check_stock_levels
+        if bot_app:
+            await check_stock_levels(bot_app)
     except Exception as exc:
         logger.error("Low balance alert job failed: %s", exc, exc_info=True)
 

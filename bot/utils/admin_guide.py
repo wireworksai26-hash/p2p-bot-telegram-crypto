@@ -82,6 +82,9 @@ GUIDE_TOPICS = {
         "<b>Stok &amp; wallet</b>\n"
         "• <code>/refreshwallet</code> atau 🔄 Sync On-Chain: sinkron saldo hot wallet.\n"
         "• 💼 Hot Wallets &amp; Saldo: lihat stok per koin/jaringan.\n"
+        "• <b>📦 Peringatan stok menipis</b> dikirim otomatis (dicek tiap 5 menit): 🟠 menipis di bawah $15, "
+        "🔴 kritis di bawah $3, lengkap dengan alamat isi ulang. Pengingat tiap 6 jam selama belum diisi, "
+        "dan kabar ✅ saat stok aman lagi.\n"
         "• Isi ulang stok memakai wallet owner, lalu isi <code>OWNER_WALLET_ADDRESSES</code> di .env agar "
         "transfer isi ulang tidak pernah dianggap deposit user."
     )),
