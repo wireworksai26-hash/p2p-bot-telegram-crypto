@@ -35,7 +35,7 @@ MAX_CUSTOM_MESSAGE_CHARS = 700
 
 DEFAULT_REWARD_MESSAGE = (
     "🎁 <b>Ada hadiah untukmu!</b>\n"
-    "Admin HSN Store mengirimkan reward spesial. Semoga bermanfaat 🙏"
+    "Admin Toko Eceran ID mengirimkan reward spesial. Semoga bermanfaat 🙏"
 )
 
 _LINE_RE = re.compile(r"^\s*(@?[A-Za-z0-9_]{3,32}|\d{1,15})[\s:=,;]+(.+?)\s*$")

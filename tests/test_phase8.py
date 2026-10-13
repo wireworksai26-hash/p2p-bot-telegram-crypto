@@ -357,7 +357,7 @@ class TestReferralShareLink(unittest.TestCase):
             ref_code = f.read()
 
         # share_text places the message on top and the link below cleanly
-        self.assertIn("share_text = f\"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\\n{ref_link}\"", ref_code)
+        self.assertIn("share_text = f\"Yuk beli dan jual crypto mudah, cepat & terpercaya di Toko Eceran ID! Daftar lewat link ini ya:\\n{ref_link}\"", ref_code)
         self.assertIn("share_url = f\"https://t.me/share/url?url={quote(share_text)}\"", ref_code)
 
 

@@ -25,7 +25,7 @@ from bot.utils.emojis import (
 
 WELCOME_MESSAGE = (
     f"{E_WAVE()} <b>Halo {{name}}!</b>\n\n"
-    f"Selamat Datang di <b>TokoKoin ID</b> , Platform Jual Beli Koin terpercaya di Telegram. ☑️\n\n"
+    f"Selamat Datang di <b>Toko Eceran ID</b> , Platform Jual Beli Koin terpercaya di Telegram. ☑️\n\n"
     f"{E_ID()} <b>ID Telegram:</b> <code>{{chat_id}}</code>\n"
     f"{E_CROWN()} <b>Member Ke:</b> #{{user_num}}\n"
     f"{E_USER()} <b>Total Pengguna:</b> {{total_users}} member\n"

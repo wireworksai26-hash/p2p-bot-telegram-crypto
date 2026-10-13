@@ -80,7 +80,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f" <i>({format_idr(stats['held_reward'])} menunggu masa tahan)</i>" if stats.get("held_reward") else ""
         )
         text = (
-            f"🔗 <b>PROGRAM REFERRAL HSN STORE</b>\n\n"
+            f"🔗 <b>PROGRAM REFERRAL TOKO ECERAN ID</b>\n\n"
             f"🎁 <b>Link Referral Anda:</b>\n"
             f"<code>{ref_link}</code>\n\n"
             f"📊 <b>Statistik Referral Anda:</b>\n"
@@ -92,7 +92,7 @@ async def referral_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"{build_referral_rules_text(cfg)}"
         )
 
-        share_text = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! Daftar lewat link ini ya:\n{ref_link}"
+        share_text = f"Yuk beli dan jual crypto mudah, cepat & terpercaya di Toko Eceran ID! Daftar lewat link ini ya:\n{ref_link}"
         share_url = f"https://t.me/share/url?url={quote(share_text)}"
 
         keyboard = [
@@ -177,7 +177,7 @@ async def referral_leaderboard_handler(update: Update, context: ContextTypes.DEF
         keyboard = []
         try:
             bot_username = (await context.bot.get_me()).username
-            share_text = (f"Yuk beli dan jual crypto mudah, cepat & terpercaya di HSN Store! "
+            share_text = (f"Yuk beli dan jual crypto mudah, cepat & terpercaya di Toko Eceran ID! "
                           f"Daftar lewat link ini ya:\nhttps://t.me/{bot_username}?start=ref_{viewer_id}")
             keyboard.append([InlineKeyboardButton(
                 "📤 Bagikan Link ke Teman", url=f"https://t.me/share/url?url={quote(share_text)}")])
