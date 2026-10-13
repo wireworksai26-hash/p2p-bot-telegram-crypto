@@ -245,13 +245,16 @@ GUIDE_TOPICS = {
         "<code>/panduan</code> panduan ini · <code>/bantuan</code> panduan transaksi versi user\n\n"
         "<b>Emoji kustom</b>\n"
         "<code>/getemoji</code> · <code>/syncpack</code> · <code>/setemoji</code> · "
-        "<code>/listemojis</code> · <code>/resetemojis</code>"
+        "<code>/listemojis</code> · <code>/resetemojis</code> · <code>/cekemoji</code> cek emoji premium aktif"
     )),
     "tips": ("🛠 Troubleshooting", (
         "🛠 <b>TROUBLESHOOTING</b>\n\n"
         "<b>Menu ☰ admin tidak muncul</b>\n"
         "Kirim <code>/refreshmenu</code> dan baca hasilnya per chat. Lalu tutup &amp; buka lagi chat bot. "
         "Chat berstatus ❌ biasanya karena admin belum pernah <code>/start</code> ke bot.\n\n"
+        "<b>Emoji premium tampil sebagai emoji biasa</b>\n"
+        "Jalankan <code>/cekemoji</code>. Telegram hanya mengizinkan emoji premium bila pemilik bot "
+        "(akun pembuat bot di @BotFather) berlangganan Telegram Premium.\n\n"
         "<b>Perintah tidak merespons setelah diedit</b>\n"
         "Memang diabaikan. Kirim ulang sebagai pesan baru.\n\n"
         "<b>Testimoni tidak masuk channel</b>\n"

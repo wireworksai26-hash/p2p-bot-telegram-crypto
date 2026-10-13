@@ -35,6 +35,7 @@ ADMIN_COMMAND_MENU = [
     ("setreferral", "Atur program referral"),
     ("broadcast", "Siaran pesan ke semua user"),
     ("pause", "Pause transaksi & jadwal maintenance + pengingat"),
+    ("cekemoji", "Cek apakah emoji premium bot aktif"),
     ("ban", "Blokir user: /ban USER_ID"),
     ("unban", "Buka blokir user: /unban USER_ID"),
     ("testtesti", "Tes koneksi channel testimoni"),

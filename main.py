@@ -585,6 +585,8 @@ def build_bot_application() -> Application:
     application.add_handler(CommandHandler(["maintenance", "mt"], maintenance_command_handler))
     from bot.handlers.admin_pause import pause_command_handler
     application.add_handler(CommandHandler(["pause", "jeda"], pause_command_handler))
+    from bot.handlers.admin_emoji_check import emoji_check_handler
+    application.add_handler(CommandHandler("cekemoji", emoji_check_handler))
     from bot.handlers.admin import (
         refresh_menu_command_handler, guide_command_handler, user_guide_command_handler,
     )

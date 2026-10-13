@@ -149,7 +149,7 @@ class TestFallbackWhenTelegramRejectsCustomEmoji(unittest.TestCase):
         patcher = patch.object(settings, "ADMIN_CHAT_IDS", [999])
         patcher.start()
         self.addCleanup(patcher.stop)
-        an._STATE.update(rejects=0, accepts=0, warned=False)
+        an._STATE.update(rejects=0, accepts=0, warned=False, streak=0, last_reject=0.0)
         app = Application.builder().token("123456:TEST_ONLY").build()
         an.install_animated_bot(app)
         self.bot = app.bot
@@ -222,7 +222,7 @@ class TestUploadSurvivesFallback(unittest.TestCase):
     """F1: kirim ulang setelah emoji animasi ditolak tidak boleh mengirim file KOSONG (mis. foto QRIS dari BytesIO)."""
 
     def setUp(self):
-        an._STATE.update(rejects=0, accepts=0, warned=False)
+        an._STATE.update(rejects=0, accepts=0, warned=False, streak=0, last_reject=0.0)
         app = Application.builder().token("123456:TEST_ONLY").build()
         an.install_animated_bot(app)
         self.bot = app.bot

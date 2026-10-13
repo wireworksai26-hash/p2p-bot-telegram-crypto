@@ -13,6 +13,7 @@ Aman bila gagal: bila Telegram menolak pesan beranimasi, pesan dikirim ulang apa
 """
 
 import inspect
+import time
 import logging
 import re
 
@@ -116,7 +117,30 @@ def _is_admin_chat(chat_id) -> bool:
 # ke bot yang pemiliknya bukan Premium), pesan dikirim ulang dengan emoji Unicode biasa,
 # bukan gagal total. State disimpan di modul karena objek Bot PTB tidak boleh diberi atribut baru.
 # ---------------------------------------------------------------------------
-_STATE = {"rejects": 0, "accepts": 0, "warned": False}
+_STATE = {"rejects": 0, "accepts": 0, "warned": False, "streak": 0, "last_reject": 0.0}
+# Setelah ditolak berturut-turut, emoji animasi dilepas lebih dulu (hemat satu request gagal per
+# pesan), tetapi dicoba lagi tiap PROBE_SECONDS. Dulu dilepas permanen sampai restart, sehingga
+# walau pemilik bot sudah berlangganan Premium emoji tetap tampil biasa.
+PROBE_SECONDS = 600
+
+
+def _skip_custom_emoji(now: float) -> bool:
+    return _STATE["streak"] >= 2 and now - _STATE["last_reject"] < PROBE_SECONDS
+
+
+def record_custom_emoji_result(accepted: bool, now: float = None) -> None:
+    now = time.monotonic() if now is None else now
+    if accepted:
+        _STATE["accepts"] += 1
+        _STATE["streak"] = 0
+    else:
+        _STATE["rejects"] += 1
+        _STATE["streak"] += 1
+        _STATE["last_reject"] = now
+
+
+def custom_emoji_status() -> dict:
+    return {"accepts": _STATE["accepts"], "rejects": _STATE["rejects"], "streak": _STATE["streak"]}
 _TG_EMOJI_RE = re.compile(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", re.S)
 _METHODS = ("send_message", "edit_message_text", "send_photo", "send_document",
             "edit_message_caption", "edit_message_reply_markup")
@@ -200,9 +224,7 @@ class AnimatedExtBot(ExtBot):
         if not _has_custom_emoji(params):
             return await parent(self, **params)
 
-        # Setelah beberapa penolakan berturut-turut tanpa satu pun sukses, lepas emoji lebih dulu
-        # (hemat satu request gagal per pesan).
-        if _STATE["rejects"] >= 2 and _STATE["accepts"] == 0:
+        if _skip_custom_emoji(time.monotonic()):
             return await parent(self, **_strip_custom_emoji(params, self))
 
         # Upload (mis. foto QRIS dari BytesIO) sudah terbaca habis pada percobaan pertama; ingat posisinya
@@ -210,7 +232,7 @@ class AnimatedExtBot(ExtBot):
         streams = [(v, v.tell()) for v in params.values() if hasattr(v, "seek") and hasattr(v, "tell")]
         try:
             result = await parent(self, **params)
-            _STATE["accepts"] += 1
+            record_custom_emoji_result(True)
             return result
         except BadRequest as exc:
             if not _is_retryable(exc):
@@ -219,7 +241,7 @@ class AnimatedExtBot(ExtBot):
                 stream.seek(position)
             plain = _strip_custom_emoji(params, self)
             result = await parent(self, **plain)  # bila ini juga gagal, error aslinya yang naik
-            _STATE["rejects"] += 1
+            record_custom_emoji_result(False)
             if not _STATE["warned"]:
                 _STATE["warned"] = True
                 logger.warning(
