@@ -102,6 +102,8 @@ class Settings:
     # Promo: biaya withdraw gratis sampai tanggal ini (YYYY-MM-DD, WIB). Hanya tampilan; bot belum
     # memotong biaya withdraw apa pun.
     WITHDRAW_FREE_UNTIL = os.getenv("WITHDRAW_FREE_UNTIL", "2026-11-09")
+    # Hanya satu salinan bot yang boleh aktif (kunci database). Matikan (false) hanya untuk keperluan khusus.
+    SINGLE_INSTANCE_LOCK = os.getenv("SINGLE_INSTANCE_LOCK", "true").lower() in ("true", "1", "yes")
     # Jendela verifikasi deposit sell/convert (menit). Bot menjanjikan cek otomatis 24 jam.
     SELL_DEPOSIT_WINDOW_MINUTES = max(60, int(os.getenv("SELL_DEPOSIT_WINDOW_MINUTES", 1440)))
     # Jual/Convert: deposit hanya diterima lewat TX hash yang dikirim user. Auto-scan riwayat

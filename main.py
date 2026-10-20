@@ -1446,6 +1446,14 @@ async def main():
     # --- 1. Init database ---
     init_database()
 
+    # --- 1b. Pastikan hanya SATU salinan bot yang aktif (cegah Conflict getUpdates, sesi tombol
+    #         berakhir, dan job terjadwal berjalan dobel). Salinan kedua menunggu di sini. ---
+    instance_lock = None
+    if getattr(settings, "SINGLE_INSTANCE_LOCK", True):
+        from services.instance_lock import SingleInstanceLock
+        instance_lock = SingleInstanceLock(engine)
+        await instance_lock.acquire_blocking()
+
     # --- 2. Build Telegram bot application ---
     application = build_bot_application()
 
@@ -1477,6 +1485,8 @@ async def main():
 
         # Keep running until we receive a stop signal
         stop_event = asyncio.Event()
+        if instance_lock is not None and instance_lock.enabled:
+            asyncio.create_task(instance_lock.watch(stop_event.set))
 
         # Register signal handlers for graceful shutdown
         def _signal_handler():
@@ -1505,6 +1515,8 @@ async def main():
         # Stop bot polling
         await application.updater.stop()
         await application.stop()
+        if instance_lock is not None:
+            instance_lock.release()
 
     logger.info("Shutdown complete. Goodbye! 👋")
 
