@@ -22,7 +22,18 @@ from services.sender_wallet import check_sender_address  # noqa: E402
 
 USER = 94001
 GOOD = "0x" + "a" * 40
-HOT = "0x" + "1" * 40
+
+
+def hot_wallet() -> str:
+    """Alamat hot wallet BSC persis seperti yang dipakai kode (bergantung pada pengaturan yang termuat)."""
+    from config.assets import get_wallet_address
+    from services.crypto_sender import CryptoSenderFactory
+    try:
+        wallet = (getattr(CryptoSenderFactory.get_sender("BSC"), "wallet_address", "") or "").strip()
+    except Exception:
+        wallet = ""
+    return wallet or get_wallet_address("BSC")
+
 
 
 class CheckSenderAddress(unittest.TestCase):
@@ -35,8 +46,8 @@ class CheckSenderAddress(unittest.TestCase):
                 self.assertIn("tidak valid", check_sender_address("BSC", bad))
 
     def test_alamat_bot_sendiri_ditolak(self):
-        self.assertIn("milik bot sendiri", check_sender_address("BSC", HOT))
-        self.assertIn("milik bot sendiri", check_sender_address("BSC", HOT.upper().replace("0X", "0x")))
+        self.assertIn("milik bot sendiri", check_sender_address("BSC", hot_wallet()))
+        self.assertIn("milik bot sendiri", check_sender_address("BSC", hot_wallet().upper().replace("0X", "0x")))
 
     def test_wallet_owner_ditolak(self):
         owner = "0x" + "b" * 40
@@ -82,7 +93,7 @@ class SenderStepE2E(unittest.IsolatedAsyncioTestCase):
         shown = await self.say(USER, "bukan-alamat")
         self.assertIn("tidak valid", shown)
         self.assertIn("Alamat Wallet Pengirim", shown)
-        shown = await self.say(USER, HOT)  # alamat hot wallet bot sendiri
+        shown = await self.say(USER, hot_wallet())  # alamat hot wallet bot sendiri
         self.assertIn("milik bot sendiri", shown)
 
     async def test_jual_alamat_valid_lanjut_ke_rekening_lalu_tersimpan_di_order(self):
@@ -161,7 +172,7 @@ class DepositDariAlamatLain(unittest.IsolatedAsyncioTestCase):
             order = Order(
                 order_id="SELL-SND", telegram_id=USER, order_type="sell", crypto_symbol="USDT", network="BSC",
                 crypto_amount=Decimal("10"), price_per_unit=17000, nominal_idr=170000, fee_idr=3000,
-                total_idr=167000, buyer_wallet="BCA | 1 | X", deposit_wallet=HOT,
+                total_idr=167000, buyer_wallet="BCA | 1 | X", deposit_wallet=hot_wallet(),
                 sender_wallet=GOOD, status="WAITING_CRYPTO_DEPOSIT", created_at=datetime.utcnow(),
                 deposit_tx_hash="0x" + "ef" * 32)
             db.add(order)
