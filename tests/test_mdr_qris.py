@@ -1,7 +1,8 @@
-"""Pajak QRIS GoPay/GoBiz 0,3% untuk nominal > Rp 500.000 — Fase C.
+"""Pajak QRIS GoPay/GoBiz 0,3% untuk nominal > Rp 500.000.
 
-Aturan terkunci: dibebankan ke customer (total = nominal + MDR + kode unik),
-basis = nominal, scope = bayar via QRIS (beli + topup), pembulatan ke atas.
+Beli via QRIS: pajak DIPOTONG dari nilai koin bersama fee layanan, bukan ditambahkan ke tagihan
+(tagihan = nominal + kode unik; contoh klien: beli USDT Rp 850.000 -> bayar 850.000 + kode unik).
+Topup saldo tetap membebankan pajak ke pembayar. Basis = nominal, pembulatan ke atas.
 """
 import io
 import os
@@ -103,16 +104,25 @@ class TestMdrBuyQris(unittest.IsolatedAsyncioTestCase):
             "buy_wallet": "0x" + "2" * 40,
         }
 
-    async def test_qris_di_atas_500rb_total_termasuk_mdr(self):
+    async def test_qris_di_atas_500rb_tagihan_hanya_nominal_plus_kode_unik(self):
         context, seen = await self._async_confirm(501_000, "GOPAY_QRIS")
         order = self.db.query(Order).filter_by(order_id="ORD-MDR-BUY").first()
         self.assertIsNotNone(order)
-        self.assertEqual(order.mdr_idr, 1_503)
-        # Invarian: total tersimpan == nominal + MDR + kode unik == amount QRIS.
-        self.assertEqual(order.total_idr, 501_000 + 1_503 + order.unique_code)
+        self.assertEqual(order.mdr_idr, 1_503)  # tercatat, tetapi dipotong dari koin
+        # Invarian: tagihan == nominal + kode unik == amount QRIS (pajak TIDAK ditambahkan).
+        self.assertEqual(order.total_idr, 501_000 + order.unique_code)
         self.assertEqual(seen["amount"], order.total_idr)
         caption = context.bot.send_photo.call_args.kwargs.get("caption", "")
-        self.assertIn("Pajak QRIS 0,3%", caption)
+        self.assertIn("Pajak QRIS 0,3% (dipotong)", caption)
+        self.assertIn("-Rp 1.503", caption)
+
+    async def test_contoh_klien_850rb_bayar_850rb_plus_kode_unik(self):
+        context, seen = await self._async_confirm(850_000, "GOPAY_QRIS")
+        order = self.db.query(Order).filter_by(order_id="ORD-MDR-BUY").first()
+        self.assertEqual(order.mdr_idr, 2_550)
+        self.assertEqual(order.total_idr, 850_000 + order.unique_code)
+        self.assertLessEqual(order.unique_code, 400)
+        self.assertEqual(seen["amount"], 850_000 + order.unique_code)
 
     async def test_instruksi_qris_menjelaskan_kode_unik_di_langkah_2(self):
         """User tidak boleh bingung dengan angka kode unik di belakang nominal QRIS."""
@@ -155,6 +165,75 @@ class TestMdrBuyQris(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["amount"], order.total_idr)
         caption = context.bot.send_photo.call_args.kwargs.get("caption", "")
         self.assertNotIn("Pajak QRIS", caption)
+
+
+class TestApplyQrisPricing(unittest.TestCase):
+    """Harga per metode bayar: pajak QRIS dipotong dari nilai koin, bukan ditambah ke tagihan."""
+
+    PRICE = 17_000
+
+    def _ud(self, nominal, fee, coin=None, pct=0.0):
+        received = nominal - fee
+        return {
+            "buy_symbol": "USDT", "buy_network": "BSC", "buy_price_per_unit": self.PRICE,
+            "buy_nominal_idr": nominal, "buy_total_idr": nominal, "buy_base_fee_idr": fee, "buy_fee_idr": fee,
+            "buy_discount_amount": 0, "buy_discount_applied": False, "buy_discount_pct": None,
+            "buy_received_idr": received, "buy_crypto_amount": received / self.PRICE,
+            "buy_coin_target": coin, "buy_fee_category": "USD", "buy_disc_pct_active": pct,
+        }
+
+    def test_mode_nominal_koin_berkurang_sebesar_pajak(self):
+        from bot.handlers.buy import apply_qris_pricing
+        ud = self._ud(850_000, 12_000)
+        self.assertIsNone(apply_qris_pricing(ud, "GOPAY_QRIS"))
+        self.assertEqual(ud["buy_mdr_idr"], 2_550)
+        self.assertEqual(ud["buy_nominal_idr"], 850_000)
+        self.assertEqual(ud["buy_total_idr"], 850_000)  # yang dibayar tetap nominal
+        self.assertEqual(ud["buy_received_idr"], 850_000 - 12_000 - 2_550)
+        self.assertAlmostEqual(float(ud["buy_crypto_amount"]), (850_000 - 12_000 - 2_550) / self.PRICE)
+
+    def test_saldo_bot_tidak_kena_pajak_dan_ganti_metode_tidak_menumpuk(self):
+        from bot.handlers.buy import apply_qris_pricing
+        ud = self._ud(850_000, 12_000)
+        apply_qris_pricing(ud, "GOPAY_QRIS")
+        apply_qris_pricing(ud, "GOPAY_QRIS")  # dipilih dua kali: potongan tidak boleh ganda
+        self.assertEqual(ud["buy_received_idr"], 850_000 - 12_000 - 2_550)
+        apply_qris_pricing(ud, "BOT_BALANCE")
+        self.assertEqual(ud["buy_mdr_idr"], 0)
+        self.assertEqual(ud["buy_received_idr"], 850_000 - 12_000)
+        self.assertAlmostEqual(float(ud["buy_crypto_amount"]), (850_000 - 12_000) / self.PRICE)
+
+    def test_nominal_500rb_ke_bawah_tanpa_pajak(self):
+        from bot.handlers.buy import apply_qris_pricing
+        ud = self._ud(500_000, 9_000)
+        apply_qris_pricing(ud, "GOPAY_QRIS")
+        self.assertEqual(ud["buy_mdr_idr"], 0)
+        self.assertEqual(ud["buy_received_idr"], 491_000)
+
+    def test_mode_koin_jumlah_koin_tetap_persis_nominal_naik(self):
+        from bot.handlers.buy import apply_qris_pricing
+        from services.fee_service import calculate_fee_idr
+        coin = "50"  # 50 USDT x 17.000 = 850.000 nilai koin
+        nominal = 862_000  # nominal awal tanpa pajak (mode koin: nominal sudah termasuk fee)
+        fee = calculate_fee_idr(nominal, category="USD", symbol="USDT", network="BSC")
+        ud = self._ud(nominal, fee, coin=coin)
+        ud["buy_crypto_amount"] = 50.0
+        self.assertIsNone(apply_qris_pricing(ud, "GOPAY_QRIS"))
+        n, f, mdr = ud["buy_nominal_idr"], ud["buy_fee_idr"], ud["buy_mdr_idr"]
+        self.assertGreater(n, nominal)
+        self.assertEqual(mdr, calculate_qris_mdr(n))
+        self.assertEqual(ud["buy_total_idr"], n)
+        self.assertGreaterEqual(n - f - mdr, 850_000)        # nilai koin terpenuhi
+        self.assertLess(n - 1 - calculate_fee_idr(n - 1, category="USD", symbol="USDT", network="BSC")
+                        - calculate_qris_mdr(n - 1), 850_000)  # dan nominal ini yang terkecil
+        self.assertEqual(ud["buy_crypto_amount"], 50.0)
+
+    def test_mode_koin_melewati_batas_maksimal_ditolak(self):
+        from bot.handlers.buy import apply_qris_pricing
+        ud = self._ud(4_999_000, 100_000, coin="294.0")  # nilai koin 4,998 jt + pajak > Rp 5 jt
+        err = apply_qris_pricing(ud, "GOPAY_QRIS")
+        self.assertIsNotNone(err)
+        self.assertIn("terlalu besar", err)
 
 
 if __name__ == "__main__":

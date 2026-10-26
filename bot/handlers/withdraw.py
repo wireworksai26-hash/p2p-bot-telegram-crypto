@@ -29,7 +29,7 @@ from database.crud import (
     settle_withdraw_request,
 )
 from bot.utils.formatter import format_idr
-from bot.utils.telegram_utils import safe_send_message
+from bot.utils.telegram_utils import notify_admins, safe_send_message
 from bot.utils.validator import validate_amount_idr
 
 logger = logging.getLogger(__name__)
@@ -315,25 +315,63 @@ async def withdraw_confirm_handler(update: Update, context: ContextTypes.DEFAULT
     )
 
     from bot.utils.admin_alert import user_label
-    admin_text = (
-        "💸 <b>PERMINTAAN WITHDRAW SALDO BOT BARU</b>\n\n"
+    admin_text, admin_markup = admin_withdraw_card(
+        req_id, user_label(user.id, user=user), req_amount, bank_name, acc_no, acc_name,
+        title="PERMINTAAN WITHDRAW SALDO BOT BARU")
+    # Lewat jalur notifikasi yang sama dengan order (topik grup + DM admin); dulu hanya DM
+    # ke ADMIN_CHAT_IDS sehingga admin yang memantau topik tidak pernah melihat withdraw.
+    await notify_admins(context.bot, admin_text, reply_markup=admin_markup, kind="topup", butuh_tindakan=True)
+
+
+def admin_withdraw_card(req_id, user_html, amount, bank_name, acc_no, acc_name, title="WITHDRAW SALDO BOT"):
+    """Kartu withdraw untuk admin: nominal dan nomor rekening masing-masing bisa disalin sekali tap."""
+    from bot.utils.admin_alert import idr_copy
+    text = (
+        f"💸 <b>{title}</b>\n\n"
         f"🎫 ID: <code>WD-{req_id}</code>\n"
-        f"User: {user_label(user.id, user=user)}\n"
-        f"Nominal: <b>{format_idr(req_amount)}</b>\n"
-        f"Tujuan: <b>{_esc(bank_name)}</b>\n"
-        f"No: <code>{_esc(acc_no)}</code>\n"
-        f"a.n: <b>{_esc(acc_name)}</b>\n\n"
+        f"User: {user_html}\n"
+        f"Nominal: {idr_copy(amount)}\n"
+        f"Bank/E-Wallet: <b>{_esc(bank_name)}</b>\n"
+        f"No. Rekening: <code>{_esc(acc_no)}</code>\n"
+        f"Atas Nama: <b>{_esc(acc_name)}</b>\n\n"
         "Transfer manual dulu, lalu tekan <b>Sudah Ditransfer</b>. Tolak akan mengembalikan saldo user."
     )
-    admin_markup = InlineKeyboardMarkup([
+    markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("✋ Saya Tangani (sebelum transfer)", callback_data=f"admin_wd_take_{req_id}")],
         [
             InlineKeyboardButton("✅ Sudah Ditransfer", callback_data=f"admin_wd_ok_{req_id}"),
             InlineKeyboardButton("❌ Tolak & Refund", callback_data=f"admin_wd_no_{req_id}"),
         ],
     ])
-    for admin_id in settings.ADMIN_CHAT_IDS:
-        await safe_send_message(context.bot, admin_id, admin_text, reply_markup=admin_markup)
+    return text, markup
+
+
+async def admin_withdraw_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: admin_wd_open_{id} dari antrean dashboard -> kirim kartu withdraw lengkap dengan tombolnya."""
+    from bot.handlers.admin import is_admin
+    from bot.utils.admin_alert import user_label
+
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("❌ Akses ditolak.", show_alert=True)
+        return
+    req_id = int(query.data.rsplit("_", 1)[1])
+    db = SessionLocal()
+    try:
+        req = get_withdraw_request(db, req_id)
+        if req is None:
+            await query.answer("Withdraw tidak ditemukan.", show_alert=True)
+            return
+        if req.status != "PENDING":
+            await query.answer(f"WD-{req_id} sudah diproses ({req.status}).", show_alert=True)
+            return
+        text, markup = admin_withdraw_card(
+            req.id, user_label(req.telegram_id, db), int(req.amount_idr), req.bank_name,
+            req.account_number, req.account_name)
+    finally:
+        db.close()
+    await query.answer()
+    await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 async def admin_withdraw_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,11 +401,10 @@ async def admin_withdraw_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     if take:
         await query.answer(f"✋ WD-{req_id} kamu yang tangani. Transfer lalu tekan Sudah Ditransfer.", show_alert=True)
-        for other in dict.fromkeys(settings.ADMIN_CHAT_IDS):
-            if int(other) != int(admin_id):
-                await safe_send_message(
-                    context.bot, other,
-                    f"⏳ WD-{req_id} sedang ditangani admin <code>{admin_id}</code>. Jangan diproses lagi.")
+        await notify_admins(
+            context.bot,
+            f"⏳ WD-{req_id} sedang ditangani admin <code>{admin_id}</code>. Jangan diproses lagi.",
+            kind="topup")
         return
 
     db = SessionLocal()
@@ -377,8 +414,11 @@ async def admin_withdraw_callback(update: Update, context: ContextTypes.DEFAULT_
             return
         req = get_withdraw_request(db, req_id)
         user_id, amount = req.telegram_id, int(req.amount_idr)
-        bank_name, acc_no = req.bank_name, req.account_number
+        bank_name, acc_no, acc_name = req.bank_name, req.account_number, req.account_name
         balance = int(get_user_balance(db, user_id))
+        from bot.utils.saldo_log import log_withdraw_event
+        await log_withdraw_event(context.bot, req_id, user_id, amount, bank_name, acc_no, acc_name,
+                                 "PAID" if approve else "REJECTED", admin_id, db)
     except Exception:
         logger.error("Error admin_withdraw_callback #%s", req_id, exc_info=True)
         await query.answer("❌ Gagal memproses withdraw.", show_alert=True)

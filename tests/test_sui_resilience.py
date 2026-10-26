@@ -1,7 +1,7 @@
-"""Resiliensi RPC SUI + anti-flap alarm — insiden 429 blockvision 3 Okt 2026.
+"""Resiliensi RPC SUI + anti-flap alarm — insiden 429 blockvision 3 Okt 2026 dan matinya JSON-RPC publik Sui.
 
-- Sender memutar RPC: env -> publicnode -> blockvision (429 di satu URL
-  tidak boleh mematikan SUI).
+- JSON-RPC publik Sui (fullnode Mysten, publicnode) sudah dimatikan: sender memutar
+  GraphQL resmi -> RPC pribadi dari env -> Suiet (429 di satu URL tidak boleh mematikan SUI).
 - Monitor SUI punya fallback beneran (alarm memberi alternatif hidup).
 - Alarm DOWN / pulih butuh konfirmasi 2x beruntun (flap = diam).
 """
@@ -42,9 +42,22 @@ class TestSuiRpcRotation(unittest.TestCase):
     def test_daftar_rpc_berlapis(self):
         sender = SuiSender()
         self.assertGreaterEqual(len(sender.rpc_list), 2)
-        self.assertIn("https://sui-rpc.publicnode.com", sender.rpc_list)
+        self.assertEqual(sender.rpc_list[0], "https://graphql.mainnet.sui.io/graphql")
+        # Endpoint JSON-RPC yang sudah dimatikan penyedianya tidak boleh dipakai lagi.
+        for dead in ("sui-rpc.publicnode.com", "fullnode.mainnet.sui.io", "sui-mainnet-endpoint.blockvision.org"):
+            self.assertFalse(any(dead in r for r in sender.rpc_list), dead)
         self.assertTrue(all(r.startswith("https://") for r in sender.rpc_list))
         self.assertEqual(len(sender.rpc_list), len(set(sender.rpc_list)))
+
+    def test_graphql_dipakai_untuk_saldo(self):
+        sender = SuiSender()
+        sender.wallet_address = "0x" + "ab" * 32
+        sender.rpc_list = ["https://graphql.example/graphql"]
+        fake = AsyncMock(return_value={"coinType": "0x2::sui::SUI", "totalBalance": "3000000000"})
+        with patch("services.sui_graphql.call", new=fake):
+            import asyncio
+            self.assertEqual(asyncio.run(sender.get_balance("SUI")), 3.0)
+        self.assertEqual(fake.await_args.args[:2], ("https://graphql.example/graphql", "suix_getBalance"))
 
     def test_429_di_url_pertama_otomatis_pindah(self):
         sender = SuiSender()
@@ -103,9 +116,13 @@ class TestSuiRpcRotation(unittest.TestCase):
 class TestSuiMonitorFallback(unittest.TestCase):
     def test_fallback_sui_bukan_url_mati_itu_sendiri(self):
         eps = {e["id"]: e for e in CoinAPIMonitor().get_configured_endpoints()}
-        fb = eps["NONEVM_SUI"]["fallback_urls"]
-        self.assertGreaterEqual(len(fb), 2)
-        self.assertIn("https://sui-rpc.publicnode.com", fb)
+        sui = eps["NONEVM_SUI"]
+        self.assertEqual(sui["url"], "https://graphql.mainnet.sui.io/graphql")
+        self.assertEqual(sui["env_var"], "SUI_GRAPHQL_URL")
+        fb = sui["fallback_urls"]
+        self.assertGreaterEqual(len(fb), 1)
+        self.assertNotIn(sui["url"], fb)
+        self.assertFalse(any("publicnode" in u or "blockvision" in u for u in fb))
 
 
 class TestAlarmAntiFlap(unittest.IsolatedAsyncioTestCase):

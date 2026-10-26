@@ -62,7 +62,10 @@ class Settings:
     TRX_PRIVATE_KEY = (os.getenv("TRX_PRIVATE_KEY") or "").strip()
     TRX_WALLET_ADDRESS = (os.getenv("TRX_WALLET_ADDRESS") or "").strip()
 
-    SUI_RPC = (os.getenv("SUI_RPC", "https://sui-mainnet-endpoint.blockvision.org") or "").strip()
+    # JSON-RPC publik Sui sudah dimatikan; bot membaca/mengirim lewat GraphQL resmi (SUI_GRAPHQL_URL).
+    # SUI_RPC opsional: JSON-RPC pribadi/berbayar yang dicoba setelah GraphQL.
+    SUI_GRAPHQL_URL = (os.getenv("SUI_GRAPHQL_URL", "https://graphql.mainnet.sui.io/graphql") or "").strip()
+    SUI_RPC = (os.getenv("SUI_RPC") or "").strip()
     SUI_PRIVATE_KEY = (os.getenv("SUI_PRIVATE_KEY") or "").strip()
     SUI_WALLET_ADDRESS = (os.getenv("SUI_WALLET_ADDRESS") or "").strip()
 

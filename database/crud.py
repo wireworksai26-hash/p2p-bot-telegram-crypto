@@ -1631,6 +1631,23 @@ def get_withdraw_request(db: Session, request_id: int):
     return db.query(WithdrawRequest).filter(WithdrawRequest.id == request_id).first()
 
 
+def get_pending_withdraws(db: Session, limit: int = 8, offset: int = 0) -> list:
+    """Withdraw PENDING, yang paling lama menunggu di urutan pertama."""
+    from database.models import WithdrawRequest
+
+    return db.query(WithdrawRequest).filter(WithdrawRequest.status == "PENDING").order_by(
+        WithdrawRequest.created_at.asc(), WithdrawRequest.id.asc()).offset(offset).limit(limit).all()
+
+
+def get_pending_withdraw_summary(db: Session) -> tuple:
+    """(jumlah, total Rupiah) withdraw PENDING untuk dashboard admin."""
+    from database.models import WithdrawRequest
+
+    count, total = db.query(func.count(WithdrawRequest.id), func.coalesce(func.sum(WithdrawRequest.amount_idr), 0)).filter(
+        WithdrawRequest.status == "PENDING").one()
+    return int(count or 0), int(total or 0)
+
+
 def settle_withdraw_request(db: Session, request_id: int, admin_id: int, approve: bool) -> bool:
     """Tandai withdraw PAID, atau REJECTED + refund saldo. False bila sudah diproses (idempoten)."""
     from database.models import WithdrawRequest
@@ -1985,11 +2002,12 @@ def create_referral(db: Session, referrer_id: int, referee_id: int):
     if not settings_["enabled"]:
         return None
 
-    # Cek max referrals per user
-    current_count = db.query(Referral).filter(Referral.referrer_id == referrer_id).count()
-    if current_count >= settings_["maxref"]:
-        logger.info(f"Referrer {referrer_id} sudah mencapai batas {settings_['maxref']} referral.")
-        return None
+    # Batas teman per pengundang; 0 = tanpa batas (bawaan). Tanpa batas, teman ke-101 dst. tetap tercatat.
+    if settings_["maxref"] > 0:
+        current_count = db.query(Referral).filter(Referral.referrer_id == referrer_id).count()
+        if current_count >= settings_["maxref"]:
+            logger.info(f"Referrer {referrer_id} sudah mencapai batas {settings_['maxref']} referral.")
+            return None
 
     # reward_idr = total reward pengundang yang sudah dihitung dari teman ini (mulai 0;
     # bertambah saat teman bertransaksi, lihat services/referral_rewards.py).

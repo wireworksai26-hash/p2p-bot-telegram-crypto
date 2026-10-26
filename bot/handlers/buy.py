@@ -495,6 +495,11 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["buy_price_per_unit"] = buy_price_idr
         context.user_data["buy_quoted_at"] = quote_guard.stamp()
         context.user_data["buy_crypto_amount"] = crypto_amount
+        # Bahan untuk menghitung ulang bila bayar QRIS (pajak 0,3% dipotong dari nilai koin).
+        context.user_data["buy_coin_target"] = str(coin_target) if coin_target is not None else None
+        context.user_data["buy_fee_category"] = fee_category
+        context.user_data["buy_disc_pct_active"] = float(disc_info["discount_pct"]) if disc_info.get("active") else 0.0
+        context.user_data.pop("buy_pricing_base", None)
 
         available_inventory = get_available_inventory(db, network, symbol)
         if available_inventory is not None and available_inventory < Decimal(str(crypto_amount)):
@@ -743,17 +748,86 @@ def _wallet_locked_by_other(user_id: int, wallet_address: str) -> bool:
 
 
 
+_PRICING_KEYS = ("buy_nominal_idr", "buy_total_idr", "buy_base_fee_idr", "buy_fee_idr", "buy_discount_amount",
+                 "buy_discount_applied", "buy_discount_pct", "buy_received_idr", "buy_crypto_amount")
+
+
+def apply_qris_pricing(ud: dict, method_code: str):
+    """Susun harga sesuai metode bayar. Return teks error (HTML) bila tidak bisa, None bila beres.
+
+    QRIS di atas Rp 500.000 kena pajak 0,3%. Pajak DIPOTONG dari nilai koin bersama fee layanan;
+    tagihan QRIS tetap nominal + kode unik (pajak tidak ditambahkan ke yang dibayar pembeli).
+    Dihitung dari harga dasar (sebelum pajak) setiap kali, jadi ganti metode tidak menumpuk potongan.
+    """
+    import math
+    base = ud.setdefault("buy_pricing_base", {key: ud.get(key) for key in _PRICING_KEYS})
+    ud.update(base)
+    mdr = calculate_qris_mdr(int(ud["buy_nominal_idr"])) if method_code == "GOPAY_QRIS" else 0
+    ud["buy_mdr_idr"] = mdr
+    if not mdr:
+        return None
+
+    price = Decimal(str(ud["buy_price_per_unit"]))
+    nominal = int(ud["buy_nominal_idr"])
+    fee, discount_amount = int(ud["buy_fee_idr"]), int(ud.get("buy_discount_amount") or 0)
+    base_fee = int(ud.get("buy_base_fee_idr") or fee)
+
+    target = ud.get("buy_coin_target")
+    if target is not None:
+        # Mode koin: jumlah koin harus persis; nominal dinaikkan agar sisa setelah fee + pajak QRIS cukup.
+        want = Decimal(target) * price
+        pct = float(ud.get("buy_disc_pct_active") or 0.0)
+        try:
+            for _ in range(50):
+                base_fee = calculate_fee_idr(nominal, category=ud["buy_fee_category"],
+                                             symbol=ud["buy_symbol"], network=ud["buy_network"])
+                discount_amount = int(base_fee * pct / 100) if pct and base_fee > 0 else 0
+                fee = max(0, base_fee - discount_amount)
+                mdr = calculate_qris_mdr(nominal)
+                need = int(math.ceil(want + fee + mdr))
+                if need <= nominal:
+                    break
+                nominal = need
+            else:
+                raise ValueError("tidak konvergen")
+        except ValueError:
+            return ("❌ <b>Jumlah koin terlalu besar untuk QRIS.</b>\n\n"
+                    "Setelah pajak QRIS nilainya melebihi batas Rp 5.000.000. Kurangi jumlah koin "
+                    "atau gunakan Saldo Bot.")
+        ud["buy_mdr_idr"] = mdr
+        ud["buy_nominal_idr"] = ud["buy_total_idr"] = nominal
+        ud["buy_base_fee_idr"], ud["buy_fee_idr"], ud["buy_discount_amount"] = base_fee, fee, discount_amount
+        ud["buy_discount_applied"] = discount_amount > 0
+        ud["buy_received_idr"] = nominal - fee - mdr
+        return None
+
+    received = nominal - fee - mdr
+    if received <= 0:
+        return "❌ <b>Nominal terlalu kecil.</b>\n\nSetelah fee dan pajak QRIS tidak ada nilai koin tersisa."
+    ud["buy_received_idr"] = received
+    ud["buy_crypto_amount"] = received / ud["buy_price_per_unit"]
+    return None
+
+
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Menyimpan pilihan payment method, lalu menyajikan konfirmasi final.
     """
     query = update.callback_query
     await query.answer()
-    
+
     # format callback: paymethod_{CODE} (e.g. paymethod_GOPAY_QRIS)
     method_code = query.data.split("paymethod_", 1)[1] if "paymethod_" in query.data else query.data.split("_")[1]
     context.user_data["buy_pay_method"] = method_code
-    
+    pricing_error = apply_qris_pricing(context.user_data, method_code)
+    if pricing_error:
+        await query.edit_message_text(
+            text=pricing_error,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back")]]),
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     # Ambil detail transaksi untuk summary
     order_id = generate_order_id()
     context.user_data["buy_order_id"] = order_id
@@ -789,8 +863,6 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
     summary_text += f"\n💳 <b>Metode Pembayaran:</b> {method_label}"
     summary_text += gas_surcharge_note(symbol, network)
-    mdr_idr = calculate_qris_mdr(nominal_idr) if method_code == "GOPAY_QRIS" else 0
-    context.user_data["buy_mdr_idr"] = mdr_idr
     if method_code == "GOPAY_QRIS":
         summary_text += qris_mdr_note(nominal_idr)
         summary_text += (
@@ -1027,13 +1099,14 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
         # --- 2b. GoPay QRIS Payment (QRIS Statis, pembayaran manual) ---
         if method_code == "GOPAY_QRIS":
+            # Pajak QRIS sudah dipotong dari nilai koin (apply_qris_pricing); tagihan = nominal + kode unik.
             mdr_idr = int(context.user_data.get("buy_mdr_idr") or 0)
             from services.fee_service import QRIS_MAX_TOTAL_IDR, QRIS_MAX_UNIQUE_CODE
-            if int(total_idr) + mdr_idr + QRIS_MAX_UNIQUE_CODE > QRIS_MAX_TOTAL_IDR:
+            if int(total_idr) + QRIS_MAX_UNIQUE_CODE > QRIS_MAX_TOTAL_IDR:
                 await query.edit_message_text(
                     text=(
                         "❌ <b>Nominal terlalu besar untuk QRIS.</b>\n\n"
-                        "Total bayar (termasuk pajak QRIS & kode unik) tidak boleh melewati "
+                        "Total bayar (termasuk kode unik) tidak boleh melewati "
                         "batas QRIS Rp 10.000.000. Kurangi nominal, bagi menjadi beberapa "
                         "transaksi, atau gunakan Saldo Bot. Pembayaran belum dilakukan."
                     ),
@@ -1041,7 +1114,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                     parse_mode="HTML",
                 )
                 return ConversationHandler.END
-            unique_code = generate_unique_payment_code(db, base_amount=int(total_idr) + mdr_idr)
+            unique_code = generate_unique_payment_code(db, base_amount=int(total_idr))
             if unique_code is None:
                 await query.edit_message_text(
                     text=(
@@ -1053,7 +1126,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                     parse_mode="HTML",
                 )
                 return ConversationHandler.END
-            final_total_idr = int(total_idr) + mdr_idr + unique_code
+            final_total_idr = int(total_idr) + unique_code
 
             order_data = {
                 "order_id": order_id,
@@ -1083,7 +1156,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
             # Kirim QRIS dinamis + instruksi pembayaran otomatis
             received_idr = context.user_data["buy_received_idr"]
-            mdr_line = f"\n🧾 <b>Pajak QRIS 0,3%</b>: +{format_idr(mdr_idr)}" if mdr_idr else ""
+            mdr_line = f"\n🧾 <b>Pajak QRIS 0,3% (dipotong)</b>: -{format_idr(mdr_idr)}" if mdr_idr else ""
             caption = (
                 f"{E_CARD()} <b>BAYAR VIA QRIS DINAMIS</b>\n\n"
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
@@ -1132,7 +1205,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
                 f"🔔 <b>ORDER BELI BARU — MENUNGGU PEMBAYARAN QRIS</b>\n\n"
                 f"{order_detail_block(new_order, db)}\n"
                 f"Rincian bayar: kode unik {unique_code}"
-                f"{f', pajak QRIS {format_idr(mdr_idr)}' if mdr_idr else ''}\n\n"
+                f"{f', pajak QRIS {format_idr(mdr_idr)} (dipotong dari nilai koin)' if mdr_idr else ''}\n\n"
                 f"<i>Info saja — belum perlu tindakan sampai user membayar.</i>"
             )
             await notify_admins(context.bot, admin_alert, kind="beli")

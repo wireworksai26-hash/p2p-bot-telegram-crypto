@@ -56,6 +56,7 @@ def _redact_in_text(text: str, url: str) -> str:
     text = str(text or "")
     return text.replace(url, redact_url(url)) if url else text
 from services.price_service import next_coingecko_key
+from services.sui_graphql import is_graphql_url
 
 logger = logging.getLogger(__name__)
 
@@ -306,12 +307,9 @@ class CoinAPIMonitor:
                 "name": "Sui Network",
                 "symbol": "SUI",
                 "network": "SUI",
-                "url": settings.SUI_RPC,
-                "env_var": "SUI_RPC",
-                "fallback_urls": [
-                    "https://sui-rpc.publicnode.com",
-                    "https://sui-mainnet-endpoint.blockvision.org",
-                ],
+                "url": settings.SUI_GRAPHQL_URL,
+                "env_var": "SUI_GRAPHQL_URL",
+                "fallback_urls": [u for u in (settings.SUI_RPC, "https://mainnet.suiet.app") if u],
                 "impact": "Transaksi koin SUI tidak dapat diproses.",
             },
             {
@@ -507,11 +505,17 @@ class CoinAPIMonitor:
 
                 elif net == "SUI":
                     payload = {"jsonrpc": "2.0", "method": "sui_getLatestCheckpointSequenceNumber", "params": [], "id": 1}
+                    if is_graphql_url(url):
+                        payload = {"query": "{ checkpoint { sequenceNumber } }"}
                     resp = await client.post(url, json=payload)
                     latency = int((time.time() - start_time) * 1000)
                     result["latency_ms"] = latency
                     if resp.status_code == 200:
                         data = resp.json()
+                        if is_graphql_url(url):
+                            checkpoint = ((data.get("data") or {}).get("checkpoint") or {}).get("sequenceNumber")
+                            data = {"result": checkpoint} if checkpoint is not None else {
+                                "error": (data.get("errors") or [{}])[0].get("message", "Tanpa checkpoint")}
                         if "result" in data:
                             cp = int(data["result"])
                             result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"

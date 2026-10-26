@@ -200,7 +200,10 @@ GUIDE_TOPICS = {
         "5. Lepas dengan <code>/unsettarget JENIS</code> (kembali ke DM).\n\n"
         "<b>Jenis notifikasi</b>\n"
         "<code>beli</code>, <code>jual</code>, <code>convert</code>, <code>error</code>, <code>alarm</code>, "
-        "<code>topup</code>, <code>ops</code>.\n\n"
+        "<code>topup</code>, <code>ops</code>. Topup saldo dan <b>permintaan withdraw saldo user</b> "
+        "sama-sama masuk ke topik <code>topup</code> (antreannya juga ada di dashboard: 💸 Withdraw Saldo User). "
+        "Riwayat topup berhasil dan withdraw selesai/ditolak juga dicatat di topik itu. "
+        "<code>/settarget withdraw</code> sama dengan <code>/settarget topup</code>.\n\n"
         "💡 Notifikasi Jual (transfer Rupiah) sebaiknya diarahkan ke topik <code>jual</code> yang dipantau "
         "tim pencairan."
     )),

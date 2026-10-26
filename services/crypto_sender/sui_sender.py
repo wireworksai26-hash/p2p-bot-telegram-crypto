@@ -1,7 +1,8 @@
 """
 services/crypto_sender/sui_sender.py — Sender untuk Sui Network.
 ============================================================
-Saldo dibaca via JSON-RPC Sui. Pengiriman SUI native memakai
+Saldo dibaca via GraphQL resmi Sui (JSON-RPC publik sudah dimatikan; lihat services/sui_graphql.py,
+JSON-RPC pribadi dari env tetap didukung sebagai cadangan). Pengiriman SUI native memakai
 ProgrammableTransactionBuilder dan BCS/signing dari pysui, dengan dry-run
 sebelum broadcast dan verifikasi effects on-chain.
 """
@@ -15,7 +16,9 @@ from decimal import Decimal
 import base58
 import httpx
 from config.settings import settings
+from services import sui_graphql
 from services.crypto_sender import BaseCryptoSender, SendResult
+from services.sui_graphql import is_graphql_url
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +31,12 @@ MAX_GAS_COINS = 50
 class SuiSender(BaseCryptoSender):
     def __init__(self):
         self.network = "SUI"
+        # GraphQL resmi dulu (JSON-RPC publik Sui sudah dimatikan), lalu RPC pribadi dari env,
+        # lalu JSON-RPC publik Suiet sebagai cadangan terakhir.
         raw_rpcs = [
+            settings.SUI_GRAPHQL_URL,
             settings.SUI_RPC,
-            "https://sui-rpc.publicnode.com",
-            "https://sui-mainnet-endpoint.blockvision.org",
+            "https://mainnet.suiet.app",
         ]
         self.rpc_list = list(dict.fromkeys(r.strip() for r in raw_rpcs if r and r.strip()))
         self.wallet_address = settings.SUI_WALLET_ADDRESS
@@ -56,6 +61,9 @@ class SuiSender(BaseCryptoSender):
         last_error = None
         for rpc in self.rpc_list:
             try:
+                if is_graphql_url(rpc):
+                    result = await sui_graphql.call(rpc, payload["method"], payload["params"])
+                    return int(result["totalBalance"]) / 1e9
                 async with httpx.AsyncClient(timeout=6.0) as client:
                     res = await client.post(rpc, json=payload)
                     res.raise_for_status()
@@ -70,7 +78,9 @@ class SuiSender(BaseCryptoSender):
         raise RuntimeError(f"Semua RPC Sui gagal membaca saldo SUI: {last_error}")
 
     async def _rpc_call(self, base_url: str, method: str, params: list) -> object:
-        """Satu panggilan JSON-RPC; raise bila node menolak."""
+        """Satu panggilan JSON-RPC (atau GraphQL bila base_url berakhiran /graphql); raise bila node menolak."""
+        if is_graphql_url(base_url):
+            return await sui_graphql.call(base_url, method, params)
         async with httpx.AsyncClient(timeout=20.0) as client:
             res = await client.post(
                 base_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}

@@ -40,8 +40,8 @@ SOLANA_RPCS = _hosts(settings.SOL_RPC, "https://solana-rpc.publicnode.com",
 TRONGRID_URL = settings.TRX_RPC.rstrip("/")
 TRON_HOSTS = _hosts(settings.TRX_RPC, "https://api.trongrid.io", "https://api.tronstack.io",
                     "https://tron-rpc.publicnode.com")
-SUI_RPCS = _hosts(settings.SUI_RPC, "https://sui-rpc.publicnode.com",
-                  "https://sui-mainnet-endpoint.blockvision.org")
+# JSON-RPC publik Sui sudah dimatikan: GraphQL resmi dulu, lalu RPC pribadi (env), lalu Suiet.
+SUI_RPCS = _hosts(settings.SUI_GRAPHQL_URL, settings.SUI_RPC, "https://mainnet.suiet.app")
 APTOS_RPCS = _hosts(settings.APTOS_RPC, "https://fullnode.mainnet.aptoslabs.com/v1",
                     "https://api.mainnet.aptoslabs.com/v1")
 # Serialise unauthenticated TON requests to respect the public 1 RPS limit.
@@ -701,8 +701,11 @@ async def _verify_ton_indexer(symbol, tx_hash, wallet):
 
 async def _sui_rpc(method, params):
     last_exc = None
+    from services import sui_graphql
     for rpc in SUI_RPCS:
         try:
+            if sui_graphql.is_graphql_url(rpc):
+                return await sui_graphql.call(rpc, method, params)
             return await _rpc(rpc, method, params)
         except Exception as exc:
             last_exc = exc

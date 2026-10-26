@@ -404,6 +404,10 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.withdraw import withdraw_confirm_handler
         await withdraw_confirm_handler(update, context)
 
+    elif data.startswith("admin_wd_open_"):
+        from bot.handlers.withdraw import admin_withdraw_open
+        await admin_withdraw_open(update, context)
+
     elif data.startswith(("admin_wd_ok_", "admin_wd_no_", "admin_wd_take_")):
         from bot.handlers.withdraw import admin_withdraw_callback
         await admin_withdraw_callback(update, context)

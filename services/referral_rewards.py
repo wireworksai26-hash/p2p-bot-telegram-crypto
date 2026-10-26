@@ -36,7 +36,7 @@ SETTING_DEFS = {
     "sharemax":  ("fee_share_max_tx", 10, int),          # maks transaksi per teman yang dibagi hasil
     "hold":      ("reward_hold_hours", 24, int),         # masa tahan reward pengundang
     "min_trade": ("min_trade_amount_idr", 0, int),       # minimal nominal transaksi yang dihitung
-    "maxref":    ("max_referrals_per_user", 100, int),   # batas teman per pengundang
+    "maxref":    ("max_referrals_per_user", 0, int),     # batas teman per pengundang (0 = tanpa batas)
 }
 
 KIND_FIRST, KIND_SECOND, KIND_SHARE = "FIRST_TX", "SECOND_TX", "FEE_SHARE"

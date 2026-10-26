@@ -1149,6 +1149,9 @@ async def _complete_topup(db, topup):
     if settled is None:
         return
     _is_treasury, net_amt, settled_balance = settled
+    if bot_app:
+        from bot.utils.saldo_log import log_topup_success
+        await log_topup_success(bot_app.bot, topup, net_amt, settled_balance, _is_treasury, "auto", db)
 
     if _is_treasury:
         new_treasury_bal = settled_balance

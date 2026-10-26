@@ -42,12 +42,13 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_CHAT_IDS
 
 
-def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup:
+def get_admin_dashboard_keyboard(pending_count: int = 0, pending_withdraw: int = 0) -> InlineKeyboardMarkup:
     """Membuat inline keyboard navigasi utama Admin Dashboard."""
     order_label = f"📥 Antrean Order ({pending_count})" if pending_count > 0 else "📥 Antrean Order (0)"
-    
+
     keyboard = [
         [InlineKeyboardButton("📥 Dashboard Jual Crypto", callback_data="admin_sellorders_0")],
+        [InlineKeyboardButton(f"💸 Withdraw Saldo User ({pending_withdraw})", callback_data="admin_panel_withdraws")],
         [
             InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
             InlineKeyboardButton("📑 Rekap Mingguan (Sheets)", callback_data="admin_panel_weekly_report"),
@@ -98,6 +99,19 @@ def get_admin_dashboard_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(keyboard)
 
 
+def _pending_withdraws(db) -> tuple:
+    """(jumlah, total Rupiah) withdraw menunggu; (0, 0) bila gagal dibaca agar dashboard tetap tampil."""
+    try:
+        return crud.get_pending_withdraw_summary(db)
+    except Exception:
+        logger.warning("Gagal membaca antrean withdraw untuk dashboard", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0, 0
+
+
 def build_admin_dashboard_text(db) -> str:
     """Membangun teks ringkasan eksekutif Admin Dashboard."""
     stats = crud.get_daily_stats(db)
@@ -105,10 +119,12 @@ def build_admin_dashboard_text(db) -> str:
     pending_count = crud.get_pending_orders_count(db)
     completed_all = crud.get_completed_order_count(db)
     bot_treasury = crud.get_bot_treasury_balance(db)
-    
+    wd_count, wd_total = _pending_withdraws(db)
+
     now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
-    
-    status_indicator = "🔴 <b>Perlu Tindakan!</b>" if pending_count > 0 else "🟢 <b>Semua Sistem Lancar</b>"
+
+    status_indicator = ("🔴 <b>Perlu Tindakan!</b>" if (pending_count > 0 or wd_count > 0)
+                        else "🟢 <b>Semua Sistem Lancar</b>")
 
     text = (
         "👑 <b>ADMIN EXECUTIVE CONTROL CENTER</b>\n"
@@ -119,10 +135,48 @@ def build_admin_dashboard_text(db) -> str:
         f"├── 🛒 <b>Order Hari Ini:</b> <code>{stats['total_orders_today']} Order</code>\n"
         f"├── ✅ <b>Total Sukses (All-Time):</b> <code>{completed_all:,} Transaksi</code>\n"
         f"├── 💳 <b>Volume Hari Ini:</b> <code>{format_idr(stats['total_volume_idr_today'])}</code>\n"
+        f"├── 💸 <b>Withdraw Menunggu:</b> <b>{wd_count} Permintaan</b>"
+        f"{f' ({format_idr(wd_total)})' if wd_count else ''}\n"
         f"└── ⏳ <b>Antrean Pending:</b> <b>{pending_count} Order</b>\n\n"
         "💡 <i>Pilih menu di bawah ini untuk inspeksi & tindakan administratif cepat:</i>"
     )
     return text
+
+
+def _age_text(created_at) -> str:
+    """'12 mnt lalu' / '3 jam lalu' untuk daftar antrean."""
+    if not created_at:
+        return "-"
+    minutes = max(0, int((datetime.utcnow() - created_at).total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes} mnt lalu"
+    if minutes < 60 * 48:
+        return f"{minutes // 60} jam lalu"
+    return f"{minutes // 1440} hari lalu"
+
+
+def build_admin_withdraws_view(db):
+    """Antrean withdraw saldo user (PENDING) untuk dashboard admin: teks + tombol buka tiap permintaan."""
+    from bot.utils.admin_alert import user_label
+
+    count, total = crud.get_pending_withdraw_summary(db)
+    rows = crud.get_pending_withdraws(db, limit=8)
+    lines = ["💸 <b>WITHDRAW SALDO USER</b>",
+             f"Menunggu transfer: <b>{count}</b> permintaan · <b>{format_idr(total)}</b>"]
+    keyboard = []
+    if not rows:
+        lines.append("\n✅ Tidak ada withdraw yang menunggu.")
+    for req in rows:
+        lines.append(
+            f"\n🎫 <code>WD-{req.id}</code> · <b>{format_idr(req.amount_idr)}</b> · {_esc(req.bank_name)} "
+            f"· {_age_text(req.created_at)}\n{user_label(req.telegram_id, db)}")
+        keyboard.append([InlineKeyboardButton(f"📄 Buka WD-{req.id} · {format_idr(req.amount_idr)}",
+                                              callback_data=f"admin_wd_open_{req.id}")])
+    if count > len(rows):
+        lines.append(f"\n… dan {count - len(rows)} lainnya. Selesaikan yang di atas dulu, lalu refresh.")
+    keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_withdraws"),
+                     InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")])
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
 
 async def sellorders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -483,8 +537,8 @@ REFERRAL_ADMIN_SETTINGS = {
     },
     "maxref": {
         "title": "Maks. Teman per Pengundang", "icon": "🎯", "short": "Maks Teman",
-        "unit": "orang", "presets": [10, 50, 100, 500, 1000], "max": 100_000, "min": 1,
-        "help": "Batas jumlah teman yang bisa diundang satu pengundang.",
+        "unit": "orang", "presets": [0, 100, 500, 1000, 5000], "max": 100_000, "min": 0,
+        "help": "Batas jumlah teman yang bisa diundang satu pengundang (0 = tanpa batas, bawaan).",
     },
 }
 
@@ -493,7 +547,7 @@ _REF_UNIT_FMT = {
     "pct": lambda v: f"{float(v):g}%",
     "tx": lambda v: f"{int(v)} transaksi",
     "jam": lambda v: f"{int(v)} jam" if int(v) else "langsung (tanpa masa tahan)",
-    "orang": lambda v: f"{int(v)} teman",
+    "orang": lambda v: f"{int(v)} teman" if int(v) else "0 (tanpa batas)",
 }
 
 
@@ -1475,7 +1529,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         pending_count = crud.get_pending_orders_count(db)
         dashboard_text = build_admin_dashboard_text(db)
-        reply_markup = get_admin_dashboard_keyboard(pending_count)
+        reply_markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0])
         
         await update.message.reply_text(
             text=dashboard_text,
@@ -1695,9 +1749,15 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if data == "admin_panel_main":
             pending_count = crud.get_pending_orders_count(db)
             text = build_admin_dashboard_text(db)
-            markup = get_admin_dashboard_keyboard(pending_count)
+            markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0])
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Dashboard diperbarui.")
+
+        elif data == "admin_panel_withdraws":
+            text, markup = build_admin_withdraws_view(db)
+            from bot.utils.telegram_utils import safe_edit_message
+            await safe_edit_message(query, text, reply_markup=markup)
+            await query.answer("Antrean withdraw dimuat.")
 
         elif data == "admin_panel_stats":
             text = build_admin_stats_text(db)
@@ -3411,13 +3471,13 @@ async def admin_verify_sell_deposit_callback(update: Update, context: ContextTyp
                              "nominal order. Transfer sesuai koin yang benar-benar diterima (lihat alert "
                              "DEPOSIT PERLU DICEK).\n\n")
 
-        from bot.utils.admin_alert import order_detail_block
+        from bot.utils.admin_alert import bank_lines, idr_copy, order_detail_block
         await query.answer("✅ Deposit ditandai terverifikasi. Lanjutkan transfer Rupiah.", show_alert=False)
         await query.message.reply_text(
             f"💰 <b>DEPOSIT JUAL TERVERIFIKASI (MANUAL)</b>\n\n{late_warning}"
             f"{order_detail_block(order, db)}\n\n"
-            f"‼️ <b>TRANSFER RUPIAH:</b> <b>{format_idr(order.total_idr)}</b> ke rekening:\n"
-            f"<code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
+            f"‼️ <b>TRANSFER RUPIAH:</b> {idr_copy(order.total_idr)} ke rekening:\n"
+            f"{bank_lines(order.buyer_wallet)}\n\n"
             f"Setelah transfer, tekan tombol di bawah.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[
@@ -3503,11 +3563,12 @@ async def admin_upload_proof_callback(update: Update, context: ContextTypes.DEFA
         context.user_data["admin_awaiting_proof_order_id"] = order_id
         await query.answer("📸 Silakan kirimkan foto bukti transfer.", show_alert=False)
 
+        from bot.utils.admin_alert import bank_lines, idr_copy
         prompt_msg = (
             f"📸 <b>UPLOAD BUKTI TRANSFER PEMBAYARAN</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"Total Rupiah: <b>{format_idr(int(order.total_idr or 0))}</b>\n"
-            f"Rekening Tujuan: <code>{_esc(order.buyer_wallet or '-')}</code>\n\n"
+            f"Total Rupiah: {idr_copy(order.total_idr)}\n"
+            f"{bank_lines(order.buyer_wallet)}\n\n"
             f"👉 <b>Silakan kirimkan FOTO / SCREENSHOT bukti transfer ke chat ini sekarang.</b>\n"
             f"Bot akan otomatis meneruskan bukti foto tersebut langsung ke pembeli dan menyelesaikan order."
         )
@@ -4626,6 +4687,8 @@ async def admin_approve_topup_callback(update: Update, context: ContextTypes.DEF
         # Net (tanpa pajak QRIS) & TREASURY ke kas bot — sama dengan jalur otomatis.
         is_treasury, net_amt, new_bal = settled
         label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
+        from bot.utils.saldo_log import log_topup_success
+        await log_topup_success(context.bot, topup, net_amt, new_bal, is_treasury, "admin", db)
 
         from bot.utils.telegram_utils import safe_send_message
         menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
@@ -5296,7 +5359,7 @@ async def setreferral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
       /setreferral sharemax <n>     — maks. transaksi bagi hasil per teman
       /setreferral hold <jam>       — masa tahan reward pengundang
       /setreferral min <Rp>         — minimal nominal transaksi teman
-      /setreferral max <n>          — batas teman per pengundang
+      /setreferral max <n>          — batas teman per pengundang (0 = tanpa batas)
       /setreferral enabled true|false
     """
     if not is_admin(update.effective_user.id):

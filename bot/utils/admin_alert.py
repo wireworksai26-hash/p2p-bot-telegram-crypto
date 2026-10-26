@@ -40,6 +40,34 @@ def user_label(telegram_id, db=None, user=None) -> str:
     return " · ".join(parts)
 
 
+def idr_copy(amount) -> str:
+    """'Rp 49.503 (salin: 49503)': angka mentah sendirian di <code> supaya sekali tap bisa ditempel ke m-banking."""
+    try:
+        value = int(amount or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return f"<b>{format_idr(value)}</b> (salin: <code>{value}</code>)"
+
+
+def split_bank(buyer_wallet) -> tuple:
+    """(bank, no_rekening, atas_nama) dari 'Bank | No | Nama'; None bila formatnya tidak lengkap."""
+    parts = [p.strip() for p in str(buyer_wallet or "").split("|")]
+    if len(parts) >= 3 and parts[1]:
+        return parts[0], parts[1], parts[2]
+    return None
+
+
+def bank_lines(buyer_wallet) -> str:
+    """Rekening tujuan untuk admin: nomor rekening SAJA di <code>, bank dan nama di luar agar tidak ikut tersalin."""
+    bank = split_bank(buyer_wallet)
+    if not bank:
+        return f"Rekening: <code>{_esc(str(buyer_wallet or '-'))}</code>"
+    name, number, holder = bank
+    return (f"Bank/E-Wallet: <b>{_esc(name)}</b>\n"
+            f"No. Rekening: <code>{_esc(number)}</code>\n"
+            f"Atas Nama: <b>{_esc(holder)}</b>")
+
+
 def order_title(order) -> str:
     """Jenis transaksi + pasangan koin, mis. 'CONVERT USDC (BASE) → BNB (BSC)'."""
     kind = (order.order_type or "").lower()
@@ -76,8 +104,8 @@ def order_detail_block(order, db=None) -> str:
     elif kind == "sell":
         lines += [
             f"Deposit user (sesuai order): {source}",
-            f"Rupiah ke user: <b>{format_idr(int(order.total_idr or 0))}</b>",
-            f"Rekening: {wallet}",
+            f"Rupiah ke user: {idr_copy(order.total_idr)}",
+            bank_lines(order.buyer_wallet),
         ]
     else:
         payment = _PAYMENT_LABEL.get(order.payment_method or "", order.payment_method or "-")

@@ -33,7 +33,7 @@ from bot.keyboards.main_menu import get_owner_button
 from bot.utils.formatter import format_crypto, format_crypto_copy, format_idr
 from bot.utils.telegram_utils import safe_send_message, notify_admins
 from bot.utils.manual_payout import manual_payout_button
-from bot.utils.admin_alert import order_detail_block
+from bot.utils.admin_alert import bank_lines, idr_copy, order_detail_block
 
 # Alasan verifikasi yang permanen: hash tidak akan pernah jadi deposit sah.
 # Hash seperti ini dilepas dari order (sekali) agar tidak diverifikasi ulang
@@ -420,9 +420,8 @@ class DepositDetector:
                         f"Diterima on-chain: {format_crypto_copy(verified.get('amount'), order.crypto_symbol)} ({order.network})\n"
                         f"Pengirim: <code>{_esc(str(verified.get('from_address') or '-'))}</code>\n"
                         f"TX Hash: <code>{_esc(tx_hash)}</code>\n\n"
-                        f"‼️ <b>TRANSFER RUPIAH SEGERA:</b> "
-                        f"<b>{format_idr(order.total_idr)}</b> ke rekening:\n"
-                        f"<code>{_esc(order.buyer_wallet)}</code>\n\n"
+                        f"‼️ <b>TRANSFER RUPIAH SEGERA:</b> {idr_copy(order.total_idr)} ke rekening:\n"
+                        f"{bank_lines(order.buyer_wallet)}\n\n"
                         f"Setelah transfer, klik tombol di bawah atau ketik <code>/confirm {order.order_id}</code>."
                     )
                     admin_keyboard = InlineKeyboardMarkup([

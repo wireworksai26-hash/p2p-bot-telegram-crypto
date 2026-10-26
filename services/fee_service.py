@@ -152,12 +152,16 @@ def qris_max_nominal() -> int:
 
 
 def qris_mdr_note(nominal_idr: int) -> str:
-    """Keterangan pajak QRIS untuk pesan; string kosong bila tidak kena."""
+    """Keterangan pajak QRIS untuk pesan Beli; string kosong bila tidak kena.
+
+    Pajak dipotong dari nilai koin (bukan ditambah ke tagihan): bayar QRIS = nominal + kode unik.
+    """
     mdr = calculate_qris_mdr(nominal_idr)
     if not mdr:
         return ""
     rupiah = f"{mdr:,}".replace(",", ".")
-    return f"\n🧾 <i>Pajak QRIS 0,3% (nominal di atas Rp 500.000): +Rp {rupiah}.</i>"
+    return (f"\n🧾 <i>Bayar QRIS: pajak 0,3% (nominal di atas Rp 500.000) -Rp {rupiah} dipotong dari nilai koin, "
+            f"tidak ditambahkan ke total bayar.</i>")
 
 
 def is_gas_pair(symbol: str, network: str) -> bool:

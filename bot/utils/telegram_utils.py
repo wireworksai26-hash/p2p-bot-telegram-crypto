@@ -193,7 +193,7 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML",
 
 
 KIND_ALIAS = {"buy": "beli", "sell": "jual", "swap": "convert", "convert": "convert",
-              "ops": "ops", "error": "error", "alarm": "alarm", "topup": "topup"}
+              "ops": "ops", "error": "error", "alarm": "alarm", "topup": "topup", "withdraw": "topup"}
 KIND_RESMI = ("beli", "jual", "convert", "error", "alarm", "topup", "ops")
 
 

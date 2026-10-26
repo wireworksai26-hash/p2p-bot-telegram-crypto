@@ -366,6 +366,8 @@ async def check_topup_payment_manual(update: Update, context: ContextTypes.DEFAU
                 await query.answer("✅ Pembayaran diterima! Menambahkan saldo...", show_alert=False)
             except Exception:
                 pass
+            from bot.utils.saldo_log import log_topup_success
+            await log_topup_success(context.bot, topup, settled[1], settled[2], settled[0], "manual", db)
             # Pajak QRIS tidak masuk saldo (merchant yang menanggung ke GoPay).
             topup_mdr = int(topup.mdr_idr or 0)
             net_amt = topup.amount_idr - topup_mdr
@@ -501,6 +503,8 @@ async def handle_topup_transfer_proof(update: Update, context: ContextTypes.DEFA
                 if settled is not None:
                     is_treasury, net_amt, new_bal = settled
                     label = "Kas Bot" if is_treasury else "Saldo Bot Anda"
+                    from bot.utils.saldo_log import log_topup_success
+                    await log_topup_success(context.bot, topup, net_amt, new_bal, is_treasury, "auto", db)
                     menu_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Menu Utama", callback_data="menu_back", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]])
                     await update.message.reply_text(
                         f"✅ <b>PEMBAYARAN QRIS TERVERIFIKASI (OTOMATIS)!</b>\n\n"
