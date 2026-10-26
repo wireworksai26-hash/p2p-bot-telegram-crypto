@@ -6,6 +6,7 @@ require('dotenv').config();
 const sessionManager = require('./sessionManager');
 const dbSession = require('./dbSession');
 const { txAmountIdr, amountMatches } = require('./amount');
+const { cacheable, wideWindow } = require('./txwindow');
 const { makeApiKeyAuth, assertStrongApiKey } = require('./auth');
 
 // Inisialisasi sinkronisasi sesi database PostgreSQL
@@ -43,7 +44,7 @@ const qrisStore = new Map();
 // Cache hasil fetch transaksi Gojek (TTL 25 detik).
 // N order pending yang dicek bot dalam satu jendela = 1 call upstream,
 // sehingga gateway tidak kena rate-limit saat traffic tinggi.
-const TX_CACHE_TTL_MS = 25000;
+const TX_CACHE_TTL_MS = parseInt(process.env.GOPAY_TX_CACHE_TTL_MS || '25000', 10);
 let txCache = { ts: 0, raw: null };
 
 const CACHE_FILE = path.join(__dirname, '.gopay_cache.json');
@@ -526,8 +527,16 @@ app.get('/qr/:id', (req, res) => {
 // oleh GET /transactions dan verifyPayment (/check-payment, /api/qr-status).
 async function getRawTransactions(userAgent, merchantId, startTimeISO, endTimeISO, pageSize) {
     const now = Date.now();
-    if (txCache.raw && now - txCache.ts < TX_CACHE_TTL_MS) {
+    // Cache selalu berisi jendela lebar (lihat txwindow.js); pemanggil menyaring waktunya sendiri.
+    const useCache = cacheable(new Date(startTimeISO).getTime(), pageSize, now);
+    if (useCache && txCache.raw && txCache.merchantId === merchantId && now - txCache.ts < TX_CACHE_TTL_MS) {
         return txCache.raw;
+    }
+    if (useCache) {
+        const wide = wideWindow(now);
+        startTimeISO = wide.startISO;
+        endTimeISO = wide.endISO;
+        pageSize = wide.pageSize;
     }
 
     let headers = await sessionManager.getValidHeaders(userAgent);
@@ -570,7 +579,9 @@ async function getRawTransactions(userAgent, merchantId, startTimeISO, endTimeIS
     }
 
     const raw = response.data?.transactions || response.data?.data?.transactions || [];
-    txCache = { ts: Date.now(), raw };
+    if (useCache) {
+        txCache = { ts: Date.now(), raw, merchantId };
+    }
     return raw;
 }
 
