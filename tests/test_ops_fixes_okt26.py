@@ -157,6 +157,53 @@ class WithdrawQueue(_Db):
         self.assertIn(f"admin_wd_open_{a}", data)
         self.assertIn(f"admin_wd_open_{b}", data)
 
+    def _done(self, amount, status, minutes_ago=5, admin=1):
+        rid = self.wd(amount, status=status, minutes_ago=minutes_ago + 5)
+        row = self.db.query(WithdrawRequest).get(rid)
+        row.handled_at = datetime.utcnow() - timedelta(minutes=minutes_ago)
+        row.handled_by = admin
+        self.db.commit()
+        return rid
+
+    def test_rekap_withdraw_hari_ini_semua_waktu_dan_ditolak(self):
+        self._done(10_000, "PAID", minutes_ago=5)
+        self._done(25_000, "PAID", minutes_ago=3)
+        self._done(40_000, "PAID", minutes_ago=60 * 24 * 3)  # 3 hari lalu: tidak masuk "hari ini"
+        self._done(7_000, "REJECTED")
+        self.wd(99_000)  # masih menunggu: tidak masuk rekap
+        totals = crud.get_withdraw_totals(self.db)
+        self.assertEqual(totals["paid_today"], (2, 35_000))
+        self.assertEqual(totals["paid_all"], (3, 75_000))
+        self.assertEqual(totals["rejected_all"], (1, 7_000))
+
+    def test_tampilan_memuat_rekap_dan_lima_terakhir(self):
+        ids = [self._done(1_000 * (i + 1), "PAID" if i % 2 == 0 else "REJECTED", minutes_ago=10 - i, admin=100 + i)
+               for i in range(7)]
+        text, _ = admin.build_admin_withdraws_view(self.db)
+        for part in ("REKAP WITHDRAW", "Ditransfer hari ini", "Ditransfer sepanjang waktu", "Ditolak (direfund)",
+                     "5 TERAKHIR DIPROSES", f"WD-{ids[-1]}", f"WD-{ids[2]}", "admin <code>106</code>"):
+            self.assertIn(part, text)
+        self.assertNotIn(f"WD-{ids[1]}", text)  # hanya 5 terbaru
+
+    def test_dashboard_utama_menampilkan_total_withdraw_ditransfer_bertambah(self):
+        text = admin.build_admin_dashboard_text(self.db)
+        self.assertIn("Withdraw Ditransfer:</b> hari ini <code>Rp 0</code> (0x) · total <code>Rp 0</code> (0x)", text)
+        self._done(10_000, "PAID")
+        text = admin.build_admin_dashboard_text(self.db)
+        self.assertIn("hari ini <code>Rp 10.000</code> (1x) · total <code>Rp 10.000</code> (1x)", text)
+        self._done(25_000, "PAID")
+        text = admin.build_admin_dashboard_text(self.db)
+        self.assertIn("hari ini <code>Rp 35.000</code> (2x) · total <code>Rp 35.000</code> (2x)", text)
+
+    def test_dashboard_tetap_tampil_bila_rekap_withdraw_gagal_dibaca(self):
+        with patch.object(admin.crud, "get_withdraw_totals", side_effect=RuntimeError("db")):
+            self.assertIn("Withdraw Ditransfer:</b> hari ini <code>Rp 0</code>", admin.build_admin_dashboard_text(self.db))
+
+    def test_rekap_tampil_walau_tidak_ada_yang_diproses(self):
+        text, _ = admin.build_admin_withdraws_view(self.db)
+        self.assertIn("Ditransfer hari ini (WIB): <b>0</b> · <b>Rp 0</b>", text)
+        self.assertNotIn("5 TERAKHIR", text)
+
     def test_dashboard_menunjukkan_withdraw_menunggu(self):
         self.assertIn("Withdraw Menunggu:</b> <b>0 Permintaan", admin.build_admin_dashboard_text(self.db))
         self.wd(50_000)
@@ -300,3 +347,68 @@ class SaldoHistory(_Db):
         from bot.utils.telegram_utils import normalisasi_kind
         self.assertEqual(normalisasi_kind("withdraw"), "topup")
         self.assertEqual(normalisasi_kind("topup"), "topup")
+
+
+# ───────────── Riwayat withdraw untuk user ─────────────
+class UserWithdrawHistory(_Db):
+    def _other_user_wd(self):
+        self.db.add(User(telegram_id=USER + 1, balance_idr=Decimal("0")))
+        self.db.add(WithdrawRequest(telegram_id=USER + 1, amount_idr=99_999, bank_name="BRI", account_number="5555",
+                                    account_name="Lain", status="PAID"))
+        self.db.commit()
+
+    def test_hanya_withdraw_milik_user_terbaru_dulu(self):
+        a = self.wd(10_000, minutes_ago=30)
+        b = self.wd(20_000, minutes_ago=5)
+        self._other_user_wd()
+        rows = crud.get_user_withdraws(self.db, USER)
+        self.assertEqual([r.id for r in rows], [b, a])
+
+    def test_teks_riwayat_jumlah_waktu_status_dan_rekening_disamarkan(self):
+        from bot.handlers.withdraw import withdraw_history_text
+        pending = self.wd(10_000, number="1234567890")
+        paid = self.wd(25_000, status="PAID", number="0812345678")
+        self.db.query(WithdrawRequest).filter_by(id=paid).update({"handled_at": datetime(2026, 10, 26, 6, 30)})
+        self.db.commit()
+        text = withdraw_history_text(crud.get_user_withdraws(self.db, USER))
+        for part in (f"WD-{pending}", f"WD-{paid}", "Rp 10.000", "Rp 25.000", "Menunggu admin", "Sudah ditransfer",
+                     "••••7890", "••••5678", "Diajukan:", "Diproses: 26 Oktober 2026, 13:30 WIB"):
+            self.assertIn(part, text)
+        self.assertNotIn("1234567890", text)  # nomor lengkap tidak ditampilkan
+        self.assertNotIn("0812345678", text)
+
+    def test_riwayat_kosong(self):
+        from bot.handlers.withdraw import withdraw_history_text
+        self.assertIn("Belum ada withdraw", withdraw_history_text([]))
+
+    async def test_tombol_riwayat_menampilkan_riwayat_user_sendiri(self):
+        from bot.handlers.withdraw import withdraw_history_handler
+        self.wd(10_000)
+        self._other_user_wd()
+        query = MagicMock()
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=USER))
+        await withdraw_history_handler(update, SimpleNamespace())
+        text = query.edit_message_text.await_args.args[0]
+        self.assertIn("Rp 10.000", text)
+        self.assertNotIn("99.999", text)
+        data = [b.callback_data for row in query.edit_message_text.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        self.assertEqual(data, ["wd_history", "menu_balance"])
+
+    async def test_menu_saldo_punya_tombol_riwayat_withdraw(self):
+        from bot.handlers.balance import show_balance_menu
+        query = MagicMock()
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = SimpleNamespace(callback_query=query, message=None, effective_user=SimpleNamespace(
+            id=USER, username="budi", full_name="Budi"))
+        await show_balance_menu(update, SimpleNamespace(user_data={}))
+        markup = query.edit_message_text.await_args.kwargs["reply_markup"]
+        data = {b.callback_data for row in markup.inline_keyboard for b in row}
+        self.assertIn("wd_history", data)
+
+    def test_router_mengenali_wd_history(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "bot" / "handlers" / "start.py").read_text(encoding="utf-8")
+        self.assertIn('data == "wd_history"', source)

@@ -384,6 +384,10 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.withdraw import withdraw_locked_handler
         await withdraw_locked_handler(update, context)
 
+    elif data == "wd_history":
+        from bot.handlers.withdraw import withdraw_history_handler
+        await withdraw_history_handler(update, context)
+
     elif data == "wd_start":
         from bot.handlers.withdraw import withdraw_start_handler
         await withdraw_start_handler(update, context)

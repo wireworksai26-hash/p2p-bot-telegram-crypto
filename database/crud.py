@@ -1648,6 +1648,38 @@ def get_pending_withdraw_summary(db: Session) -> tuple:
     return int(count or 0), int(total or 0)
 
 
+def get_user_withdraws(db: Session, telegram_id: int, limit: int = 10) -> list:
+    """Riwayat withdraw satu user, terbaru dulu."""
+    from database.models import WithdrawRequest
+
+    return db.query(WithdrawRequest).filter(WithdrawRequest.telegram_id == telegram_id).order_by(
+        WithdrawRequest.created_at.desc(), WithdrawRequest.id.desc()).limit(limit).all()
+
+
+def get_withdraw_totals(db: Session) -> dict:
+    """Rekap withdraw yang sudah diproses: ditransfer hari ini (WIB), ditransfer sepanjang waktu, ditolak."""
+    from database.models import WithdrawRequest
+
+    def agg(*conditions):
+        count, total = db.query(func.count(WithdrawRequest.id), func.coalesce(func.sum(WithdrawRequest.amount_idr), 0)).filter(
+            *conditions).one()
+        return int(count or 0), int(total or 0)
+
+    return {
+        "paid_today": agg(WithdrawRequest.status == "PAID", WithdrawRequest.handled_at >= _wib_day_start_utc()),
+        "paid_all": agg(WithdrawRequest.status == "PAID"),
+        "rejected_all": agg(WithdrawRequest.status == "REJECTED"),
+    }
+
+
+def get_recent_processed_withdraws(db: Session, limit: int = 5) -> list:
+    """Withdraw PAID/REJECTED terbaru (urut waktu diproses)."""
+    from database.models import WithdrawRequest
+
+    return db.query(WithdrawRequest).filter(WithdrawRequest.status.in_(("PAID", "REJECTED"))).order_by(
+        WithdrawRequest.handled_at.desc(), WithdrawRequest.id.desc()).limit(limit).all()
+
+
 def settle_withdraw_request(db: Session, request_id: int, admin_id: int, approve: bool) -> bool:
     """Tandai withdraw PAID, atau REJECTED + refund saldo. False bila sudah diproses (idempoten)."""
     from database.models import WithdrawRequest

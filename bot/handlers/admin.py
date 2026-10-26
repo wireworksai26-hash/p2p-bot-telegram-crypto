@@ -112,6 +112,19 @@ def _pending_withdraws(db) -> tuple:
         return 0, 0
 
 
+def _withdraw_totals(db) -> dict:
+    """Rekap withdraw yang sudah ditransfer; nol bila gagal dibaca agar dashboard tetap tampil."""
+    try:
+        return crud.get_withdraw_totals(db)
+    except Exception:
+        logger.warning("Gagal membaca rekap withdraw untuk dashboard", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {"paid_today": (0, 0), "paid_all": (0, 0), "rejected_all": (0, 0)}
+
+
 def build_admin_dashboard_text(db) -> str:
     """Membangun teks ringkasan eksekutif Admin Dashboard."""
     stats = crud.get_daily_stats(db)
@@ -120,6 +133,7 @@ def build_admin_dashboard_text(db) -> str:
     completed_all = crud.get_completed_order_count(db)
     bot_treasury = crud.get_bot_treasury_balance(db)
     wd_count, wd_total = _pending_withdraws(db)
+    wd_paid = _withdraw_totals(db)
 
     now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
 
@@ -137,6 +151,9 @@ def build_admin_dashboard_text(db) -> str:
         f"├── 💳 <b>Volume Hari Ini:</b> <code>{format_idr(stats['total_volume_idr_today'])}</code>\n"
         f"├── 💸 <b>Withdraw Menunggu:</b> <b>{wd_count} Permintaan</b>"
         f"{f' ({format_idr(wd_total)})' if wd_count else ''}\n"
+        f"├── ✅ <b>Withdraw Ditransfer:</b> hari ini <code>{format_idr(wd_paid['paid_today'][1])}</code> "
+        f"({wd_paid['paid_today'][0]}x) · total <code>{format_idr(wd_paid['paid_all'][1])}</code> "
+        f"({wd_paid['paid_all'][0]}x)\n"
         f"└── ⏳ <b>Antrean Pending:</b> <b>{pending_count} Order</b>\n\n"
         "💡 <i>Pilih menu di bawah ini untuk inspeksi & tindakan administratif cepat:</i>"
     )
@@ -174,6 +191,24 @@ def build_admin_withdraws_view(db):
                                               callback_data=f"admin_wd_open_{req.id}")])
     if count > len(rows):
         lines.append(f"\n… dan {count - len(rows)} lainnya. Selesaikan yang di atas dulu, lalu refresh.")
+
+    totals = crud.get_withdraw_totals(db)
+    (today_n, today_sum), (all_n, all_sum), (rej_n, rej_sum) = (
+        totals["paid_today"], totals["paid_all"], totals["rejected_all"])
+    lines += [
+        "\n📊 <b>REKAP WITHDRAW</b>",
+        f"✅ Ditransfer hari ini (WIB): <b>{today_n}</b> · <b>{format_idr(today_sum)}</b>",
+        f"✅ Ditransfer sepanjang waktu: <b>{all_n}</b> · <b>{format_idr(all_sum)}</b>",
+        f"❌ Ditolak (direfund): <b>{rej_n}</b> · {format_idr(rej_sum)}",
+    ]
+    recent = crud.get_recent_processed_withdraws(db, limit=5)
+    if recent:
+        lines.append("\n🕘 <b>5 TERAKHIR DIPROSES</b>")
+        for req in recent:
+            icon = "✅" if req.status == "PAID" else "❌"
+            by = f" · admin <code>{req.handled_by}</code>" if req.handled_by else ""
+            lines.append(f"{icon} <code>WD-{req.id}</code> · {format_idr(req.amount_idr)} · {_esc(req.bank_name)} "
+                         f"· {_age_text(req.handled_at)}{by}")
     keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="admin_panel_withdraws"),
                      InlineKeyboardButton("🔙 Dashboard Utama", callback_data="admin_panel_main")])
     return "\n".join(lines), InlineKeyboardMarkup(keyboard)

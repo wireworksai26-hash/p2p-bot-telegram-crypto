@@ -79,6 +79,54 @@ async def withdraw_locked_handler(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+_HISTORY_STATUS = {
+    "PENDING": "⏳ Menunggu admin",
+    "PAID": "✅ Sudah ditransfer",
+    "REJECTED": "❌ Ditolak, saldo dikembalikan",
+}
+
+
+def withdraw_history_text(rows) -> str:
+    """Riwayat withdraw user: jumlah, tujuan (nomor disamarkan), status, dan waktu WIB."""
+    from bot.utils.formatter import format_datetime
+
+    if not rows:
+        return "📜 <b>RIWAYAT WITHDRAW</b>\n\nBelum ada withdraw."
+    lines = ["📜 <b>RIWAYAT WITHDRAW</b>", f"<i>{len(rows)} terakhir, terbaru di atas.</i>"]
+    for req in rows:
+        number = str(req.account_number or "")
+        masked = f"••••{number[-4:]}" if len(number) > 4 else number
+        entry = (
+            f"\n🎫 <code>WD-{req.id}</code> · <b>{format_idr(int(req.amount_idr))}</b>\n"
+            f"🏦 {_esc(req.bank_name)} {_esc(masked)}\n"
+            f"{_HISTORY_STATUS.get(req.status, req.status)}\n"
+            f"🕒 Diajukan: {format_datetime(req.created_at)}"
+        )
+        if req.status in ("PAID", "REJECTED") and req.handled_at:
+            entry += f"\n🕒 Diproses: {format_datetime(req.handled_at)}"
+        lines.append(entry)
+    return "\n".join(lines)
+
+
+async def withdraw_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Tombol Riwayat Withdraw di menu saldo."""
+    from database.crud import get_user_withdraws
+
+    query = update.callback_query
+    db = SessionLocal()
+    try:
+        text = withdraw_history_text(get_user_withdraws(db, update.effective_user.id, limit=10))
+    finally:
+        db.close()
+    await query.answer()
+    await query.edit_message_text(
+        text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="wd_history")],
+            [InlineKeyboardButton("🔙 Cek Saldo", callback_data="menu_balance")],
+        ]))
+
+
 async def withdraw_start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Langkah 1: pilih rekening tujuan."""
     query = update.callback_query
