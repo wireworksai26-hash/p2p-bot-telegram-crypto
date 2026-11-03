@@ -296,9 +296,15 @@ class CoinAPIMonitor:
                 "network": "TON",
                 "url": settings.TON_RPC,
                 "env_var": "TON_RPC",
+                # Fallback harus provider BERBEDA dari yang utama (dulu hanya toncenter v2 yang sama persis,
+                # sehingga timeout toncenter langsung jadi alarm DOWN padahal jalur lain hidup).
                 "fallback_urls": [
-                    "https://toncenter.com/api/v2/jsonRPC",
+                    "https://toncenter.com/api/v3/masterchainInfo",
+                    "https://tonapi.io/v2/blockchain/masterchain-head",
+                    "https://mainnet-v4.tonhubapi.com/block/latest",
                 ],
+                # Fallback di atas hanya untuk pemantauan (bentuk API-nya bukan JSON-RPC), jadi bukan isi TON_RPC.
+                "hint_urls": [],
                 "impact": "Transaksi koin GRAM dan USDT di The Open Network tidak dapat diproses.",
             },
             {
@@ -340,6 +346,7 @@ class CoinAPIMonitor:
             "url": url,
             "env_var": ep.get("env_var", ""),
             "fallback_urls": ep.get("fallback_urls", []),
+            "hint_urls": ep.get("hint_urls", ep.get("fallback_urls", [])),
             "impact": ep.get("impact", ""),
             "status": "DOWN",
             "latency_ms": 0,
@@ -486,15 +493,32 @@ class CoinAPIMonitor:
                         self._parse_http_error(resp.status_code, result)
 
                 elif net == "TON":
-                    payload = {"jsonrpc": "2.0", "method": "getMasterchainInfo", "params": [], "id": 1}
-                    headers = {"X-API-Key": settings.TON_API_KEY} if settings.TON_API_KEY else {}
-                    resp = await client.post(url, json=payload, headers=headers)
+                    # Tiga bentuk endpoint: toncenter v2 (JSON-RPC), toncenter v3 / tonhub v4 (GET), tonapi (GET).
+                    low = url.lower()
+                    is_tonapi = "tonapi.io" in low
+                    is_get_api = is_tonapi or "/api/v3/" in low or "tonhubapi" in low
+                    if is_tonapi:
+                        headers = {"Authorization": f"Bearer {settings.TONAPI_KEY}"} if settings.TONAPI_KEY else {}
+                    else:
+                        headers = {"X-API-Key": settings.TON_API_KEY} if settings.TON_API_KEY else {}
+                    if is_get_api:
+                        resp = await client.get(url, headers=headers)
+                    else:
+                        payload = {"jsonrpc": "2.0", "method": "getMasterchainInfo", "params": [], "id": 1}
+                        resp = await client.post(url, json=payload, headers=headers)
                     latency = int((time.time() - start_time) * 1000)
                     result["latency_ms"] = latency
                     if resp.status_code == 200:
                         data = resp.json()
-                        if "result" in data:
-                            seqno = data["result"].get("last", {}).get("seqno")
+                        if is_tonapi:
+                            seqno, valid = data.get("seqno"), data.get("seqno") is not None
+                        elif is_get_api:
+                            seqno = (data.get("last") or {}).get("seqno")
+                            valid = seqno is not None
+                        else:
+                            valid = "result" in data
+                            seqno = (data.get("result") or {}).get("last", {}).get("seqno") if valid else None
+                        if valid:
                             result["status"] = "DEGRADED" if latency > LATENCY_DEGRADED_THRESHOLD_MS else "OK"
                             result["block_info"] = f"Seqno #{seqno:,}" if seqno else "Masterchain OK"
                         else:
@@ -661,7 +685,7 @@ class CoinAPIMonitor:
         """Membuat teks notifikasi alarm deteksi dini untuk dikirim ke admin."""
         res = _safe_result(res)
         env_var = res.get("env_var", "RPC_URL")
-        fallbacks = res.get("fallback_urls", [])
+        fallbacks = res.get("hint_urls", res.get("fallback_urls", []))
         fallback_text = ""
         if fallbacks:
             fallback_text = "\n\n💡 <b>Rekomendasi URL Alternatif:</b>\n" + "\n".join([f"• <code>{fb}</code>" for fb in fallbacks[:2]])
@@ -768,4 +792,6 @@ def _safe_result(res: Dict[str, Any]) -> Dict[str, Any]:
         if key in safe and safe[key] is not None:
             safe[key] = escape(_redact_in_text(safe[key], url))
     safe["fallback_urls"] = [escape(redact_url(u)) for u in (res.get("fallback_urls") or [])]
+    if "hint_urls" in res:
+        safe["hint_urls"] = [escape(redact_url(u)) for u in (res.get("hint_urls") or [])]
     return safe
