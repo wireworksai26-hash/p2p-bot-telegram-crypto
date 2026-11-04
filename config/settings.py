@@ -49,8 +49,6 @@ class Settings:
     ARB_RPC = (os.getenv("ARB_RPC", "https://arbitrum-one-rpc.publicnode.com") or "").strip()
     OPTIMISM_RPC = (os.getenv("OPTIMISM_RPC", "https://optimism-rpc.publicnode.com") or "").strip()
     ROBINHOOD_RPC = (os.getenv("ROBINHOOD_RPC", "https://robinhood-rpc.publicnode.com") or "").strip()
-    KAIA_RPC = (os.getenv("KAIA_RPC", "https://public-en.node.kaia.io") or "").strip()
-    BERA_RPC = (os.getenv("BERA_RPC", "https://berachain.drpc.org") or "").strip()
     HYPEREVM_RPC = (os.getenv("HYPEREVM_RPC", "https://rpc.hyperliquid.xyz/evm") or "").strip()
     
     # Non-EVM RPCs & Wallets

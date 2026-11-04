@@ -18,22 +18,22 @@ from bot.utils.emojis import get_coin_emoji, get_network_emoji
 logger = logging.getLogger(__name__)
 COIN_ORDER = [
     "USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "TON", "SUI", "APT",
-    "MATIC", "POL", "ARB", "AVAX", "KAIA", "BERA", "HYPE", "USDG",
+    "MATIC", "POL", "ARB", "AVAX", "HYPE", "USDG",
 ]
 COIN_FULL_NAMES = {
     "USDT": "Tether (USDT)", "USDC": "USD Coin (USDC)", "ETH": "Ethereum (ETH)",
     "SOL": "Solana (SOL)", "BNB": "BNB Chain (BNB)", "TRX": "TRON (TRX)",
     "TON": "Gram (GRAM)", "SUI": "Sui (SUI)", "APT": "Aptos (APT)",
     "MATIC": "Polygon (MATIC / POL)", "POL": "Polygon (POL)",
-    "ARB": "Arbitrum (ARB)", "AVAX": "Avalanche (AVAX)", "KAIA": "Kaia (KAIA)",
-    "BERA": "Berachain (BERA)", "HYPE": "Hyperliquid (HYPE)", "USDG": "Global Dollar (USDG)",
+    "ARB": "Arbitrum (ARB)", "AVAX": "Avalanche (AVAX)",
+    "HYPE": "Hyperliquid (HYPE)", "USDG": "Global Dollar (USDG)",
 }
 NETWORK_LABELS = {
     "BSC": "BNB Smart Chain (BEP20)", "BASE": "Base Mainnet", "ARB": "Arbitrum One",
     "POLYGON": "Polygon (POL)", "ETH": "Ethereum (ERC20)", "SOLANA": "Solana Mainnet",
     "TRON": "TRON", "TON": "TON Network", "OPTIMISM": "Optimism (OP)",
     "ROBINHOOD": "Robinhood", "SUI": "Sui Mainnet", "APTOS": "Aptos Mainnet",
-    "AVAX": "Avalanche C-Chain", "KAIA": "Kaia Network", "BERA": "Berachain",
+    "AVAX": "Avalanche C-Chain",
     "HYPEREVM": "HyperEVM",
 }
 
@@ -71,7 +71,7 @@ CHAIN_SHORT_LABELS = {
     "BSC": "BEP20", "ETH": "ERC20", "POLYGON": "Poly", "ARB": "Arb", "BASE": "Base",
     "SOLANA": "Solana", "TRON": "TRON", "TON": "TON", "OPTIMISM": "OP",
     "ROBINHOOD": "Robinhood", "SUI": "Sui", "APTOS": "Aptos", "AVAX": "Avax",
-    "KAIA": "Kaia", "BERA": "Bera", "HYPEREVM": "HyperEVM",
+    "HYPEREVM": "HyperEVM",
 }
 # Kartu stok: (judul, simbol). Simbol di luar daftar masuk "Token Lainnya".
 STOCK_CARDS = [

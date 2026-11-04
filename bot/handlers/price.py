@@ -53,8 +53,6 @@ CURATED_PRICE_ASSETS = [
     ("POL", "POLYGON", "🟪", "POL (POLYGON)"),
     ("ARB", "ARB", "🔷", "ARB (ARB)"),
     ("AVAX", "AVAX", "🔴", "AVAX (AVAX)"),
-    ("KAIA", "KAIA", "🌱", "KAIA (KAIA)"),
-    ("BERA", "BERA", "🐻", "BERA (BERA)"),
     ("APT", "APTOS", "⚫", "APT (APTOS)"),
     ("HYPE", "HYPEREVM", "🟢", "HYPE (HYPEREVM)"),
     ("USDG", "ROBINHOOD", "🏹", "USDG (ROBINHOOD)"),
@@ -97,7 +95,7 @@ PRICE_LIST_NOTE = (
     "<blockquote expandable><b>📝 Note :</b>\n"
     "• ⛽ Pasangan gas (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH) +Rp 2.500 untuk Gas Fee Kirim &amp; "
     "min transaksi Rp 7.500 untuk List Coin tersebut, Selain itu minimal transaksi Rp 5.000\n\n"
-    "• 🧾 Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (masuk total bayar).\n\n"
+    "• 🧾 Pajak QRIS 0,3% utk bayar via QRIS nominal di atas Rp 500.000 (dipotong dari nilai koin, tidak menambah total bayar).\n\n"
     "• ➕ Adanya kode Unik pembayaran saat transaksi di Bot untuk biaya transaksi Qris otomatis\n\n"
     "• 💱 Harga realtime pasar murni mengikuti rata-rata harga bursa global.\n\n"
     "• 📣 Untuk Transaksi di atas 5.000.000 dan apabila Stok Coin di Bot kosong, silakan chat admin.\n\n"

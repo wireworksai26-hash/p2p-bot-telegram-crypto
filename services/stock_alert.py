@@ -32,7 +32,7 @@ ENABLED = os.getenv("STOCK_ALERT_ENABLED", "true").lower() in ("true", "1", "yes
 FALLBACK_UNIT_LOW = {
     "USDT": 15.0, "USDC": 15.0, "USDG": 15.0, "ETH": 0.005, "BNB": 0.02, "SOL": 0.1, "AVAX": 0.5,
     "TRX": 50.0, "MATIC": 20.0, "POL": 20.0, "TON": 5.0, "SUI": 5.0, "APT": 5.0, "HYPE": 0.5,
-    "ARB": 20.0, "KAIA": 50.0, "BERA": 5.0,
+    "ARB": 20.0,
 }
 
 LEVEL_RANK = {"ok": 0, "low": 1, "critical": 2}

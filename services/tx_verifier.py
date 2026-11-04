@@ -27,7 +27,7 @@ def _host_only(url) -> str:
     except Exception:
         return "?"
 EVM_NETWORKS = {"BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB", "OPTIMISM",
-                "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"}
+                "ROBINHOOD", "HYPEREVM"}
 TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 def _hosts(*urls):
     """Daftar host unik berurutan (primer dari .env dulu), tanpa slash akhir."""

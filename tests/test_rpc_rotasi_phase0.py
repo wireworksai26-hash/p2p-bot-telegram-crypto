@@ -41,10 +41,9 @@ class TestRpcListsPhase0(unittest.TestCase):
                 for dead in DEAD_HOSTS:
                     self.assertNotIn(dead, rpc, f"{chain} masih memakai {dead}")
 
-    def test_kaia_rpc_utama_bukan_drpc(self):
-        kaia = EVMSender.EVM_CHAINS["KAIA"]["rpc_list"]
-        self.assertIn("https://public-en.node.kaia.io", kaia)
-        self.assertNotIn("https://klaytn.drpc.org", kaia)
+    def test_berachain_dan_kaia_sudah_dihapus_dari_bot(self):
+        self.assertNotIn("KAIA", EVMSender.EVM_CHAINS)
+        self.assertNotIn("BERA", EVMSender.EVM_CHAINS)
 
     def test_robinhood_publicnode_didahulukan(self):
         robinhood = EVMSender.EVM_CHAINS["ROBINHOOD"]["rpc_list"]

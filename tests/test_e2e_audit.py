@@ -62,25 +62,25 @@ class TestE2EAudit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_fee_category("SOL"), "ALTCOIN")
 
         # USD Fee tests
-        self.assertEqual(calculate_fee_idr(5000, "USD"), 3000)
-        self.assertEqual(calculate_fee_idr(100000, "USD"), 4500)
-        self.assertEqual(calculate_fee_idr(1015000, "USD"), 18000)
+        self.assertEqual(calculate_fee_idr(5000, "USD"), 2500)
+        self.assertEqual(calculate_fee_idr(100000, "USD"), 4000)
+        self.assertEqual(calculate_fee_idr(1015000, "USD"), 19000)
         # Di atas tier fixed -> tier persen (2,3% / 2%), max 5M
         self.assertEqual(calculate_fee_idr(1035001, "USD"), 23805)
         self.assertEqual(calculate_fee_idr(3800001, "USD"), 76000)  # 2%
 
         # Altcoin Fee tests
-        self.assertEqual(calculate_fee_idr(5000, "ALTCOIN"), 3000)
-        self.assertEqual(calculate_fee_idr(500000, "ALTCOIN"), 11000)
-        self.assertEqual(calculate_fee_idr(1010000, "ALTCOIN"), 20500)
-        # Di atas tier fixed -> tier persen (3% / 2,5%)
-        self.assertEqual(calculate_fee_idr(1030001, "ALTCOIN"), 30900)
+        self.assertEqual(calculate_fee_idr(5000, "ALTCOIN"), 2500)
+        self.assertEqual(calculate_fee_idr(500000, "ALTCOIN"), 12000)
+        self.assertEqual(calculate_fee_idr(1010000, "ALTCOIN"), 22500)
+        # Di atas tier fixed -> tier persen (2,5%)
+        self.assertEqual(calculate_fee_idr(1030001, "ALTCOIN"), 25750)
         self.assertEqual(calculate_fee_idr(3100001, "ALTCOIN"), 77500)
 
         # Convert Fee tests
-        self.assertEqual(calculate_fee_idr(5000, "CONVERT"), 3000)
-        self.assertEqual(calculate_fee_idr(1010000, "CONVERT"), 22000)
-        self.assertEqual(calculate_fee_idr(1030001, "CONVERT"), 30900)
+        self.assertEqual(calculate_fee_idr(5000, "CONVERT"), 2500)
+        self.assertEqual(calculate_fee_idr(1010000, "CONVERT"), 22500)
+        self.assertEqual(calculate_fee_idr(1030001, "CONVERT"), 25750)
 
     def test_inventory_reservation_e2e(self):
         """Audit wallet balance inventory tracking, oversell prevention, and release."""

@@ -102,11 +102,13 @@ class TestSellRupiah(SellAmountCase):
     async def test_rupiah_pas_dibagi_kurs(self):
         state, ctx, _ = await self._kirim("5000", mode="IDR", price=16000.0)
         self.assertEqual(state, INPUT_SENDER)
-        # Nominal Rupiah = yang masuk rekening; fee (3.000) ditambahkan ke koin yang disetor.
-        self.assertEqual(ctx.user_data["sell_crypto_amount"], 0.5)
-        self.assertEqual(ctx.user_data["sell_gross_nominal_idr"], 8000)
-        self.assertEqual(ctx.user_data["sell_fee_idr"], 3000)
-        self.assertEqual(ctx.user_data["sell_net_idr"], 5000)
+        # Nominal Rupiah = yang masuk rekening; fee USD (2.500 di tier 5k-10k) ditambahkan ke koin yang disetor.
+        # 5.000 + 2.500 = 7.500 -> 0,46875 USDT dibulatkan ke atas 4 desimal = 0,4688 (gross 7.500,8).
+        self.assertEqual(ctx.user_data["sell_crypto_amount"], 0.4688)
+        self.assertEqual(ctx.user_data["sell_fee_idr"], 2500)
+        self.assertEqual(ctx.user_data["sell_net_idr"], ctx.user_data["sell_gross_nominal_idr"] - 2500)
+        self.assertGreaterEqual(ctx.user_data["sell_net_idr"], 5000)
+        self.assertLess(ctx.user_data["sell_net_idr"], 5002)
 
     async def test_rupiah_dibulatkan_ke_atas_agar_tidak_di_bawah_nominal(self):
         price = 17915.0

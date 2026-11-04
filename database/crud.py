@@ -900,7 +900,7 @@ def update_wallet_balance(
         if not address:
             from config.settings import settings
             if network_upper in ["BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB",
-                                 "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM"]:
+                                 "OPTIMISM", "ROBINHOOD", "HYPEREVM"]:
                 address = settings.EVM_WALLET_ADDRESS
             elif network_upper == "SOLANA":
                 address = settings.SOL_WALLET_ADDRESS
@@ -969,7 +969,7 @@ def mark_wallet_balance_error(
         from config.settings import settings
         if network_upper in {
             "BSC", "ETH", "AVAX", "POLYGON", "BASE", "ARB",
-            "OPTIMISM", "ROBINHOOD", "KAIA", "BERA", "HYPEREVM",
+            "OPTIMISM", "ROBINHOOD", "HYPEREVM",
         }:
             address = settings.EVM_WALLET_ADDRESS
         else:

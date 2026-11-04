@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 SELECT_SRC_SYMBOL, SELECT_SRC_NET, SELECT_TGT_SYMBOL, SELECT_TGT_NET, INPUT_AMOUNT, INPUT_TARGET_ADDR, CONFIRM_SWAP, WAITING_DEPOSIT_HASH = range(8)
 INPUT_SENDER_ADDR = 8
 
-SUPPORTED_ASSETS = ["USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "SUI", "TON", "MATIC", "ARB", "AVAX", "KAIA", "BERA", "APT", "HYPE", "USDG"]
+SUPPORTED_ASSETS = ["USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "SUI", "TON", "MATIC", "ARB", "AVAX", "APT", "HYPE", "USDG"]
 
 NETWORKS_BY_SYMBOL = {
     "USDT": ["BSC", "POLYGON", "ARB", "TON", "SOLANA", "ETH"],
@@ -82,8 +82,6 @@ NETWORKS_BY_SYMBOL = {
     "MATIC": ["POLYGON"],
     "ARB": ["ARB"],
     "AVAX": ["AVAX"],
-    "KAIA": ["KAIA"],
-    "BERA": ["BERA"],
     "APT": ["APTOS"],
     "HYPE": ["HYPEREVM"],
     "USDG": ["ROBINHOOD"],

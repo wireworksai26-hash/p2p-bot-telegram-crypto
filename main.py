@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from telegram import BotCommand, Update
 from telegram.request import HTTPXRequest
+from bot.utils.update_processor import PerUserUpdateProcessor
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -468,8 +469,7 @@ def _seed_price_configs(db):
             "USDT", "USDC", "ETH", "SOL",
             "TRX", "BNB", "SUI", "TON",
             "POL", "MATIC", "ARB", "AVAX",
-            "KAIA", "BERA", "APT", "HYPE",
-            "USDG",
+            "APT", "HYPE", "USDG",
         ]
         configs = [
             PriceConfig(symbol=sym, spread_pct=target_spread, is_active=True)
@@ -556,6 +556,8 @@ def build_bot_application() -> Application:
         Application.builder()
         .token(settings.TELEGRAM_BOT_TOKEN)
         .request(trequest)
+        # Paralel antar user (satu handler lambat tidak lagi menahan semua user), berurutan per user.
+        .concurrent_updates(PerUserUpdateProcessor(64))
         .post_init(set_bot_commands)
         .build()
     )

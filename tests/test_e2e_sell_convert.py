@@ -129,12 +129,12 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data["sell_price_per_unit"], 2_000_000.0)
         # Gross = 0.5 * 2.000.000 = 1.000.000
         self.assertEqual(context.user_data["sell_gross_nominal_idr"], 1_000_000)
-        # Fee altcoin 1.000.000: tier (940.001-1.010.000) = 20.500 (tanpa surcharge)
+        # Fee altcoin 1.000.000: tier (940.001-1.010.000) = 22.500 (tanpa surcharge)
         expected_fee = calculate_fee_idr(1_000_000, "ALTCOIN", symbol="SOL", network="SOLANA", is_outgoing=False)
-        self.assertEqual(expected_fee, 20_500)
-        self.assertEqual(context.user_data["sell_fee_idr"], 20_500)
-        # Net = 1.000.000 - 20.500 = 979.500
-        self.assertEqual(context.user_data["sell_net_idr"], 979_500)
+        self.assertEqual(expected_fee, 22_500)
+        self.assertEqual(context.user_data["sell_fee_idr"], 22_500)
+        # Net = 1.000.000 - 22.500 = 977.500
+        self.assertEqual(context.user_data["sell_net_idr"], 977_500)
 
     async def test_sell_amount_rejects_negative_or_zero_net(self):
         """Uji penolakan input jika nominal kotor setelah fee menghasilkan net <= 0."""

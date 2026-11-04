@@ -24,8 +24,6 @@ BUY_NETWORKS_BY_SYMBOL = {
     "POL": ["POLYGON"],
     "ARB": ["ARB"],
     "AVAX": ["AVAX"],
-    "KAIA": ["KAIA"],
-    "BERA": ["BERA"],
     "APT": ["APTOS"],
     "HYPE": ["HYPEREVM"],
     "USDG": ["ROBINHOOD"],

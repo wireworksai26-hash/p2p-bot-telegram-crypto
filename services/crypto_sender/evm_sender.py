@@ -2,7 +2,7 @@
 services/crypto_sender/evm_sender.py — Sender untuk Rantai EVM.
 ============================================================
 Mengintegrasikan pengiriman token native & ERC20 (USDT) di BSC, ETH, AVAX,
-POLYGON, BASE, ARB, ROBINHOOD, KAIA, BERA, dan HYPEREVM menggunakan Web3.py.
+POLYGON, BASE, ARB, ROBINHOOD, dan HYPEREVM menggunakan Web3.py.
 """
 
 import logging
@@ -163,28 +163,6 @@ class EVMSender(BaseCryptoSender):
             "explorer": "https://robinhoodchain.blockscout.com",
             "native_symbol": "ETH",
             "tokens": {"USDG": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"}
-        },
-        "KAIA": {
-            "rpc_list": [
-                settings.KAIA_RPC,
-                "https://public-en.node.kaia.io",
-                "https://1rpc.io/klay",
-            ],
-            "chain_id": 8217,
-            "explorer": "https://kaiascan.io",
-            "native_symbol": "KAIA",
-            "tokens": {}
-        },
-        "BERA": {
-            "rpc_list": [
-                settings.BERA_RPC,
-                "https://rpc.berachain.com",
-                "https://berachain.drpc.org",
-            ],
-            "chain_id": 80094,
-            "explorer": "https://berascan.com",
-            "native_symbol": "BERA",
-            "tokens": {}
         },
         "HYPEREVM": {
             "rpc_list": [

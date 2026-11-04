@@ -4190,9 +4190,6 @@ NETWORK_ALIASES: dict[str, tuple[str, list[str]]] = {
     "HYPE": ("HyperEVM", ["HYPE"]),
     "AVAX": ("Avalanche", ["AVAX"]),
     "AVALANCHE": ("Avalanche", ["AVAX"]),
-    "KAIA": ("Kaia", ["KAIA"]),
-    "BERA": ("Berachain", ["BERA"]),
-    "BERACHAIN": ("Berachain", ["BERA"]),
 }
 
 
@@ -4201,7 +4198,7 @@ def get_available_networks_list() -> list[str]:
     return [
         "Base", "BSC", "Arbitrum", "Polygon", "Solana",
         "TRON", "TON", "Sui", "Aptos", "Ethereum", "Optimism",
-        "Robinhood", "HyperEVM", "Avalanche", "Kaia", "Berachain",
+        "Robinhood", "HyperEVM", "Avalanche",
     ]
 
 

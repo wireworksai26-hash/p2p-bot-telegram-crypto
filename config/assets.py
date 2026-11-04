@@ -47,8 +47,6 @@ STOCK_ASSETS = [
     ("MATIC", "POLYGON"),
     ("ARB", "ARB"),
     ("AVAX", "AVAX"),
-    ("KAIA", "KAIA"),
-    ("BERA", "BERA"),
     ("HYPE", "HYPEREVM"),
     ("USDG", "ROBINHOOD"),
     # --- Non-EVM: native + token ---
