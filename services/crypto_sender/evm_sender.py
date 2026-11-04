@@ -173,7 +173,7 @@ class EVMSender(BaseCryptoSender):
             "chain_id": 999,
             "explorer": "https://hyperscan.com",
             "native_symbol": "HYPE",
-            "tokens": {}
+            "tokens": {"USDC": "0xb88339CB7199b77E23DB6E890353E22632Ba630f"}
         }
     }
 

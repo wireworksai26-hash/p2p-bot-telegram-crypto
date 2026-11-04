@@ -38,6 +38,7 @@ STOCK_ASSETS = [
     ("USDC", "BSC"),
     ("USDC", "ARB"),
     ("USDC", "POLYGON"),
+    ("USDC", "HYPEREVM"),
     ("BNB", "BSC"),
     ("ETH", "BASE"),
     ("ETH", "ARB"),

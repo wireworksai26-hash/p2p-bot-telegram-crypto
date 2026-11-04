@@ -4186,8 +4186,8 @@ NETWORK_ALIASES: dict[str, tuple[str, list[str]]] = {
     "OPTIMISM": ("Optimism", ["ETH"]),
     "OP": ("Optimism", ["ETH"]),
     "ROBINHOOD": ("Robinhood", ["ETH", "USDG"]),
-    "HYPEREVM": ("HyperEVM", ["HYPE"]),
-    "HYPE": ("HyperEVM", ["HYPE"]),
+    "HYPEREVM": ("HyperEVM", ["HYPE", "USDC"]),
+    "HYPE": ("HyperEVM", ["HYPE", "USDC"]),
     "AVAX": ("Avalanche", ["AVAX"]),
     "AVALANCHE": ("Avalanche", ["AVAX"]),
 }

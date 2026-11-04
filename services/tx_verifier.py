@@ -391,6 +391,7 @@ EXPLORER_TOKEN_DECIMALS = {
     ("POLYGON", "USDT"): 6, ("POLYGON", "USDC"): 6,
     ("BASE", "USDC"): 6, ("ARB", "USDT"): 6, ("ARB", "USDC"): 6,
     ("OPTIMISM", "USDC"): 6, ("AVAX", "USDT"): 6, ("ROBINHOOD", "USDG"): 6,
+    ("HYPEREVM", "USDC"): 6,
 }
 
 
