@@ -18,7 +18,7 @@ from typing import Optional, Any
 
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
-from bot.utils.formatter import format_idr, format_crypto
+from bot.utils.formatter import display_symbol, format_idr, format_crypto
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,7 @@ def format_testimony_message(
     bot_username: str = "TokoKoinID_Bot",
     target_symbol: Optional[str] = None,
     target_network: Optional[str] = None,
+    payment_method: Optional[str] = None,
 ) -> str:
     """
     Menyusun teks postingan testimoni transaksi sukses.
@@ -114,21 +115,22 @@ def format_testimony_message(
     ot_upper = (order_type or "").upper()
     if ot_upper == "BUY" or ot_upper == "BELI":
         tx_type_label = "Beli"
-        coin_label = f"{crypto_symbol.upper()} {network.upper()}".strip()
+        coin_label = f"{display_symbol(crypto_symbol)} {network.upper()}".strip()
     elif ot_upper == "SELL" or ot_upper == "JUAL":
         tx_type_label = "Jual"
-        coin_label = f"{crypto_symbol.upper()} {network.upper()}".strip()
+        coin_label = f"{display_symbol(crypto_symbol)} {network.upper()}".strip()
     elif ot_upper == "SWAP" or ot_upper == "CONVERT":
         tx_type_label = "Swap"
-        t_sym = (target_symbol or "").upper()
+        t_sym = display_symbol(target_symbol or "")
         t_net = (target_network or "").upper()
         s_net = (network or "").upper()
-        src_label = f"{crypto_symbol.upper()} ({s_net})" if s_net else crypto_symbol.upper()
+        src_sym = display_symbol(crypto_symbol)
+        src_label = f"{src_sym} ({s_net})" if s_net else src_sym
         dst_label = f"{t_sym} ({t_net})" if t_net else t_sym
         coin_label = f"{src_label} -> {dst_label}".strip()
     else:
         tx_type_label = order_type.capitalize()
-        coin_label = f"{crypto_symbol.upper()} {network.upper()}".strip()
+        coin_label = f"{display_symbol(crypto_symbol)} {network.upper()}".strip()
 
     user_label = anonymize_username(username, telegram_id)
     nominal_formatted = format_idr(nominal_idr)
@@ -144,6 +146,12 @@ def format_testimony_message(
 
     bot_tag = f"@{bot_username.lstrip('@')}" if bot_username else "@TokoKoinID_Bot"
 
+    # Pembayaran hanya ditampilkan untuk Beli (Jual/Convert tidak punya metode bayar).
+    pay_label = _PAYMENT_LABELS.get((payment_method or "").upper()) if tx_type_label == "Beli" else None
+    pay_line = f"- Pembayaran : {pay_label}\n" if pay_label else ""
+    tips = ("\n*Tips : Top up sekali, gunakan saldo untuk pembelian berikutnya"
+            if pay_label == "Saldo Bot" else "")
+
     msg = (
         f"✅ <b>Transaksi Selesai</b>\n"
         f"- Jenis Transaksi : {tx_type_label}\n"
@@ -151,9 +159,29 @@ def format_testimony_message(
         f"- Pengguna : {user_label}\n"
         f"- Nominal : {nominal_formatted}\n"
         f"- Transaction Hash : {tx_display}\n"
+        f"{pay_line}"
         f"- Bot order : {bot_tag}"
+        f"{tips}"
     )
     return msg
+
+
+_PAYMENT_LABELS = {"BOT_BALANCE": "Saldo Bot", "GOPAY_QRIS": "Qris"}
+
+
+def format_topup_testimony(username: Optional[str], telegram_id: int, net_amount: int,
+                           bot_username: str = "TokoKoinID_Bot") -> str:
+    """Teks channel untuk topup saldo bot yang berhasil (nominal = yang masuk ke saldo)."""
+    bot_tag = f"@{bot_username.lstrip('@')}" if bot_username else "@TokoKoinID_Bot"
+    return (
+        f"✅ <b>Top Up Saldo Berhasil</b>\n"
+        f"- Jenis Transaksi : Top Up Saldo Bot\n"
+        f"- Nominal Masuk : {format_idr(int(net_amount or 0))}\n"
+        f"- Pengguna : {anonymize_username(username, telegram_id)}\n"
+        f"- Pembayaran : Qris\n"
+        f"- Bot order : {bot_tag}\n"
+        f"*Saldo top up digunakan untuk membeli Coin di bot"
+    )
 
 
 def _resolve_bot(sender):
@@ -280,6 +308,7 @@ async def post_transaction_testimony(
             bot_username=bot_username,
             target_symbol=target_symbol,
             target_network=target_network,
+            payment_method=getattr(order, "payment_method", None),
         )
 
         await _send_with_retry(
@@ -302,7 +331,7 @@ async def post_transaction_testimony(
 _TESTIMONY_FIELDS = (
     "order_id", "order_type", "crypto_symbol", "network", "target_crypto_symbol",
     "target_network", "total_idr", "nominal_idr", "payout_tx_hash", "tx_hash",
-    "deposit_tx_hash", "telegram_id", "user_username",
+    "deposit_tx_hash", "telegram_id", "user_username", "payment_method",
 )
 _scheduled_order_ids: set = set()
 
@@ -441,4 +470,34 @@ def schedule_transaction_testimony(bot, order, db=None) -> bool:
         return True
     except Exception as e:
         logger.error(f"Gagal menjadwalkan testimoni order {getattr(order, 'order_id', '?')}: {e}", exc_info=True)
+        return False
+
+
+async def post_topup_testimony(bot, topup, net_amount, db=None, channel: Optional[str] = None) -> bool:
+    """Kirim testimoni topup saldo ke channel. Tidak pernah melempar error (saldo user sudah masuk)."""
+    bot = _resolve_bot(bot)
+    if not bot or not topup:
+        return False
+    target_channel = channel or os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+    try:
+        telegram_id = int(getattr(topup, "telegram_id", 0) or 0)
+        username = None
+        if db and telegram_id:
+            from database.models import User
+            user_obj = db.query(User).filter(User.telegram_id == telegram_id).first()
+            username = user_obj.username if user_obj and user_obj.username else None
+        global _bot_username_cache
+        if _bot_username_cache is None:
+            try:
+                me = await bot.get_me()
+                if me and me.username:
+                    _bot_username_cache = me.username
+            except Exception:
+                pass
+        text = format_topup_testimony(username, telegram_id, net_amount, _bot_username_cache or "TokoKoinID_Bot")
+        await _send_with_retry(bot, chat_id=target_channel, text=text, parse_mode="HTML",
+                               disable_web_page_preview=True)
+        return True
+    except Exception as exc:
+        logger.error("Gagal mengirim testimoni topup %s ke %s: %s", getattr(topup, "topup_id", "?"), target_channel, exc)
         return False

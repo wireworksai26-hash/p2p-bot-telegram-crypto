@@ -30,6 +30,9 @@ async def log_topup_success(bot, topup, net_amount, new_balance, is_treasury=Fal
             f"Via: {_VIA.get(via, via)}"
         )
         await kirim_ke_topik(bot, kind="topup", text=text)
+        if not is_treasury:  # topup kas bot internal admin: tidak dipublikasikan
+            from services.testimony_service import post_topup_testimony
+            await post_topup_testimony(bot, topup, net_amount, db)
     except Exception as exc:
         logger.warning("Riwayat topup gagal dikirim: %s", exc)
 
