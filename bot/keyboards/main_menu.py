@@ -50,6 +50,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Program Referral", callback_data="menu_referral", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("LINK", "5350305691942788490")),
         ],
         [
+            InlineKeyboardButton("⭐ Stars & Premium", callback_data="menu_stars"),
+        ],
+        [
             InlineKeyboardButton("📖 Panduan Transaksi", callback_data="menu_guide"),
             InlineKeyboardButton("Syarat & Ketentuan", callback_data="menu_snk", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("WARNING", "5447644880824181073")),
         ],

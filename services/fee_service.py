@@ -12,8 +12,8 @@ Menghitung biaya transaksi IDR sesuai aturan tier resmi dari client:
    Fee persen dibulatkan ke bawah (int()).
 5. Batas transaksi maksimal adalah Rp 5.000.000 (di atas itu chat admin).
 6. Pasangan gas mahal (ETH-ETH, TRX-TRON, USDT-ETH, USDC-ETH):
-   - surcharge kirim Rp 2.500 (hanya saat bot mengirim koin: Beli/Convert target),
-   - minimum transaksi Rp 7.500 untuk semua jenis transaksi.
+   - surcharge kirim Rp 2.000 (hanya saat bot mengirim koin: Beli/Convert target),
+   - minimum transaksi Rp 7.000 untuk semua jenis transaksi.
 
 Lompatan/penurunan fee di batas tier adalah keputusan client (antisipasi
 fluktuasi harga coin) — jangan "diperhalus" tanpa persetujuan ulang.
@@ -103,14 +103,14 @@ CONVERT_PERCENT_TIERS = [
 ]
 
 # Surcharge gas untuk pasangan coin/jaringan dengan biaya kirim mahal.
-GAS_SURCHARGE_IDR = 2500
+GAS_SURCHARGE_IDR = 2000
 GAS_SURCHARGE_PAIRS = {
     ("ETH", "ETH"),
     ("TRX", "TRON"),
     ("USDT", "ETH"),
     ("USDC", "ETH"),
 }
-GAS_PAIR_MIN_IDR = 7500
+GAS_PAIR_MIN_IDR = 7000
 
 
 # Pajak QRIS GoPay/GoBiz 0,3% untuk pembayaran QRIS nominal > Rp 500.000.
@@ -126,7 +126,7 @@ def calculate_qris_mdr(nominal_idr: int) -> int:
 
 
 QRIS_MAX_TOTAL_IDR = 10_000_000  # batas transaksi QRIS (BI)
-QRIS_MAX_UNIQUE_CODE = 400
+QRIS_MAX_UNIQUE_CODE = 300
 
 
 def qris_max_nominal() -> int:

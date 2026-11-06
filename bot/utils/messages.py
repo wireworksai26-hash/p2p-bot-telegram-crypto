@@ -60,26 +60,37 @@ ORDER_SUMMARY_BUY = (
     f"{E_CARD()} <b>Nominal Bayar:</b> {{nominal_idr_str}}\n"
     "🔌 <b>Fee Layanan (dipotong):</b> -{fee_idr_str}\n"
     f"{E_MONEY()} <b>Nilai Koin Diterima:</b> <b>{{received_idr_str}}</b>\n\n"
-    "📍 <b>Wallet Penerima:</b>\n<code>{buyer_wallet}</code>\n\n"
-    "Silakan klik tombol konfirmasi di bawah jika data sudah benar."
+    "📍 <b>Wallet Penerima:</b>\n<code>{buyer_wallet}</code>"
 )
+
+# Pesan tambahan di ringkasan Beli dilipat dalam satu blok dropdown (panah ke bawah) agar tampilan minimalis.
+BUY_SUMMARY_CONFIRM_HINT = "Silakan klik tombol konfirmasi di bawah jika data sudah benar."
+
+
+def collapsible(*parts: str) -> str:
+    """Gabungkan bagian teks menjadi satu blok <blockquote expandable> (tertutup, bisa dibuka dengan panah)."""
+    body = "\n".join(p.strip("\n") for p in parts if p and p.strip())
+    return f"<blockquote expandable>{body}</blockquote>" if body else ""
 
 ORDER_SUMMARY_SELL = (
     f"{E_CHART()} <b>RINGKASAN ORDER PENJUALAN</b>\n\n"
     f"{E_HISTORY()} <b>ID Order:</b> <code>{{order_id}}</code>\n"
     f"{E_COIN()} <b>Kirim Aset:</b> {{crypto_amount_str}}\n"
-    f"{E_CHART()} <b>Kurs:</b> {{price_per_unit_str}} / unit\n"
     "────────────────────\n"
-    f"{E_MONEY()} <b>Nominal Bersih (IDR):</b> <b>{{nominal_idr_str}}</b>\n"
-    "🔌 <b>Fee Layanan:</b> {fee_idr_str}\n\n"
+    f"{E_MONEY()} <b>Nominal Bersih (IDR):</b> <b>{{nominal_idr_str}}</b>\n\n"
     "👛 <b>Wallet Pengirim Koin Anda:</b>\n"
     "<code>{sender_wallet}</code>\n\n"
     "🏦 <b>Rekening / E-Wallet Penerima Anda:</b>\n"
     "• Bank / E-Wallet: {bank_name}\n"
     "• No Rekening: <code>{bank_acc}</code>\n"
-    "• Atas Nama: {bank_holder}\n\n"
+    "• Atas Nama: {bank_holder}"
+)
+
+# Bagian akhir ringkasan Jual dilipat dalam satu dropdown (panah ke bawah) agar tampilan minimalis.
+SELL_SUMMARY_SERVICE_NOTE = (
     "⏰ <b>Jam Layanan:</b> 08.00 - 23.59 WIB\n"
-    "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan rupiah diproses manual pada jam layanan atau saat admin online).</i>\n\n"
+    "<i>(Setelah transfer, kirim TX Hash agar koin diverifikasi otomatis. Pencairan rupiah diproses manual "
+    "pada jam layanan atau saat admin online).</i>\n\n"
     "Silakan klik konfirmasi di bawah untuk memproses penjualan."
 )
 

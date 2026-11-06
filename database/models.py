@@ -64,7 +64,7 @@ class Order(Base):
     nominal_idr = Column(BigInteger, nullable=False)    # Base value in IDR
     fee_idr = Column(BigInteger, nullable=False)        # Transaction fee in IDR
     mdr_idr = Column(BigInteger, default=0)             # Pajak QRIS 0,3% (0 bila tidak kena)
-    unique_code = Column(Integer, default=0)           # Unique payment code (1..400)
+    unique_code = Column(Integer, default=0)           # Unique payment code (1..300)
     total_idr = Column(BigInteger, nullable=False)      # Total IDR user pays (buy) or gets (sell)
 
     fee_category = Column(String(15), default='ALTCOIN') # 'USD', 'ALTCOIN', 'CONVERT'
@@ -539,3 +539,64 @@ class LoyaltyConfig(Base):
     key = Column(String(50), primary_key=True)
     value = Column(String(200), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StarsOrder(Base):
+    """Pesanan Telegram Stars / Telegram Premium. Dibayar Saldo Bot atau QRIS, dipenuhi manual oleh admin
+    (beli di Fragment lalu kirim ke username tujuan). Status: pending -> paid -> completed;
+    atau expired / cancelled / rejected (dana dikembalikan ke Saldo Bot)."""
+    __tablename__ = 'stars_orders'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    order_id = Column(String(30), unique=True, nullable=False, index=True)
+    telegram_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False, index=True)
+    product = Column(String(10), nullable=False)             # STARS / PREMIUM
+    package = Column(Integer, nullable=False)                # jumlah Stars atau jumlah bulan
+    recipient_username = Column(String(40), nullable=False)  # tanpa @
+    price_idr = Column(BigInteger, nullable=False)
+    unique_code = Column(Integer, default=0)
+    total_idr = Column(BigInteger, nullable=False)           # yang dibayar (QRIS: harga + kode unik)
+    payment_method = Column(String(20), nullable=False)      # BOT_BALANCE / GOPAY_QRIS
+    status = Column(String(15), default='pending', nullable=False, index=True)
+    late_payment = Column(Boolean, default=False)            # dibayar setelah kedaluwarsa (perlu dicek admin)
+    # Pemenuhan otomatis via Fragment (processing = sedang dikerjakan sistem; review = uang mungkin sudah
+    # keluar tetapi hasilnya belum pasti, admin wajib cek sebelum kirim ulang atau refund).
+    fulfill_mode = Column(String(10), nullable=True)         # auto / manual
+    fulfill_attempts = Column(Integer, default=0)
+    fulfill_ref = Column(String(120), nullable=True)         # id pesan / hash transaksi TON
+    fulfill_error = Column(String(300), nullable=True)
+    ton_spent_nano = Column(BigInteger, nullable=True)
+    processing_at = Column(DateTime, nullable=True)
+    handled_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expired_at = Column(DateTime, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class Voucher(Base):
+    """Kode voucher potongan fee transaksi (Beli / Jual / Convert). Kode disimpan huruf kecil tanpa spasi."""
+    __tablename__ = 'vouchers'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(40), unique=True, nullable=False, index=True)
+    discount_idr = Column(BigInteger, nullable=False)           # potongan fee (tidak pernah melebihi fee)
+    active = Column(Boolean, default=True, nullable=False)
+    applies_to = Column(String(40), default='buy,sell,swap', nullable=False)
+    max_per_user = Column(Integer, default=1, nullable=False)   # 0 = tanpa batas per user
+    max_total = Column(Integer, default=0, nullable=False)      # 0 = tanpa batas total pemakaian
+    valid_until = Column(DateTime, nullable=True)
+    note = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VoucherRedemption(Base):
+    """Satu pemakaian voucher pada satu order (dihitung selama order tidak expired/batal/ditolak)."""
+    __tablename__ = 'voucher_redemptions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    voucher_code = Column(String(40), nullable=False, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    order_id = Column(String(50), nullable=False, index=True)
+    discount_idr = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

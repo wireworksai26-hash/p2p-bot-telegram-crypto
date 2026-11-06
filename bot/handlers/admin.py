@@ -42,13 +42,14 @@ def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMIN_CHAT_IDS
 
 
-def get_admin_dashboard_keyboard(pending_count: int = 0, pending_withdraw: int = 0) -> InlineKeyboardMarkup:
+def get_admin_dashboard_keyboard(pending_count: int = 0, pending_withdraw: int = 0, pending_stars: int = 0) -> InlineKeyboardMarkup:
     """Membuat inline keyboard navigasi utama Admin Dashboard."""
     order_label = f"📥 Antrean Order ({pending_count})" if pending_count > 0 else "📥 Antrean Order (0)"
 
     keyboard = [
         [InlineKeyboardButton("📥 Dashboard Jual Crypto", callback_data="admin_sellorders_0")],
         [InlineKeyboardButton(f"💸 Withdraw Saldo User ({pending_withdraw})", callback_data="admin_panel_withdraws")],
+        [InlineKeyboardButton(f"⭐ Stars & Premium ({pending_stars})", callback_data="admin_panel_stars")],
         [
             InlineKeyboardButton("📊 Statistik & Volume", callback_data="admin_panel_stats"),
             InlineKeyboardButton("📑 Rekap Mingguan (Sheets)", callback_data="admin_panel_weekly_report"),
@@ -112,6 +113,20 @@ def _pending_withdraws(db) -> tuple:
         return 0, 0
 
 
+def _pending_stars(db) -> tuple:
+    """(jumlah, total Rupiah) pesanan Stars/Premium menunggu dikirim; (0, 0) bila gagal dibaca."""
+    try:
+        from database import stars_crud
+        return stars_crud.paid_summary(db)
+    except Exception:
+        logger.warning("Gagal membaca antrean Stars/Premium untuk dashboard", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0, 0
+
+
 def _withdraw_totals(db) -> dict:
     """Rekap withdraw yang sudah ditransfer; nol bila gagal dibaca agar dashboard tetap tampil."""
     try:
@@ -134,10 +149,11 @@ def build_admin_dashboard_text(db) -> str:
     bot_treasury = crud.get_bot_treasury_balance(db)
     wd_count, wd_total = _pending_withdraws(db)
     wd_paid = _withdraw_totals(db)
+    stars_count, stars_total = _pending_stars(db)
 
     now_str = datetime.now(timezone.utc).strftime("%d-%m-%Y %H:%M UTC")
 
-    status_indicator = ("🔴 <b>Perlu Tindakan!</b>" if (pending_count > 0 or wd_count > 0)
+    status_indicator = ("🔴 <b>Perlu Tindakan!</b>" if (pending_count > 0 or wd_count > 0 or stars_count > 0)
                         else "🟢 <b>Semua Sistem Lancar</b>")
 
     text = (
@@ -154,6 +170,8 @@ def build_admin_dashboard_text(db) -> str:
         f"├── ✅ <b>Withdraw Ditransfer:</b> hari ini <code>{format_idr(wd_paid['paid_today'][1])}</code> "
         f"({wd_paid['paid_today'][0]}x) · total <code>{format_idr(wd_paid['paid_all'][1])}</code> "
         f"({wd_paid['paid_all'][0]}x)\n"
+        f"├── ⭐ <b>Stars/Premium Menunggu:</b> <b>{stars_count} Pesanan</b>"
+        f"{f' ({format_idr(stars_total)})' if stars_count else ''}\n"
         f"└── ⏳ <b>Antrean Pending:</b> <b>{pending_count} Order</b>\n\n"
         "💡 <i>Pilih menu di bawah ini untuk inspeksi & tindakan administratif cepat:</i>"
     )
@@ -1564,7 +1582,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         pending_count = crud.get_pending_orders_count(db)
         dashboard_text = build_admin_dashboard_text(db)
-        reply_markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0])
+        reply_markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0], _pending_stars(db)[0])
         
         await update.message.reply_text(
             text=dashboard_text,
@@ -1784,9 +1802,16 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if data == "admin_panel_main":
             pending_count = crud.get_pending_orders_count(db)
             text = build_admin_dashboard_text(db)
-            markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0])
+            markup = get_admin_dashboard_keyboard(pending_count, _pending_withdraws(db)[0], _pending_stars(db)[0])
             await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
             await query.answer("Dashboard diperbarui.")
+
+        elif data == "admin_panel_stars":
+            from bot.handlers.stars import build_admin_stars_view
+            from bot.utils.telegram_utils import safe_edit_message
+            text, markup = build_admin_stars_view(db)
+            await safe_edit_message(query, text, reply_markup=markup)
+            await query.answer("Antrean Stars/Premium dimuat.")
 
         elif data == "admin_panel_withdraws":
             text, markup = build_admin_withdraws_view(db)

@@ -27,11 +27,11 @@ MAINTENANCE_TEXT = (
 # Pause terjadwal/manual (services/system_pause.py): hanya pemicu transaksi BARU yang dijeda.
 # Tombol konfirmasi ikut dijeda agar user yang sudah setengah jalan tidak membuat order saat pause.
 PAUSE_BLOCKED_CALLBACKS = frozenset({
-    "menu_buy", "menu_sell", "start_swap", "menu_swap", "start_topup_qris", "wd_start",
+    "menu_buy", "menu_sell", "start_swap", "menu_swap", "start_topup_qris", "wd_start", "menu_stars", "stp_confirm",
     "buy_confirm", "sell_confirm", "confirm_swap_order", "wd_confirm", "wd_all", "wd_custom",
 })
 PAUSE_BLOCKED_PREFIXES = ("topup_nom_", "wd_bank_")
-PAUSE_BLOCKED_COMMANDS = frozenset({"buy", "beli", "sell", "jual", "swap", "convert", "topup"})
+PAUSE_BLOCKED_COMMANDS = frozenset({"buy", "beli", "sell", "jual", "swap", "convert", "topup", "stars", "premium"})
 
 
 def _is_new_transaction_trigger(update: Update) -> bool:

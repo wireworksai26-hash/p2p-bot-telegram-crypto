@@ -408,6 +408,18 @@ async def _route_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         from bot.handlers.withdraw import withdraw_confirm_handler
         await withdraw_confirm_handler(update, context)
 
+    elif data.startswith("stp_check_"):
+        from bot.handlers.stars import check_payment
+        await check_payment(update, context)
+
+    elif data.startswith("stp_cancel_"):
+        from bot.handlers.stars import cancel_order
+        await cancel_order(update, context)
+
+    elif data.startswith("admin_stp_"):
+        from bot.handlers.stars import admin_stars_callback
+        await admin_stars_callback(update, context)
+
     elif data.startswith("admin_wd_open_"):
         from bot.handlers.withdraw import admin_withdraw_open
         await admin_withdraw_open(update, context)

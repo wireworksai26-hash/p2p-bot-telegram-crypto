@@ -29,8 +29,8 @@ U = 95001
 class Limit(unittest.TestCase):
     def test_nominal_maksimum_selalu_muat(self):
         n = qris_max_nominal()
-        self.assertLessEqual(n + calculate_qris_mdr(n) + 400, QRIS_MAX_TOTAL_IDR)
-        self.assertGreater(n + 1 + calculate_qris_mdr(n + 1) + 400, QRIS_MAX_TOTAL_IDR)
+        self.assertLessEqual(n + calculate_qris_mdr(n) + 300, QRIS_MAX_TOTAL_IDR)
+        self.assertGreater(n + 1 + calculate_qris_mdr(n + 1) + 300, QRIS_MAX_TOTAL_IDR)
 
 
 class TopupLimit(unittest.IsolatedAsyncioTestCase):

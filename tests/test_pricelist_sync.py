@@ -93,8 +93,8 @@ class TestPricelistSync(unittest.TestCase):
     def test_catatan_baru_ada_tanya_admin_hilang(self):
         # Tidak ada +500 lagi
         self.assertNotIn("+Rp 500", self.text)
-        self.assertIn("+Rp 2.500", self.text)
-        self.assertIn("7.500", self.text)
+        self.assertIn("+Rp 2.000", self.text)
+        self.assertIn("7.000", self.text)
         self.assertIn("5.000", self.text)
         self.assertIn("0,3%", self.text)
         self.assertIn("rata-rata harga bursa global", self.text)

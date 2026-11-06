@@ -36,6 +36,7 @@ from database.connection import SessionLocal
 from database.models import User, Order, AuditLog
 from services.price_service import price_service
 from services.fee_service import calculate_fee_idr, gas_surcharge_note
+from bot.utils import voucher_flow
 from services.crypto_sender import CryptoSenderFactory
 from services import tx_verifier
 from services.detector import deposit_detector
@@ -67,6 +68,7 @@ logger = logging.getLogger(__name__)
 # State Conversation
 SELECT_SRC_SYMBOL, SELECT_SRC_NET, SELECT_TGT_SYMBOL, SELECT_TGT_NET, INPUT_AMOUNT, INPUT_TARGET_ADDR, CONFIRM_SWAP, WAITING_DEPOSIT_HASH = range(8)
 INPUT_SENDER_ADDR = 8
+SWAP_VOUCHER = 9
 
 SUPPORTED_ASSETS = ["USDT", "USDC", "ETH", "SOL", "BNB", "TRX", "SUI", "TON", "POL", "ARB", "AVAX", "APT", "HYPE", "USDG"]
 
@@ -544,6 +546,8 @@ async def input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["swap_nominal_idr"] = nominal_idr
     context.user_data["swap_fee_idr"] = fee_idr
     context.user_data["swap_tgt_amount"] = tgt_amount
+    context.user_data.pop("swap_pricing_base", None)
+    voucher_flow.clear_voucher(context.user_data, "swap")
     context.user_data["swap_src_price"] = src_market_price
     context.user_data["swap_tgt_price"] = tgt_market_price
     context.user_data["swap_quoted_at"] = quote_guard.stamp()
@@ -677,25 +681,52 @@ async def _show_swap_summary(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["swap_seller_deposit_wallet"] = seller_deposit_wallet
 
     keyboard = [
+        voucher_flow.voucher_button_row(context.user_data, "swap"),
         [InlineKeyboardButton("Ya, Konfirmasi & Dapatkan Alamat Setor", callback_data="confirm_swap_order", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968"))],
         [InlineKeyboardButton("Batal", callback_data="cancel_swap", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))]
     ]
 
-    await update.message.reply_text(
+    text = (
         f"📑 <b>[RINGKASAN QUOTE CONVERT]</b>\n"
         f"<i>Masa berlaku quote: {quote_guard.QUOTE_MINUTES} Menit</i>\n\n"
         f"<b>Kirim:</b> {src_amount:.6f} {src_sym} ({src_net})\n"
         f"<b>Nilai IDR:</b> Rp {nominal_idr:,}\n"
-        f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}\n"
+        f"<b>Fee Convert:</b> Rp {fee_idr:,}{gas_surcharge_note(tgt_sym, tgt_net)}"
+        f"{voucher_flow.voucher_line(context.user_data, 'swap')}\n"
         f"<b>Terima:</b> ~{tgt_amount:.6f} {tgt_sym} ({tgt_net})\n"
         f"<b>Wallet Pengirim:</b> <code>{_esc(sender_wallet)}</code>\n"
         f"<b>Wallet Tujuan:</b> <code>{target_addr}</code>\n\n"
         f"{WALLET_LOCK_NOTE}\n\n"
-        f"Apakah data di atas sudah sesuai?",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        f"Apakah data di atas sudah sesuai?"
     )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     return CONFIRM_SWAP
+
+
+def reprice_swap(ud: dict, discount: int):
+    """Terapkan (discount > 0) atau lepas (0) voucher: fee berkurang, koin tujuan yang diterima bertambah."""
+    base = ud.setdefault("swap_pricing_base", {"fee": int(ud["swap_fee_idr"]), "tgt": ud["swap_tgt_amount"]})
+    if discount:
+        ud["swap_voucher_discount"] = int(discount)
+    else:
+        ud.pop("swap_voucher_discount", None)
+    applied = voucher_flow.VS.applied_discount(base["fee"], discount)
+    ud["swap_voucher_applied"] = applied
+    ud["swap_fee_idr"] = base["fee"] - applied
+    tgt_price = ud.get("swap_tgt_price") or 0
+    if applied and tgt_price > 0:
+        ud["swap_tgt_amount"] = (int(ud["swap_nominal_idr"]) - ud["swap_fee_idr"]) / tgt_price
+    else:
+        ud["swap_tgt_amount"] = base["tgt"]
+    return None
+
+
+_swap_voucher = voucher_flow.build_handlers(
+    prefix="swap", flow="swap", state_voucher=SWAP_VOUCHER, reprice=reprice_swap,
+    render=_show_swap_summary, cancel_callback="cancel_swap")
 
 
 async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -703,6 +734,10 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
 
     telegram_id = query.from_user.id
+    # Voucher bisa saja sudah tidak berlaku sejak dimasukkan: cek ulang sebelum order dibuat.
+    if not await voucher_flow.guard_at_confirm(update, context, prefix="swap", flow="swap",
+                                               reprice=reprice_swap, render=_show_swap_summary):
+        return CONFIRM_SWAP
     order_id = f"SWAP-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{telegram_id % 1000:03d}"
 
     src_sym = context.user_data["swap_src_symbol"]
@@ -813,6 +848,7 @@ async def confirm_swap_order(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         db.add(audit)
         db.commit()
+        voucher_flow.redeem_for_order(telegram_id, context.user_data, "swap", order_id)
 
     except Exception as e:
         db.rollback()
@@ -1127,6 +1163,14 @@ swap_conv_handler = ConversationHandler(
         ],
         CONFIRM_SWAP: [
             CallbackQueryHandler(confirm_swap_order, pattern="^confirm_swap_order$"),
+            CallbackQueryHandler(_swap_voucher["prompt"], pattern="^swap_voucher$"),
+            CallbackQueryHandler(_swap_voucher["remove"], pattern="^swap_voucher_off$"),
+            CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
+            CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
+        ],
+        SWAP_VOUCHER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, _swap_voucher["text_input"]),
+            CallbackQueryHandler(_swap_voucher["back"], pattern="^swap_voucher_back$"),
             CallbackQueryHandler(cancel_swap, pattern="^cancel_swap$"),
             CallbackQueryHandler(cancel_swap, pattern="^menu_back$"),
         ],

@@ -11,6 +11,7 @@ FLOW_LABELS = {
     "sell": "Jual Crypto",
     "swap": "Convert/Swap",
     "topup": "Topup Saldo",
+    "stars": "Stars & Premium",
     "calc": "Kalkulator",
 }
 
@@ -20,12 +21,14 @@ def _handlers():
     from bot.handlers.sell import sell_conversation_handler
     from bot.handlers.swap import swap_conv_handler
     from bot.handlers.balance import topup_conversation_handler
+    from bot.handlers.stars import stars_conversation_handler
     from bot.handlers.calculator import calculator_conversation_handler
     return {
         "buy": buy_conversation_handler,
         "sell": sell_conversation_handler,
         "swap": swap_conv_handler,
         "topup": topup_conversation_handler,
+        "stars": stars_conversation_handler,
         "calc": calculator_conversation_handler,
     }
 

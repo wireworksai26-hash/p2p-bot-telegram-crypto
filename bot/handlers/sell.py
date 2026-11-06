@@ -28,6 +28,7 @@ from database.connection import SessionLocal
 from database.crud import create_order, get_order_by_id
 from services.price_service import price_service
 from services.fee_service import calculate_fee_idr, get_fee_category, gross_for_net_idr
+from bot.utils import voucher_flow
 from bot.keyboards.crypto_select import (
     get_sell_symbol_keyboard,
     get_sell_network_keyboard
@@ -36,7 +37,7 @@ from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_crypto_amount, parse_idr_amount, looks_like_idr
 from bot.utils.wallet_notes import exchange_send_note
 from bot.utils.formatter import format_idr, format_crypto, format_crypto_copy, generate_order_id, display_symbol
-from bot.utils.messages import ORDER_SUMMARY_SELL, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE
+from bot.utils.messages import ORDER_SUMMARY_SELL, SELL_SUMMARY_SERVICE_NOTE, BANK_DUPLICATE_WARNING, BANK_LOCK_NOTE, collapsible
 from bot.utils.telegram_utils import safe_edit_message, notify_admins
 from bot.utils.flow_guard import block_if_busy
 from services import quote_guard
@@ -58,6 +59,7 @@ WAITING_TX = 6
 INPUT_TX_HASH = 7
 INPUT_PROOF = 8
 INPUT_SENDER = 9
+SELL_VOUCHER = 10
 
 # Helper untuk mendapatkan alamat hot wallet bot berdasarkan network
 def get_hot_wallet_address(network: str) -> str:
@@ -337,7 +339,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         
         # Minimum transaksi ditegakkan oleh calculate_fee_idr pada nominal KOTOR (gross):
-        # Rp 5.000 default; Rp 7.500 untuk pasangan gas (ETH-ETH/TRX-TRON/USDT-ETH/
+        # Rp 5.000 default; Rp 7.000 untuk pasangan gas (ETH-ETH/TRX-TRON/USDT-ETH/
         # USDC-ETH). Net boleh di bawah Rp 5.000 (contoh client: jual 105k -> net 99k).
 
         # Simpan rincian perhitungan ke context
@@ -347,6 +349,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["sell_gross_nominal_idr"] = gross_nominal_idr
         context.user_data["sell_fee_idr"] = fee_idr
         context.user_data["sell_net_idr"] = net_nominal_idr
+        context.user_data.pop("sell_pricing_base", None)
+        voucher_flow.clear_voucher(context.user_data, "sell")
         
     except ValueError as val_err:
         await update.message.reply_text(f"⚠️ {str(val_err)}")
@@ -372,16 +376,19 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     await update.message.reply_text(
         text=(
-            f"🪙 <b>Simulasi Perhitungan Penjualan:</b>\n"
+            f"{E_COIN()} <b>Simulasi Perhitungan Penjualan:</b>\n"
             f"• Aset Dijual: <code>{format_deposit_amount(crypto_amount, symbol)}</code> {display_symbol(symbol)} ({network})\n"
             f"{rupiah_note}"
             f"• Kurs Jual: <code>{format_idr(sell_price_idr)}</code>\n"
             f"• Nominal Kotor: <code>{format_idr(gross_nominal_idr)}</code>\n"
             f"• Fee Layanan: <code>{format_idr(fee_idr)}</code>\n"
             f"• <b>Nominal Bersih Anda Terima:</b> <b>{format_idr(net_nominal_idr)}</b>\n\n"
-            f"Silakan ketik <b>Alamat Wallet Pengirim</b> Anda: alamat wallet yang akan dipakai "
-            f"mengirim {display_symbol(symbol)} di jaringan {network}. Setoran hanya diterima dari alamat ini.\n\n"
-            f"{exchange_send_note()}"
+            f"Silakan ketik <b>Alamat Wallet Pengirim</b> Anda disini\n\n"
+            + collapsible(
+                f"Alamat wallet yang akan dipakai mengirim {display_symbol(symbol)} di jaringan {network}. "
+                "Setoran hanya diterima dari alamat ini.",
+                exchange_send_note(),
+            )
         ),
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
@@ -415,11 +422,12 @@ async def _ask_bank_details(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await update.message.reply_text(
         text=(
-            f"✅ Wallet pengirim tersimpan.\n\n"
-            f"Silakan ketik detail <b>Rekening Bank / E-Wallet Penerima</b> Anda.\n"
+            f"✅ Wallet pengirim tersimpan.\n"
+            f"Silakan ketik detail <b>Nomor Rekening Bank / E-Wallet Penerima</b> Anda\n\n"
+            f"(Menerima Pencairan dari berbagai Bank dan E-Wallet).\n\n"
             f"<i>Format bebas, disarankan: Nama Bank, No Rekening, Atas Nama.</i>\n"
-            f"<i>(Contoh: BCA, 882049281, Budi Santoso)</i>\n"
-            f"<i>(Contoh: GOPAY, 081234567890, Budi Santoso)</i>"
+            f"<i>(Contoh: BCA, 882049281, Wahyu Setiawan)</i>\n"
+            f"<i>(Contoh: GOPAY, 081234567890, Wahyu Setiawan)</i>"
         ),
         reply_markup=InlineKeyboardMarkup(saved_bank_buttons + keyboard),
         parse_mode="HTML"
@@ -485,12 +493,20 @@ async def _proceed_to_sell_confirmation(
     order_id = generate_order_id()
     context.user_data["sell_order_id"] = order_id
 
-    crypto_amount = context.user_data["sell_crypto_amount"]
-    symbol = context.user_data["sell_symbol"]
-    network = context.user_data["sell_network"]
-    price_per_unit = context.user_data["sell_price_per_unit"]
-    fee_idr = context.user_data["sell_fee_idr"]
-    net_idr = context.user_data["sell_net_idr"]
+    return await _render_sell_summary(update, context)
+
+
+async def _render_sell_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ringkasan order Jual + tombol (konfirmasi, voucher, batal). Dipakai setelah rekening dan setelah voucher."""
+    ud = context.user_data
+    order_id = ud["sell_order_id"]
+    crypto_amount = ud["sell_crypto_amount"]
+    symbol = ud["sell_symbol"]
+    network = ud["sell_network"]
+    price_per_unit = ud["sell_price_per_unit"]
+    fee_idr = ud["sell_fee_idr"]
+    net_idr = ud["sell_net_idr"]
+    bank_name, bank_acc, bank_holder = ud["sell_bank_name"], ud["sell_bank_acc"], ud["sell_bank_holder"]
 
     summary = ORDER_SUMMARY_SELL.format(
         order_id=order_id,
@@ -499,14 +515,20 @@ async def _proceed_to_sell_confirmation(
         price_per_unit_str=format_idr(price_per_unit),
         nominal_idr_str=format_idr(net_idr),
         fee_idr_str=format_idr(fee_idr),
-        sender_wallet=_esc(context.user_data.get("sell_sender_wallet") or "-"),
+        sender_wallet=_esc(ud.get("sell_sender_wallet") or "-"),
         bank_name=_esc(bank_name),
         bank_acc=_esc(bank_acc),
         bank_holder=_esc(bank_holder)
     )
-    summary +="\n\n" + BANK_LOCK_NOTE
+    # Fee dan kurs sudah tertera di simulasi sebelumnya; di sini hanya voucher (bila ada) di bawah nominal bersih.
+    net_line = f"<b>Nominal Bersih (IDR):</b> <b>{format_idr(net_idr)}</b>"
+    line = voucher_flow.voucher_line(ud, "sell")
+    if line:
+        summary = summary.replace(net_line, net_line + line, 1)
+    summary += "\n\n" + collapsible(SELL_SUMMARY_SERVICE_NOTE, BANK_LOCK_NOTE)
 
     keyboard = [
+        voucher_flow.voucher_button_row(ud, "sell"),
         [
             InlineKeyboardButton("Konfirmasi Jual", callback_data="sell_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
             InlineKeyboardButton("Batal", callback_data="sell_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
@@ -527,6 +549,25 @@ async def _proceed_to_sell_confirmation(
             parse_mode="HTML"
         )
     return CONFIRM_ORDER
+
+
+def reprice_sell(ud: dict, discount: int):
+    """Terapkan (discount > 0) atau lepas (0) voucher: fee berkurang, nominal bersih bertambah. Koin tidak berubah."""
+    base = ud.setdefault("sell_pricing_base", {"fee": int(ud["sell_fee_idr"])})
+    if discount:
+        ud["sell_voucher_discount"] = int(discount)
+    else:
+        ud.pop("sell_voucher_discount", None)
+    applied = voucher_flow.VS.applied_discount(base["fee"], discount)
+    ud["sell_voucher_applied"] = applied
+    ud["sell_fee_idr"] = base["fee"] - applied
+    ud["sell_net_idr"] = int(ud["sell_gross_nominal_idr"]) - ud["sell_fee_idr"]
+    return None
+
+
+_sell_voucher = voucher_flow.build_handlers(
+    prefix="sell", flow="sell", state_voucher=SELL_VOUCHER, reprice=reprice_sell,
+    render=_render_sell_summary, cancel_callback="sell_cancel")
 
 
 async def handle_bank_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -655,6 +696,10 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     user_id = update.effective_user.id
+    # Voucher bisa saja sudah tidak berlaku sejak dimasukkan: cek ulang sebelum order dibuat.
+    if not await voucher_flow.guard_at_confirm(update, context, prefix="sell", flow="sell",
+                                               reprice=reprice_sell, render=_render_sell_summary):
+        return CONFIRM_ORDER
     order_id = context.user_data["sell_order_id"]
     symbol = context.user_data["sell_symbol"]
     network = context.user_data["sell_network"]
@@ -730,19 +775,17 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
             "expired_at": datetime.utcnow() + timedelta(minutes=SELL_QUOTE_MINUTES),
         }
         create_order(db, order_data)
+        voucher_flow.redeem_for_order(user_id, context.user_data, "sell", order_id)
         
         waiting_text = (
             f"📥 <b>ORDER PENJUALAN DIBUAT</b>\n\n"
             f"Order ID: <code>{order_id}</code>\n"
-            f"Harap kirimkan <b>TEPAT</b> {deposit_str} ke alamat Hot Wallet kami di bawah ini:\n\n"
+            f"Harap kirimkan <b>TEPAT</b> {deposit_str} ke alamat Hot Wallet kami di bawah ini:\n"
             f"Network: <b>{network}</b>\n"
             f"Alamat Hot Wallet:\n<code>{hot_wallet}</code>\n\n"
             f"⏳ <b>Batas Waktu Order:</b> {SELL_QUOTE_MINUTES} Menit. Terlambat? Harga dicek ulang admin atau buat order baru.\n"
-            f"• Kirim <b>hanya {symbol} di jaringan {network}</b>; koin lain/native coin diproses manual admin.\n"
-            f"{exchange_send_note()}\n\n"
-            f"✍️ <b>WAJIB kirim TX Hash setelah transfer.</b> "
-            f"Tekan <b>Kirim TX Hash</b> di bawah lalu kirim Hash/TxID-nya (atau /txhash kapan saja). "
-            f"Tanpa TX Hash, order tidak bisa diproses.\n\n"
+            f"• Kirim <b>hanya {display_symbol(symbol)} di jaringan {network}</b>; koin lain/native coin diproses manual admin.\n\n"
+            f"✍️ <b>WAJIB kirim TX Hash setelah transfer.</b> Tanpa TX Hash, order tidak bisa diproses.\n\n"
             f"⏰ <b>Catatan:</b> setelah koin terverifikasi, mohon <b>tunggu admin mentransfer Rupiah</b> "
             f"(estimasi maks. <b>{quote_guard.SELL_PAYOUT_ETA_MINUTES} menit</b>). "
             f"Layanan pencairan <b>08.00 - 23.59 WIB</b>."
@@ -999,6 +1042,14 @@ sell_conversation_handler = ConversationHandler(
         ],
         CONFIRM_ORDER: [
             CallbackQueryHandler(handle_order_confirmation, pattern="^sell_confirm$"),
+            CallbackQueryHandler(_sell_voucher["prompt"], pattern="^sell_voucher$"),
+            CallbackQueryHandler(_sell_voucher["remove"], pattern="^sell_voucher_off$"),
+            CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
+            CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
+        ],
+        SELL_VOUCHER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, _sell_voucher["text_input"]),
+            CallbackQueryHandler(_sell_voucher["back"], pattern="^sell_voucher_back$"),
             CallbackQueryHandler(cancel_sell, pattern="^sell_cancel$"),
             CallbackQueryHandler(cancel_sell, pattern="^menu_back$"),
         ],

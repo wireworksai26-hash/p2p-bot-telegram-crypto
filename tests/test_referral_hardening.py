@@ -140,9 +140,9 @@ class TestPayoutGuards(Base3):
         db.close()
 
     def test_surcharge_gas_bukan_margin_untuk_batas_fee(self):
-        # ETH-ETH: fee Rp 5.500 = Rp 3.000 fee + Rp 2.500 gas. Preset admin besar tidak boleh melampaui Rp 3.000.
+        # ETH-ETH: fee Rp 5.000 = Rp 3.000 fee + Rp 2.000 gas. Preset admin besar tidak boleh melampaui Rp 3.000.
         self.cfg(reward=5000, bonus=2000)
-        self._run(_order("GAS", symbol="ETH", network="ETH", fee=5_500))
+        self._run(_order("GAS", symbol="ETH", network="ETH", fee=5_000))
         self.assertEqual(self.earnings_total(), 3_000)
 
     def test_pasangan_non_gas_batas_fee_tetap_utuh(self):

@@ -90,11 +90,12 @@ class TerpasangDiLayar(unittest.TestCase):
         ns = dict(
             order_id="ORD-20261909-867TVQV5", deposit_str="<code>0.00016000</code> ETH",
             network="ETHEREUM", hot_wallet="0x" + "C" * 40, SELL_QUOTE_MINUTES=10, symbol="USDT",
-            quote_guard=quote_guard, exchange_send_note=exchange_send_note,
+            quote_guard=quote_guard, exchange_send_note=exchange_send_note, display_symbol=lambda s: s,
         )
         exec(src[i:j], ns)
         self.assertLessEqual(len(_plain(ns["waiting_text"])), 1024)
-        self.assertIn("Cwallet", ns["waiting_text"])
+        # Catatan "jangan kirim dari Exchange" kini hanya di layar simulasi (dropdown), bukan di pesan order.
+        self.assertNotIn("Cwallet", ns["waiting_text"])
 
 
 if __name__ == "__main__":

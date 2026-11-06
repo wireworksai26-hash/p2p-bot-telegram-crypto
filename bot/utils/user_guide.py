@@ -177,7 +177,7 @@ GUIDE_TOPICS = {
         "💰 <b>FEE, BATAS &amp; HARGA</b>\n\n"
         "<b>Batas transaksi</b>\n"
         "• Minimal <b>Rp 5.000</b> (untuk ETH di jaringan ETH, TRX di TRON, serta USDT/USDC di jaringan "
-        "ETH, minimal <b>Rp 7.500</b>).\n"
+        "ETH, minimal <b>Rp 7.000</b>).\n"
         "• Maksimal <b>Rp 5.000.000</b> per transaksi. Di atas itu, hubungi owner.\n\n"
         "<b>Fee layanan</b>\n"
         "Fee mengikuti tier nominal. Semua biaya (fee, tambahan gas bila ada, dan pajak QRIS bila bayar "

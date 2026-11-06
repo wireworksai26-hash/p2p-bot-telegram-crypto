@@ -56,7 +56,8 @@ from bot.keyboards.crypto_select import (
 from bot.keyboards.main_menu import get_owner_button
 from bot.utils.validator import validate_amount_idr, validate_wallet_address, validate_crypto_amount
 from bot.utils.formatter import format_idr, format_crypto, generate_order_id
-from bot.utils.messages import ORDER_SUMMARY_BUY
+from bot.utils.messages import ORDER_SUMMARY_BUY, BUY_SUMMARY_CONFIRM_HINT, collapsible
+from bot.utils import voucher_flow
 from bot.utils.telegram_utils import (
     safe_edit_message, safe_send_message, notify_admins,
     refresh_message_status, relabel_recheck_button, wib_clock,
@@ -87,6 +88,7 @@ INPUT_AMOUNT = 3
 INPUT_WALLET = 4
 SELECT_PAYMENT = 5
 CONFIRM_ORDER = 6
+BUY_VOUCHER = 7
 
 # Label tampilan metode pembayaran
 PAYMENT_METHOD_LABELS = {
@@ -500,6 +502,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["buy_fee_category"] = fee_category
         context.user_data["buy_disc_pct_active"] = float(disc_info["discount_pct"]) if disc_info.get("active") else 0.0
         context.user_data.pop("buy_pricing_base", None)
+        voucher_flow.clear_voucher(context.user_data, "buy")
 
         available_inventory = get_available_inventory(db, network, symbol)
         if available_inventory is not None and available_inventory < Decimal(str(crypto_amount)):
@@ -753,18 +756,21 @@ _PRICING_KEYS = ("buy_nominal_idr", "buy_total_idr", "buy_base_fee_idr", "buy_fe
 
 
 def apply_qris_pricing(ud: dict, method_code: str):
-    """Susun harga sesuai metode bayar. Return teks error (HTML) bila tidak bisa, None bila beres.
+    """Susun harga sesuai metode bayar dan voucher. Return teks error (HTML) bila tidak bisa, None bila beres.
 
     QRIS di atas Rp 500.000 kena pajak 0,3%. Pajak DIPOTONG dari nilai koin bersama fee layanan;
     tagihan QRIS tetap nominal + kode unik (pajak tidak ditambahkan ke yang dibayar pembeli).
-    Dihitung dari harga dasar (sebelum pajak) setiap kali, jadi ganti metode tidak menumpuk potongan.
+    Voucher (ud["buy_voucher_discount"]) memotong FEE, tidak pernah melebihi fee itu sendiri.
+    Dihitung dari harga dasar (sebelum pajak/voucher) setiap kali, jadi ganti metode atau voucher tidak menumpuk.
     """
     import math
     base = ud.setdefault("buy_pricing_base", {key: ud.get(key) for key in _PRICING_KEYS})
     ud.update(base)
     mdr = calculate_qris_mdr(int(ud["buy_nominal_idr"])) if method_code == "GOPAY_QRIS" else 0
+    voucher = int(ud.get("buy_voucher_discount") or 0)
     ud["buy_mdr_idr"] = mdr
-    if not mdr:
+    ud["buy_voucher_applied"] = 0
+    if not mdr and not voucher:
         return None
 
     price = Decimal(str(ud["buy_price_per_unit"]))
@@ -774,39 +780,54 @@ def apply_qris_pricing(ud: dict, method_code: str):
 
     target = ud.get("buy_coin_target")
     if target is not None:
-        # Mode koin: jumlah koin harus persis; nominal dinaikkan agar sisa setelah fee + pajak QRIS cukup.
+        # Mode koin: jumlah koin harus persis; cari nominal TERKECIL yang sisa setelah fee (+voucher) + pajak QRIS cukup.
         want = Decimal(target) * price
         pct = float(ud.get("buy_disc_pct_active") or 0.0)
+        symbol, network = ud["buy_symbol"], ud["buy_network"]
+        nominal = max(GAS_PAIR_MIN_IDR if is_gas_pair(symbol, network) else 5000, int(math.ceil(want)))
         try:
             for _ in range(50):
-                base_fee = calculate_fee_idr(nominal, category=ud["buy_fee_category"],
-                                             symbol=ud["buy_symbol"], network=ud["buy_network"])
+                base_fee = calculate_fee_idr(nominal, category=ud["buy_fee_category"], symbol=symbol, network=network)
                 discount_amount = int(base_fee * pct / 100) if pct and base_fee > 0 else 0
                 fee = max(0, base_fee - discount_amount)
-                mdr = calculate_qris_mdr(nominal)
-                need = int(math.ceil(want + fee + mdr))
+                mdr = calculate_qris_mdr(nominal) if method_code == "GOPAY_QRIS" else 0
+                need = int(math.ceil(want + (fee - min(voucher, fee)) + mdr))
                 if need <= nominal:
                     break
                 nominal = need
             else:
                 raise ValueError("tidak konvergen")
         except ValueError:
-            return ("❌ <b>Jumlah koin terlalu besar untuk QRIS.</b>\n\n"
-                    "Setelah pajak QRIS nilainya melebihi batas Rp 5.000.000. Kurangi jumlah koin "
+            return ("❌ <b>Jumlah koin terlalu besar.</b>\n\n"
+                    "Setelah fee dan pajak QRIS nilainya melebihi batas Rp 5.000.000. Kurangi jumlah koin "
                     "atau gunakan Saldo Bot.")
+        applied = min(voucher, fee)
         ud["buy_mdr_idr"] = mdr
         ud["buy_nominal_idr"] = ud["buy_total_idr"] = nominal
-        ud["buy_base_fee_idr"], ud["buy_fee_idr"], ud["buy_discount_amount"] = base_fee, fee, discount_amount
+        ud["buy_base_fee_idr"], ud["buy_fee_idr"], ud["buy_discount_amount"] = base_fee, fee - applied, discount_amount
         ud["buy_discount_applied"] = discount_amount > 0
-        ud["buy_received_idr"] = nominal - fee - mdr
+        ud["buy_voucher_applied"] = applied
+        ud["buy_received_idr"] = nominal - (fee - applied) - mdr
         return None
 
-    received = nominal - fee - mdr
+    applied = min(voucher, fee)
+    received = nominal - (fee - applied) - mdr
     if received <= 0:
         return "❌ <b>Nominal terlalu kecil.</b>\n\nSetelah fee dan pajak QRIS tidak ada nilai koin tersisa."
+    ud["buy_fee_idr"] = fee - applied
+    ud["buy_voucher_applied"] = applied
     ud["buy_received_idr"] = received
     ud["buy_crypto_amount"] = received / ud["buy_price_per_unit"]
     return None
+
+
+def reprice_buy(ud: dict, discount: int):
+    """Terapkan (discount > 0) atau lepas (0) voucher pada harga Beli yang sedang berjalan."""
+    if discount:
+        ud["buy_voucher_discount"] = int(discount)
+    else:
+        ud.pop("buy_voucher_discount", None)
+    return apply_qris_pricing(ud, ud.get("buy_pay_method", ""))
 
 
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -828,20 +849,24 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         )
         return ConversationHandler.END
 
-    # Ambil detail transaksi untuk summary
-    order_id = generate_order_id()
-    context.user_data["buy_order_id"] = order_id
-    
-    crypto_amount = context.user_data["buy_crypto_amount"]
-    symbol = context.user_data["buy_symbol"]
-    network = context.user_data["buy_network"]
-    price_per_unit = context.user_data["buy_price_per_unit"]
-    nominal_idr = context.user_data["buy_nominal_idr"]
-    fee_idr = context.user_data["buy_fee_idr"]
-    received_idr = context.user_data["buy_received_idr"]
-    total_idr = context.user_data["buy_total_idr"]
-    buyer_wallet = context.user_data["buy_wallet"]
-    
+    context.user_data["buy_order_id"] = generate_order_id()
+    return await _render_buy_summary(update, context)
+
+
+async def _render_buy_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ringkasan order Beli + tombol (konfirmasi, voucher, batal). Dipakai setelah pilih metode dan setelah voucher."""
+    ud = context.user_data
+    order_id = ud["buy_order_id"]
+    method_code = ud["buy_pay_method"]
+    crypto_amount = ud["buy_crypto_amount"]
+    symbol = ud["buy_symbol"]
+    network = ud["buy_network"]
+    price_per_unit = ud["buy_price_per_unit"]
+    nominal_idr = ud["buy_nominal_idr"]
+    fee_idr = ud["buy_fee_idr"]
+    received_idr = ud["buy_received_idr"]
+    buyer_wallet = ud["buy_wallet"]
+
     summary_text = ORDER_SUMMARY_BUY.format(
         order_id=order_id,
         crypto_amount_str=format_crypto(crypto_amount, symbol),
@@ -854,37 +879,43 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     )
 
     # Tambahkan baris informasi diskon referral jika berlaku
-    if context.user_data.get("buy_discount_applied"):
-        disc_amt = context.user_data.get("buy_discount_amount", 0)
-        disc_pct = context.user_data.get("buy_discount_pct", 7.0)
+    if ud.get("buy_discount_applied"):
+        disc_amt = ud.get("buy_discount_amount", 0)
+        disc_pct = ud.get("buy_discount_pct", 7.0)
         summary_text += f"\n🎁 <b>Diskon Referral:</b> -{format_idr(disc_amt)} ({disc_pct:.0f}%)"
-    
+    summary_text += voucher_flow.voucher_line(ud, "buy")
+
     # Tambahkan baris informasi metode pembayaran
     method_label = PAYMENT_METHOD_LABELS.get(method_code, method_code)
     summary_text += f"\n💳 <b>Metode Pembayaran:</b> {method_label}"
-    summary_text += gas_surcharge_note(symbol, network)
+    notes = [BUY_SUMMARY_CONFIRM_HINT, gas_surcharge_note(symbol, network)]
     if method_code == "GOPAY_QRIS":
-        summary_text += qris_mdr_note(nominal_idr)
-        summary_text += (
-            "\nℹ️ <i>Kode unik akan ditambahkan ke total bayar "
-            "untuk verifikasi otomatis.</i>"
-        )
-    summary_text += "\n\n" + WALLET_LOCK_NOTE
+        notes.append(qris_mdr_note(nominal_idr))
+        notes.append("ℹ️ <i>Kode unik akan ditambahkan ke total bayar untuk verifikasi otomatis.</i>")
+    notes.append(WALLET_LOCK_NOTE)
+    # Dari "Silakan klik tombol..." sampai "Penting: setelah..." dilipat jadi satu dropdown.
+    summary_text += "\n\n" + collapsible(*notes)
 
     keyboard = [
+        voucher_flow.voucher_button_row(ud, "buy"),
         [
             InlineKeyboardButton("Konfirmasi & Bayar", callback_data="buy_confirm", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("CHECK", "5237699328843200968")),
             InlineKeyboardButton("Batal", callback_data="buy_cancel", icon_custom_emoji_id=CUSTOM_EMOJI_IDS.get("BACK", "5202123071053381850"))
         ],
         [get_owner_button()]
     ]
-    
-    await query.edit_message_text(
-        text=summary_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
+
+    markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text=summary_text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await update.message.reply_text(text=summary_text, reply_markup=markup, parse_mode="HTML")
     return CONFIRM_ORDER
+
+
+_buy_voucher = voucher_flow.build_handlers(
+    prefix="buy", flow="buy", state_voucher=BUY_VOUCHER, reprice=reprice_buy,
+    render=_render_buy_summary, cancel_callback="buy_cancel")
 
 
 async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -895,6 +926,11 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
 
     user_id = update.effective_user.id
+
+    # Voucher bisa saja sudah tidak berlaku sejak dimasukkan (kuota habis, dipakai di order lain): cek ulang.
+    if not await voucher_flow.guard_at_confirm(update, context, prefix="buy", flow="buy",
+                                               reprice=reprice_buy, render=_render_buy_summary):
+        return CONFIRM_ORDER
 
     # Cek ulang saat order akan dibuat: alur Beli lain yang dibuka sebelum QRIS sebelumnya
     # terbit tidak boleh menghasilkan QRIS kedua.
@@ -1070,6 +1106,7 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
             # Konsumsi kuota diskon jika ada
             _consume_discount_if_needed()
+            voucher_flow.redeem_for_order(user_id, context.user_data, "buy", order_id)
 
             # Kirim notifikasi sukses ke user
             received_idr = context.user_data["buy_received_idr"]
@@ -1153,26 +1190,29 @@ async def handle_order_confirmation(update: Update, context: ContextTypes.DEFAUL
 
             # Konsumsi kuota diskon jika ada
             _consume_discount_if_needed()
+            voucher_flow.redeem_for_order(user_id, context.user_data, "buy", order_id)
 
             # Kirim QRIS dinamis + instruksi pembayaran otomatis
-            received_idr = context.user_data["buy_received_idr"]
             mdr_line = f"\n🧾 <b>Pajak QRIS 0,3% (dipotong)</b>: -{format_idr(mdr_idr)}" if mdr_idr else ""
+            # Koin yang diterima ditulis dalam koin (bukan Rupiah); fee sudah tertera di ringkasan sebelumnya.
             caption = (
                 f"{E_CARD()} <b>BAYAR VIA QRIS DINAMIS</b>\n\n"
                 f"🎫 <b>ID Order</b>: <code>{order_id}</code>\n"
-                f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>\n"
-                f"🔌 <b>Fee Layanan (dipotong)</b>: -{format_idr(fee_idr)}"
+                f"{E_DOLLAR()} <b>Total Bayar</b>: <b>{format_idr(final_total_idr)}</b>"
                 f"{gas_surcharge_note(symbol, network)}"
                 f"{mdr_line}\n"
-                f"{E_MONEY()} <b>Nilai Koin Diterima</b>: <b>{format_idr(received_idr)}</b>\n"
+                f"🪙 <b>Kamu dapat</b>: <b>{format_crypto(crypto_amount, symbol)} ({network})</b>\n"
                 f"⏰ <b>Batas Waktu</b>: {settings.ORDER_EXPIRE_MINUTES} Menit\n\n"
-                f"📌 <b>Cara Bayar:</b>\n"
-                f"1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.\n"
-                f"2. Nominal <b>{format_idr(final_total_idr)}</b> akan muncul otomatis (QRIS Dinamis).\n"
-                f"<i>Kode Unik pembayaran digunakan untuk biaya pengecekan transaksi QRIS otomatis.</i>\n"
-                f"3. Selesaikan pembayaran di aplikasi e-wallet / bank Anda.\n"
-                f"4. Koin crypto akan <b>otomatis terkirim</b> ke wallet Anda seketika setelah pembayaran terdeteksi!\n\n"
-                f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>"
+                + collapsible(
+                    "📌 <b>Cara Bayar &amp; Catatan:</b>",
+                    "1. Scan QRIS di atas dengan <b>GoPay, OVO, DANA, ShopeePay, BCA, atau Mobile Banking</b>.",
+                    f"2. Nominal <b>{format_idr(final_total_idr)}</b> akan muncul otomatis (QRIS Dinamis).",
+                    "<i>Kode Unik pembayaran digunakan untuk biaya pengecekan transaksi QRIS otomatis.</i>",
+                    "3. Selesaikan pembayaran di aplikasi e-wallet / bank Anda.",
+                    "4. Koin crypto akan <b>otomatis terkirim</b> ke wallet Anda seketika setelah pembayaran terdeteksi!",
+                    f"ℹ️ <i><b>Catatan:</b> Pastikan nominal pembayaran sesuai presisi ({format_idr(final_total_idr)}) "
+                    "agar proses verifikasi & pengiriman koin berjalan otomatis tanpa delay.</i>",
+                )
             )
             payment_markup = qris_payment_keyboard(order_id)
             from services.qris_generator import get_qris_image_stream
@@ -1373,10 +1413,12 @@ async def finalize_gopay_buy_payment(
                 f"<b>Order:</b> <code>{order.order_id}</code>\n"
                 f"🪙 <b>Jumlah:</b> <code>{format_crypto(float(order.crypto_amount), order.crypto_symbol)} ({order.network})</code>\n"
                 f"🏦 <b>Ke:</b> <code>{order.buyer_wallet}</code>\n"
-                f"🔗 <b>TX:</b> <code>{result['tx_hash']}</code>\n"
             )
             if result.get("explorer_url"):
+                # Hash sudah ada di tautan explorer; baris "TX:" dihapus agar ringkas.
                 user_msg += f"\n🌐 <a href=\"{result['explorer_url']}\">Lihat di Explorer</a>"
+            else:
+                user_msg += f"🔗 <b>TX:</b> <code>{result['tx_hash']}</code>"
             user_msg += (
                 "\n\nTerimakasih sudah bertransaksi di sini, Lancar selalu 🙏🙏\n"
                 "Testimoni : t.me/TokoKoinID\n"
@@ -1793,9 +1835,17 @@ buy_conversation_handler = ConversationHandler(
         ],
         CONFIRM_ORDER: [
             CallbackQueryHandler(handle_order_confirmation, pattern="^buy_confirm$"),
+            CallbackQueryHandler(_buy_voucher["prompt"], pattern="^buy_voucher$"),
+            CallbackQueryHandler(_buy_voucher["remove"], pattern="^buy_voucher_off$"),
             CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
             CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
-        ]
+        ],
+        BUY_VOUCHER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, _buy_voucher["text_input"]),
+            CallbackQueryHandler(_buy_voucher["back"], pattern="^buy_voucher_back$"),
+            CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),
+            CallbackQueryHandler(cancel_buy, pattern="^menu_back$"),
+        ],
     },
     fallbacks=[
         CallbackQueryHandler(cancel_buy, pattern="^buy_cancel$"),

@@ -67,6 +67,17 @@ class Settings:
     SUI_PRIVATE_KEY = (os.getenv("SUI_PRIVATE_KEY") or "").strip()
     SUI_WALLET_ADDRESS = (os.getenv("SUI_WALLET_ADDRESS") or "").strip()
 
+    # --- Stars & Premium otomatis via Fragment (nonaktif bawaan; lihat docs/stars-premium-fragment.md) ---
+    STARS_AUTOFULFILL = os.getenv("STARS_AUTOFULFILL", "false").lower() in ("true", "1", "yes")
+    FRAGMENT_HASH = (os.getenv("FRAGMENT_HASH") or "").strip()        # dari sesi Fragment yang sudah login
+    FRAGMENT_COOKIE = (os.getenv("FRAGMENT_COOKIE") or "").strip()    # idem; RAHASIA, jangan dicatat di log
+    # Wallet TON KHUSUS pembelian Fragment (saldo kecil), terpisah dari wallet stok GRAM (TON_PRIVATE_KEY).
+    STARS_TON_PRIVATE_KEY = (os.getenv("STARS_TON_PRIVATE_KEY") or "").strip()
+    STARS_TON_WALLET_ADDRESS = (os.getenv("STARS_TON_WALLET_ADDRESS") or "").strip()
+    STARS_MAX_ORDER_IDR = int(os.getenv("STARS_MAX_ORDER_IDR") or "1500000")        # di atas ini: proses manual
+    STARS_DAILY_LIMIT_IDR = int(os.getenv("STARS_DAILY_LIMIT_IDR") or "5000000")    # batas otomatis per hari (WIB)
+    STARS_MIN_MARGIN_PCT = float(os.getenv("STARS_MIN_MARGIN_PCT") or "0")          # biaya TON harus <= harga jual x (1 - ini%)
+
     TON_RPC = (os.getenv("TON_RPC", "https://toncenter.com/api/v2/jsonRPC") or "").strip()
     TON_API_KEY = (os.getenv("TON_API_KEY") or "").strip()
     TONAPI_KEY = (os.getenv("TONAPI_KEY") or "").strip()

@@ -134,9 +134,10 @@ async def _notify_user(bot, order, url: str) -> None:
             f"✅ <b>Crypto Terkirim!</b>\n\n"
             f"<b>Order:</b> <code>{order.order_id}</code>\n"
             f"🪙 <b>Jumlah:</b> <code>{format_crypto(float(order.crypto_amount or 0), order.crypto_symbol or '')} "
-            f"({order.network})</code>\n"
-            f"🔗 <b>TX:</b> <code>{order.payout_tx_hash}</code>"
+            f"({order.network})</code>"
         )
+        if not url:  # hash hanya ditampilkan bila tidak ada tautan explorer
+            text += f"\n🔗 <b>TX:</b> <code>{order.payout_tx_hash}</code>"
     if url:
         text += f"\n\n🌐 <a href=\"{url}\">Lihat di Explorer</a>"
     text += (

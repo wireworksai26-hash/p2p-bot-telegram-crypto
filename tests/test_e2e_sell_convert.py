@@ -5,7 +5,7 @@ Covers:
 1. Sell Flow:
    - Valid decimal input, 0% spread price fetching
    - Gross nominal, fee calculation, and altcoin surcharge (+Rp 500)
-   - Rejection of net <= 0 or gross < minimum (Rp 5.000 / Rp 7.500 gas pairs)
+   - Rejection of net <= 0 or gross < minimum (Rp 5.000 / Rp 7.000 gas pairs)
    - Bank details parsing (comma separated) and auto-save
    - 1-tap saved bank selection
    - Order creation with WAITING_CRYPTO_DEPOSIT
@@ -19,7 +19,7 @@ Covers:
    - Guard against target network in MANUAL_PAYOUT_NETWORKS
    - Server-side guard against exact same coin & network
    - Amount parser: Crypto amounts, IDR (dot, k, rb, jt, Rp), USD ($10, 10 usd, 25 usdt)
-   - Convert fee tier, gas surcharge (+Rp 2.500 for gas pairs), target crypto amount
+   - Convert fee tier, gas surcharge (+Rp 2.000 for gas pairs), target crypto amount
    - Wallet validation & rejection of self-dealing (bot's own wallet)
    - Stock inventory check before order creation
    - Order creation with 30-minute quote expiration
@@ -155,8 +155,8 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
         reply_text = update.message.reply_text.call_args.args[0]
         self.assertIn("Minimum transaksi", reply_text)
 
-    async def test_sell_amount_gas_pair_enforces_7500_min(self):
-        """Uji pasangan gas (ETH di jaringan ETH) mewajibkan minimum nominal Rp 7.500."""
+    async def test_sell_amount_gas_pair_enforces_7000_min(self):
+        """Uji pasangan gas (ETH di jaringan ETH) mewajibkan minimum nominal Rp 7.000."""
         update = SimpleNamespace(
             message=AsyncMock(text="0.0001"),
             effective_user=SimpleNamespace(id=self.user_id, first_name="Test")
@@ -166,7 +166,7 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
             bot=AsyncMock()
         )
 
-        # 0.0001 * 50.000.000 = 5.000 IDR (lolos 5k biasa, tapi gagal min 7.5k pasangan gas)
+        # 0.0001 * 50.000.000 = 5.000 IDR (lolos 5k biasa, tapi gagal min 7k pasangan gas)
         eth_mock = {
             "symbol": "ETH",
             "market_price_idr": 50_000_000.0,
@@ -182,7 +182,7 @@ class TestE2ESellFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(next_state, SELL_INPUT_AMOUNT)
         reply_text = update.message.reply_text.call_args.args[0]
-        self.assertTrue("7.500" in reply_text or "7,500" in reply_text)
+        self.assertTrue("7.000" in reply_text or "7,000" in reply_text)
 
     async def test_sell_bank_manual_and_saved_selection(self):
         """Uji input rekening manual (otomatis tersimpan) dan 1-tap pemilihan rekening tersimpan."""

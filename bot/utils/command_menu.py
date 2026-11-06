@@ -24,6 +24,8 @@ ADMIN_COMMAND_MENU = [
     ("sellorders", "Dashboard order Jual crypto"),
     ("confirm", "Konfirmasi order selesai: /confirm ORDER_ID"),
     ("verifysell", "Cek ulang deposit Jual: /verifysell ORDER_ID"),
+    ("starscheck", "Cek kesiapan Stars/Premium otomatis"),
+    ("voucher", "Kelola voucher potongan fee: /voucher add KODE POTONGAN"),
     ("stats", "Statistik & volume transaksi"),
     ("report", "Laporan mingguan"),
     ("refreshwallet", "Sinkron saldo wallet stok"),

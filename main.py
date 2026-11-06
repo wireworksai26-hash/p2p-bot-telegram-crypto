@@ -91,6 +91,7 @@ _topup_matched_tx_ids: dict = {}  # tx_id -> unix timestamp saat dipakai
 
 # State verifikasi massal order Beli via GET /transactions
 _buy_matched_tx_ids: dict = {}  # tx_id -> unix timestamp saat dipakai
+_stars_matched_tx_ids: dict = {}  # idem, untuk pesanan Stars/Premium
 
 
 def _cleanup_matched_tx_ids(tx_dict: dict, max_age_seconds: int = 86400) -> None:
@@ -141,6 +142,8 @@ def init_database():
     db = db_conn.SessionLocal()
     try:
         _seed_price_configs(db)
+        from services.voucher_service import ensure_default_vouchers
+        ensure_default_vouchers(db)
         from database.crud import sync_gopay_session_file
         sync_gopay_session_file()
         db.commit()
@@ -653,6 +656,12 @@ def build_bot_application() -> Application:
     # so they intercept messages during an active conversation.
     application.add_handler(topup_conversation_handler)
     application.add_handler(buy_conversation_handler)
+    from bot.handlers.stars import stars_conversation_handler
+    application.add_handler(stars_conversation_handler)
+    from bot.utils.voucher_flow import voucher_command
+    application.add_handler(CommandHandler("voucher", voucher_command))
+    from bot.handlers.stars import stars_check_handler
+    application.add_handler(CommandHandler("starscheck", stars_check_handler))
     application.add_handler(sell_conversation_handler)
     application.add_handler(swap_conv_handler)
     from bot.handlers.deposit_hash import txhash_conversation_handler
@@ -905,6 +914,29 @@ def setup_scheduler():
         id="gopay_buy_polling",
         name="Poll GoPay QRIS pending buy orders and auto-send crypto",
         next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # --- GoPay Stars/Premium QRIS Polling Job (every 20s) ---
+    scheduler.add_job(
+        _job_check_pending_stars_payments,
+        "interval",
+        seconds=20,
+        id="gopay_stars_polling",
+        name="Poll GoPay QRIS pending Stars/Premium orders",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # --- Stars/Premium auto-fulfill sweeper (every 60s; no-op bila STARS_AUTOFULFILL nonaktif) ---
+    scheduler.add_job(
+        _job_stars_autofulfill_sweep,
+        "interval",
+        seconds=60,
+        id="stars_autofulfill_sweep",
+        name="Sweep Stars/Premium auto-fulfill",
         max_instances=1,
         coalesce=True,
     )
@@ -1299,6 +1331,50 @@ async def _job_check_pending_topups():
         _cleanup_matched_tx_ids(_topup_matched_tx_ids)
     except Exception as exc:
         logger.error("Topup polling job error: %s", exc, exc_info=True)
+    finally:
+        db.close()
+
+
+async def _job_stars_autofulfill_sweep():
+    """Jaring pengaman pemenuhan otomatis Stars/Premium: coba pesanan paid yang belum dicoba, tandai yang macet."""
+    try:
+        from services.bot_runtime import bot_app
+        from services.stars_fulfillment import sweep
+        if bot_app:
+            await sweep(bot_app.bot)
+    except Exception as exc:
+        logger.error("Stars autofulfill sweep error: %s", exc, exc_info=True)
+
+
+async def _job_check_pending_stars_payments():
+    """Poll mutasi GoPay untuk pesanan Stars/Premium berbayar QRIS: deteksi bayar, kabari user & admin, kedaluwarsakan."""
+    from services.gopay_service import gopay_service
+    from database import stars_crud
+    from database.crud import claim_qris_payment
+    from bot.handlers.stars import _after_qris_paid
+    from services.bot_runtime import bot_app
+
+    db = SessionLocal()
+    try:
+        stars_crud.expire_pending(db)
+        orders = stars_crud.get_pending_qris(db)
+        if not orders:
+            return
+        txns = await gopay_service.get_recent_transactions(page_size=100)
+        for order in orders:
+            for txn in txns:
+                if _match_transaction(txn, int(order.total_idr), order.created_at, set(_stars_matched_tx_ids.keys())):
+                    tx_id = _txn_id(txn)
+                    if not tx_id or not claim_qris_payment(db, tx_id, order.order_id, "stars", int(order.total_idr)):
+                        continue
+                    _stars_matched_tx_ids[tx_id] = time.time()
+                    claimed = stars_crud.mark_paid(db, order.order_id)
+                    if claimed and bot_app:
+                        await _after_qris_paid(bot_app.bot, claimed, db)
+                    break
+        _cleanup_matched_tx_ids(_stars_matched_tx_ids)
+    except Exception as exc:
+        logger.error("Stars/Premium polling job error: %s", exc, exc_info=True)
     finally:
         db.close()
 

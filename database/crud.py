@@ -1225,10 +1225,10 @@ def get_low_balance_wallets(db: Session) -> list[WalletBalance]:
 
 
 def generate_unique_payment_code(
-    db: Session, base_amount: Optional[int] = None, min_code: int = 1, max_code: int = 400
+    db: Session, base_amount: Optional[int] = None, min_code: int = 1, max_code: int = 300
 ) -> Optional[int]:
     """
-    Kode unik kecil (001..400) untuk tagihan QRIS baru, atau None bila tidak aman.
+    Kode unik kecil (001..300) untuk tagihan QRIS baru, atau None bila tidak aman.
 
     Pembayaran QRIS dicocokkan hanya lewat nominal, jadi total tagihan baru
     (base_amount + kode) tidak boleh sama dengan tagihan PENDING mana pun —
@@ -1238,12 +1238,16 @@ def generate_unique_payment_code(
     (pemanggil wajib menolak tagihan, jangan memakai kode kembar).
     """
     import secrets
+    from database.models import StarsOrder
     used_codes = {
         r[0] for r in db.query(Order.unique_code).filter(
             Order.status == "pending", Order.unique_code > 0).all()
     } | {
         r[0] for r in db.query(TopupOrder.unique_code).filter(
             TopupOrder.status == "PENDING", TopupOrder.unique_code > 0).all()
+    } | {
+        r[0] for r in db.query(StarsOrder.unique_code).filter(
+            StarsOrder.status == "pending", StarsOrder.unique_code > 0).all()
     }
     pending_totals = {
         int(r[0]) for r in db.query(Order.total_idr).filter(
@@ -1252,6 +1256,10 @@ def generate_unique_payment_code(
     } | {
         int(r[0]) for r in db.query(TopupOrder.amount_idr).filter(
             TopupOrder.status == "PENDING").all()
+        if r[0] is not None
+    } | {
+        int(r[0]) for r in db.query(StarsOrder.total_idr).filter(
+            StarsOrder.status == "pending", StarsOrder.payment_method == "GOPAY_QRIS").all()
         if r[0] is not None
     }
     available = [

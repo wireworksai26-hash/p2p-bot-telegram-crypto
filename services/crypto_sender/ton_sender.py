@@ -191,11 +191,15 @@ class TonSender(BaseCryptoSender):
         raise RuntimeError("API TON gagal membaca saldo Jetton.")
 
     # ---------------- Wallet & kunci ----------------
+    def _raw_private_key(self) -> str:
+        """Sumber kunci wallet; subclass (mis. wallet khusus Fragment) boleh memakai kunci lain."""
+        return (settings.TON_PRIVATE_KEY or "").strip()
+
     def _load_key(self) -> tuple[bytes, bytes, bytes]:
-        """Kembalikan (seed32, private64, public32) dari TON_PRIVATE_KEY (mnemonic atau hex)."""
-        raw_key = (settings.TON_PRIVATE_KEY or "").strip()
+        """Kembalikan (seed32, private64, public32) dari kunci wallet (mnemonic atau hex)."""
+        raw_key = self._raw_private_key()
         if not raw_key:
-            raise RuntimeError("TON_PRIVATE_KEY belum di-set di .env (mnemonic / hex wallet TON).")
+            raise RuntimeError("Private key wallet TON belum di-set di .env (mnemonic / hex wallet TON).")
 
         words = raw_key.split()
         if len(words) in (12, 24):
