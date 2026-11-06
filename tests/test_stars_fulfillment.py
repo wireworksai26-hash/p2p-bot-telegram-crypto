@@ -176,7 +176,7 @@ class TestOrkestrasi(_Db):
         self.assertEqual(result, "manual")
         row = self.fresh(order)
         self.assertEqual((row.status, row.fulfill_mode, row.fulfill_attempts), ("paid", "manual", 1))
-        self.assertIn("kedaluwarsa", row.fulfill_error)
+        self.assertIn("bermasalah", row.fulfill_error)
         self.assertEqual(wallet.sent, [])
         self.assertIn("MANUAL", self.admin_notes.await_args.args[1])
 
@@ -456,6 +456,57 @@ class TestFragmentClient(unittest.IsolatedAsyncioTestCase):
         result = await self.client(handler).prepare_premium("teman_ku", 6, "UQw")
         self.assertEqual(seen, ["searchPremiumGiftRecipient", "initGiftPremiumRequest", "getGiftPremiumLink"])
         self.assertEqual(result.total_nano, 9)
+
+    async def test_tanpa_req_id_pesan_error_memuat_balasan_fragment_tanpa_rahasia(self):
+        """Diagnosa lapangan: kalau Fragment tidak memberi req_id, isi balasannya tampil (rahasia disamarkan)."""
+        def handler(request):
+            body = self.form(request)
+            if body["method"] == "searchStarsRecipient":
+                return httpx.Response(200, json={"found": {"recipient": "R"}})
+            return httpx.Response(200, json={"ok": False, "status": "aneh", "note": f"x {HASH_SECRET} {COOKIE_SECRET}"})
+
+        with self.assertRaises(FC.FragmentError) as ctx:
+            await self.client(handler).prepare_stars("teman_ku", 50, "UQ")
+        message = str(ctx.exception)
+        self.assertIn("req_id", message)
+        self.assertIn("aneh", message)
+        self.assertNotIn(HASH_SECRET, message)
+        self.assertNotIn(COOKIE_SECRET, message)
+
+    def _flow_handler(self, init_reply, link_reply=None, seen=None):
+        def handler(request):
+            body = self.form(request)
+            if seen is not None:
+                seen.append(body["method"])
+            if body["method"] == "searchStarsRecipient":
+                return httpx.Response(200, json={"found": {"recipient": "R", "name": "Owner"}})
+            if body["method"] == "initBuyStarsRequest":
+                return httpx.Response(200, json=init_reply)
+            return httpx.Response(200, json=link_reply or {})
+        return handler
+
+    async def test_need_ton_dijelaskan_akun_belum_tersambung_wallet(self):
+        """Balasan khusus situs Fragment (auction.js): need_ton = sesi belum tersambung ke wallet TON."""
+        with self.assertRaises(FC.FragmentAuthError) as ctx:
+            await self.client(self._flow_handler({"need_ton": True})).prepare_stars("teman_ku", 50, "UQ")
+        self.assertIn("need_ton", str(ctx.exception))
+        self.assertIn("FRAGMENT_COOKIE", str(ctx.exception))
+
+    async def test_need_verify_dijelaskan_di_tahap_init_dan_link(self):
+        with self.assertRaises(FC.FragmentAuthError) as ctx:
+            await self.client(self._flow_handler({"need_verify": True})).prepare_stars("teman_ku", 50, "UQ")
+        self.assertIn("need_verify", str(ctx.exception))
+        with self.assertRaises(FC.FragmentAuthError) as ctx:
+            await self.client(self._flow_handler({"req_id": "Q"}, {"need_verify": True})).prepare_stars("teman_ku", 50, "UQ")
+        self.assertIn("need_verify", str(ctx.exception))
+
+    async def test_uji_siapkan_pembelian_tidak_membayar_dan_tidak_mengambil_link(self):
+        seen = []
+        client = self.client(self._flow_handler({"req_id": "Q", "amount": "0.68"}, seen=seen))
+        self.assertEqual(await client.check_purchase_flow("owner"), "Owner")
+        self.assertEqual(seen, ["searchStarsRecipient", "initBuyStarsRequest"])  # tanpa getBuyStarsLink
+        with self.assertRaises(FC.FragmentAuthError):
+            await self.client(self._flow_handler({"need_ton": True})).check_purchase_flow("owner")
 
     async def test_harga_berubah_dicoba_ulang_lalu_berhasil_atau_menyerah(self):
         attempts = {"n": 0}

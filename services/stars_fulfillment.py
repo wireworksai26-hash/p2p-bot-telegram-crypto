@@ -173,7 +173,7 @@ async def _run(bot, db, order, client, wallet, price_fn) -> str:
             return "refunded"
         return "skipped"
     except FragmentAuthError as exc:
-        return await to_manual(f"sesi Fragment kedaluwarsa, perbarui FRAGMENT_COOKIE ({exc})")
+        return await to_manual(f"akun/sesi Fragment bermasalah ({exc})")
     except FragmentError as exc:
         return await to_manual(f"Fragment gagal menyiapkan transaksi ({exc})")
 

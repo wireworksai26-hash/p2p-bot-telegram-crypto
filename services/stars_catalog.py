@@ -63,6 +63,9 @@ def parse_username(text: str):
     return value if _USERNAME_RE.match(value) else None
 
 
+SERVICE_HOURS = "08.00 - 23.59 WIB"  # sama dengan jam layanan Jual / admin di bagian lain bot
+
+
 def pricelist_text() -> str:
     """Teks pricelist Stars & Premium."""
     stars = "\n".join(
@@ -72,7 +75,8 @@ def pricelist_text() -> str:
     return (
         f"{E_STAR()} <b>PRICELIST TELEGRAM STARS</b>\n" + _esc_block(stars) + "\n\n"
         f"{E_CROWN()} <b>PRICELIST TELEGRAM PREMIUM</b>\n" + _esc_block(premium) + "\n\n"
-        "<i>Bisa dikirim ke akun sendiri maupun akun teman: cukup isi username tujuan saat pesan.</i>"
+        "<i>Bisa dikirim ke akun sendiri maupun akun teman: cukup isi username tujuan saat pesan.</i>\n"
+        f"⏰ <b>Jam Layanan:</b> {SERVICE_HOURS}"
     )
 
 

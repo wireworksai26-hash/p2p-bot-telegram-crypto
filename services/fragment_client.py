@@ -169,8 +169,15 @@ class FragmentClient:
             raise FragmentError("Balasan Fragment tidak dikenali.")
         return result
 
-    @staticmethod
-    def _messages(link: dict) -> List[dict]:
+    def _shape(self, body) -> str:
+        """Ringkasan isi balasan Fragment untuk diagnosa (dipotong, hash/cookie disamarkan)."""
+        try:
+            raw = json.dumps(body, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            raw = str(body)
+        return _clean(raw, self._hash, self._cookie)
+
+    def _messages(self, link: dict) -> List[dict]:
         raw = ((link.get("transaction") or {}).get("messages")) or []
         out = []
         for m in raw:
@@ -180,8 +187,34 @@ class FragmentClient:
             except (KeyError, TypeError, ValueError):
                 raise FragmentError("Format transaksi Fragment tidak dikenali.") from None
         if not out or any(m["amount_nano"] <= 0 for m in out):
-            raise FragmentError("Fragment tidak mengembalikan transaksi pembayaran yang valid.")
+            raise FragmentError(f"Fragment tidak mengembalikan transaksi pembayaran yang valid. Balasan: {self._shape(link)}")
         return out
+
+    def _req_id(self, started: dict) -> str:
+        """req_id dari balasan init. Balasan khusus situs Fragment diterjemahkan jadi pesan yang bisa ditindaklanjuti:
+        need_ton = akun belum tersambung ke wallet TON; need_verify = Fragment meminta verifikasi akun."""
+        if started.get("need_ton"):
+            raise FragmentAuthError("Akun Fragment belum tersambung ke wallet TON (need_ton): login ulang di "
+                                    "fragment.com dengan Connect TON, lalu perbarui FRAGMENT_COOKIE.")
+        if started.get("need_verify"):
+            raise FragmentAuthError("Fragment meminta verifikasi akun (need_verify): selesaikan verifikasi "
+                                    "di fragment.com dengan akun ini, lalu perbarui FRAGMENT_COOKIE.")
+        req_id = started.get("req_id")
+        if not req_id:
+            raise FragmentError(f"Fragment tidak memberi req_id. Balasan: {self._shape(started)}")
+        return str(req_id)
+
+    async def check_purchase_flow(self, username: str, quantity: int = 50) -> str:
+        """Uji sampai tahap "siapkan pembelian" (initBuyStarsRequest) TANPA membayar dan tanpa mengambil link
+        pembayaran. Membuktikan akun benar-benar login dan tersambung wallet. Mengembalikan nama penerima."""
+        found = (await self._call({"method": "searchStarsRecipient", "query": username, "quantity": quantity})).get("found") or {}
+        recipient = found.get("recipient")
+        if not recipient:
+            raise FragmentInvalidRecipient("Username uji tidak ditemukan.")
+        started = await self._call({"method": "initBuyStarsRequest", "recipient": recipient,
+                                    "quantity": quantity, "payment_method": "ton"})
+        self._req_id(started)
+        return str(found.get("name") or username)
 
     async def _prepare(self, search, init, link, username, extra_init, wallet_address, public_key) -> PreparedPurchase:
         found = (await self._call(search)).get("found") or {}
@@ -195,12 +228,13 @@ class FragmentClient:
         for _ in range(PRICE_CHANGED_RETRIES + 1):
             try:
                 started = await self._call({**init, "recipient": recipient, **extra_init, "payment_method": "ton"})
-                req_id = started.get("req_id")
-                if not req_id:
-                    raise FragmentError("Fragment tidak memberi req_id.")
+                req_id = self._req_id(started)
                 result = await self._call({
                     **link, "id": req_id, "account": json.dumps(account), "device": json.dumps(DEFAULT_DEVICE),
                     "transaction": "1", "show_sender": "0"})
+                if result.get("need_verify"):
+                    raise FragmentAuthError("Fragment meminta verifikasi akun (need_verify): selesaikan verifikasi "
+                                            "di fragment.com dengan akun ini, lalu perbarui FRAGMENT_COOKIE.")
                 return PreparedPurchase(recipient_name=str(found.get("name") or ""), req_id=str(req_id),
                                         messages=self._messages(result))
             except FragmentPriceChanged as exc:

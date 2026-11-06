@@ -492,6 +492,33 @@ class TestAdmin(_Db):
         self.assertTrue(any("Stars & Premium (1)" in label for label in labels), labels)
 
 
+class TestJamLayanan(_Db):
+    def test_jam_layanan_di_pricelist_menu_dan_pesan_bayar(self):
+        self.assertEqual(C.SERVICE_HOURS, "08.00 - 23.59 WIB")
+        self.assertIn("08.00 - 23.59 WIB", C.pricelist_text())
+        with patch.object(settings, "STARS_AUTOFULFILL", False):
+            menu = H._menu_text()
+            note = H._delivery_note()
+        self.assertIn("08.00 - 23.59 WIB", menu)
+        self.assertIn("admin kembali online", menu)
+        self.assertIn("08.00 - 23.59 WIB", note)
+
+    def test_mode_otomatis_menyebut_kirim_otomatis_dengan_admin_sebagai_cadangan(self):
+        with patch.object(settings, "STARS_AUTOFULFILL", True):
+            note = H._delivery_note()
+        self.assertIn("otomatis", note)
+        self.assertIn("08.00 - 23.59 WIB", note)
+
+    async def test_pesan_pembayaran_diterima_memuat_jam_layanan(self):
+        ctx = _ctx(stp_product="stars", stp_package=100, stp_recipient="teman_ku", stp_method="BOT_BALANCE")
+        up = _update("stp_confirm")
+        with patch.object(H, "notify_admins", new=AsyncMock()), patch.object(settings, "STARS_AUTOFULFILL", False):
+            await H.confirm_order(up, ctx)
+        text = up.callback_query.edit_message_text.await_args.args[0]
+        self.assertIn("PEMBAYARAN DITERIMA", text)
+        self.assertIn("08.00 - 23.59 WIB", text)
+
+
 class TestWiring(unittest.TestCase):
     def test_menu_utama_punya_tombol(self):
         from bot.keyboards.main_menu import get_main_menu_keyboard

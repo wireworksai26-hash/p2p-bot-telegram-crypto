@@ -28,7 +28,7 @@ from bot.utils.flow_guard import block_if_busy
 from bot.utils.formatter import format_idr, format_datetime
 from bot.utils.telegram_utils import notify_admins, refresh_message_status, relabel_recheck_button, wib_clock
 from services.stars_catalog import (
-    PRODUCTS, package_label, package_price, parse_username, pricelist_text,
+    PRODUCTS, SERVICE_HOURS, package_label, package_price, parse_username, pricelist_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,11 +69,21 @@ def _menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _delivery_note() -> str:
+    """Keterangan pengiriman: jam layanan admin bila diproses manual; bila otomatis aktif, admin hanya cadangan."""
+    from services.stars_fulfillment import autofulfill_enabled
+    if autofulfill_enabled():
+        return f"Dikirim otomatis. Bila perlu dibantu admin, jam layanan <b>{SERVICE_HOURS}</b>."
+    return (f"Pesanan dikirim admin pada jam layanan <b>{SERVICE_HOURS}</b>; "
+            "di luar jam itu dikirim saat admin kembali online.")
+
+
 def _menu_text() -> str:
     return (
         f"{E_STAR()} <b>TELEGRAM STARS &amp; PREMIUM</b>\n\n"
         "Beli Stars atau Premium dan kirim ke akun Telegram mana pun: akun sendiri maupun akun teman.\n"
-        "Pembayaran lewat <b>Saldo Bot</b> atau <b>QRIS</b>. Admin mengirim setelah pembayaran diterima."
+        "Pembayaran lewat <b>Saldo Bot</b> atau <b>QRIS</b>.\n"
+        f"{E_CALENDAR()} {_delivery_note()}"
     )
 
 
@@ -292,7 +302,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 f"{E_TAG()} <code>{_esc(order.order_id)}</code>\n"
                 f"{package_label(product, key)} → <b>@{_esc(recipient)}</b>\n"
                 f"Dibayar: <b>{format_idr(int(order.total_idr))}</b> (Saldo Bot)\n\n"
-                "Admin akan mengirim pesananmu dan memberi kabar di sini.",
+                f"{_delivery_note()} Kamu akan diberi kabar di sini.",
                 reply_markup=menu_back, parse_mode="HTML")
             await announce_paid(context.bot, order, db)
             return ConversationHandler.END
@@ -481,7 +491,7 @@ async def _after_qris_paid(bot, order, db) -> None:
             f"{E_CHECK()} <b>PEMBAYARAN DITERIMA</b>\n\n"
             f"{E_TAG()} <code>{_esc(order.order_id)}</code>\n"
             f"{package_label(order.product.lower(), order.package)} → <b>@{_esc(order.recipient_username)}</b>\n\n"
-            "Admin akan mengirim pesananmu dan memberi kabar di sini.")
+            f"{_delivery_note()} Kamu akan diberi kabar di sini.")
     except Exception:
         logger.exception("Gagal mengabari user pesanan %s", order.order_id)
     await announce_paid(bot, order, db)
@@ -680,6 +690,13 @@ async def stars_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append(f"Sesi Fragment: ✅ aktif (uji cari penerima: {_esc(name)})")
         except Exception as exc:
             lines.append(f"Sesi Fragment: ❌ {_esc(str(exc)[:160])}")
+        else:
+            # Pencarian penerima bisa berhasil tanpa login; uji ini sampai tahap "siapkan pembelian" (tanpa bayar).
+            try:
+                await F.build_client().check_purchase_flow(F.settings.OWNER_USERNAME or "telegram")
+                lines.append("Uji siapkan pembelian: ✅ Fragment siap menerima pembelian (tanpa bayar)")
+            except Exception as exc:
+                lines.append(f"Uji siapkan pembelian: ❌ {_esc(str(exc)[:300])}")
     price = await F.ton_price_idr()
     lines.append(f"Harga TON: {F._idr(price)}" if price else "Harga TON: ❌ tidak tersedia")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
