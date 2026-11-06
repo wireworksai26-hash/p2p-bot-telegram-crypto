@@ -672,7 +672,7 @@ async def stars_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append(f"Wallet: ✅ <code>{_esc(wallet.wallet_address)}</code> ({version}) · saldo {balance:.4f} TON")
         except Exception as exc:
             lines.append(f"Wallet: ❌ {_esc(str(exc)[:160])}")
-    if not (F.settings.FRAGMENT_HASH and F.settings.FRAGMENT_COOKIE):
+    if not F.settings.FRAGMENT_COOKIE:
         lines.append("Sesi Fragment: ⚪ belum diisi")
     else:
         try:

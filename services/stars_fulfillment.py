@@ -38,8 +38,6 @@ def autofulfill_enabled() -> bool:
 def missing_config() -> list:
     """Daftar pengaturan yang belum lengkap (kosong = siap)."""
     missing = []
-    if not settings.FRAGMENT_HASH:
-        missing.append("FRAGMENT_HASH")
     if not settings.FRAGMENT_COOKIE:
         missing.append("FRAGMENT_COOKIE")
     if not settings.STARS_TON_PRIVATE_KEY:
@@ -175,7 +173,7 @@ async def _run(bot, db, order, client, wallet, price_fn) -> str:
             return "refunded"
         return "skipped"
     except FragmentAuthError as exc:
-        return await to_manual(f"sesi Fragment kedaluwarsa, perbarui FRAGMENT_HASH/COOKIE ({exc})")
+        return await to_manual(f"sesi Fragment kedaluwarsa, perbarui FRAGMENT_COOKIE ({exc})")
     except FragmentError as exc:
         return await to_manual(f"Fragment gagal menyiapkan transaksi ({exc})")
 

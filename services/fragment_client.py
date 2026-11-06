@@ -3,13 +3,19 @@
 Fragment tidak punya API publik resmi; protokol di sini mengikuti endpoint web yang dipakai halaman Fragment
 sendiri (POST https://fragment.com/api?hash=...), sama dengan yang dipakai pustaka pihak ketiga `afragment`.
 Karena itu: (1) bisa berhenti bekerja kapan pun Fragment mengubah situsnya, (2) butuh sesi akun yang sudah
-login (FRAGMENT_HASH + FRAGMENT_COOKIE), (3) klien ini HANYA menyiapkan transaksi (alamat tujuan, nominal,
-payload); penandatanganan dan pembayaran TON dilakukan terpisah oleh wallet khusus (fragment_wallet.py).
+login (FRAGMENT_COOKIE), (3) klien ini HANYA menyiapkan transaksi (alamat tujuan, nominal, payload);
+penandatanganan dan pembayaran TON dilakukan terpisah oleh wallet khusus (fragment_wallet.py).
+
+Hash API ditanam di halaman Fragment (ajInit({"apiUrl":"\\/api?hash=..."})) dan bisa berubah. Karena itu klien
+membaca hash terbaru sendiri dari https://fragment.com/stars memakai cookie; FRAGMENT_HASH hanya nilai awal/cadangan.
+Hash yang ditolak ("Bad request"/ditolak sesi) diambil ulang dan dicoba sekali lagi. Itu aman diulang karena
+semua panggilan di sini hanya menyiapkan transaksi, tidak ada uang yang bergerak.
 
 Cookie/hash adalah rahasia akun: tidak pernah dicatat di log dan tidak pernah muncul di pesan error.
 """
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -18,6 +24,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://fragment.com/api"
+PAGE_URL = "https://fragment.com/stars"
+USER_AGENT = "Mozilla/5.0 (compatible; TokoKoinBot/1.0)"
+_API_URL_RE = re.compile(r'"apiUrl"\s*:\s*"([^"]+)"')
+_HASH_RE = re.compile(r"[?&]hash=([0-9A-Za-z_-]+)")
+# Hash terbaru yang dibaca dari halaman (kunci: cookie), hanya di memori; dipakai bersama oleh semua klien.
+_LEARNED_HASH: dict = {}
 TON_MAINNET_CHAIN = "-239"
 DEFAULT_DEVICE = {
     "platform": "android", "appName": "Tonkeeper", "appVersion": "5.0.18", "maxProtocolVersion": 2,
@@ -32,6 +44,10 @@ class FragmentError(RuntimeError):
 
 class FragmentAuthError(FragmentError):
     """Sesi akun Fragment tidak berlaku (hash/cookie kedaluwarsa)."""
+
+
+class FragmentBadRequest(FragmentError):
+    """Fragment menolak permintaan ("Bad request") atau membalas bukan JSON: biasanya hash basi."""
 
 
 class FragmentInvalidRecipient(FragmentError):
@@ -54,6 +70,15 @@ class PreparedPurchase:
         return sum(int(m["amount_nano"]) for m in self.messages)
 
 
+def parse_api_hash(page_text: str) -> Optional[str]:
+    """Hash API dari source halaman Fragment: ajInit({... "apiUrl":"\\/api?hash=XXXX" ...}); None bila tidak ada."""
+    match = _API_URL_RE.search(page_text or "")
+    if not match:
+        return None
+    found = _HASH_RE.search(match.group(1).replace("\\/", "/"))
+    return found.group(1) if found else None
+
+
 def _clean(text, *secrets) -> str:
     """Potong dan buang data rahasia dari teks yang boleh tampil di log/pesan."""
     out = str(text)[:200]
@@ -65,18 +90,53 @@ def _clean(text, *secrets) -> str:
 
 class FragmentClient:
     def __init__(self, fragment_hash: str, fragment_cookie: str, timeout: float = 20.0, transport=None):
-        self._hash = fragment_hash
         self._cookie = fragment_cookie
+        self._hash = _LEARNED_HASH.get(fragment_cookie) or fragment_hash
         self._timeout = timeout
         self._transport = transport  # hanya untuk tes
 
     def configured(self) -> bool:
-        return bool(self._hash and self._cookie)
+        """Cukup cookie: hash bisa dibaca sendiri dari halaman Fragment."""
+        return bool(self._cookie)
+
+    async def _refresh_hash(self) -> Optional[str]:
+        """Baca hash terbaru dari halaman Fragment (memakai cookie). None bila gagal; tidak pernah melempar."""
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport,
+                                         follow_redirects=True) as client:
+                response = await client.get(PAGE_URL, headers={
+                    "Cookie": self._cookie, "User-Agent": USER_AGENT, "Accept": "text/html"})
+            if response.status_code != 200:
+                return None
+            fresh = parse_api_hash(response.text)
+        except Exception:
+            logger.warning("Gagal membaca hash dari halaman Fragment", exc_info=False)
+            return None
+        if fresh:
+            self._hash = fresh
+            _LEARNED_HASH[self._cookie] = fresh
+        return fresh
 
     async def _call(self, data: dict) -> dict:
+        if not self._hash:
+            await self._refresh_hash()
+        if not self._hash:
+            raise FragmentAuthError("Hash Fragment tidak ditemukan: pastikan FRAGMENT_COOKIE masih berlaku "
+                                    "(login ulang) atau isi FRAGMENT_HASH.")
+        try:
+            return await self._post(data)
+        except (FragmentAuthError, FragmentBadRequest):
+            # Hash basi? Ambil yang terbaru dari halaman; coba lagi hanya bila hash-nya memang berubah.
+            old = self._hash
+            fresh = await self._refresh_hash()
+            if not fresh or fresh == old:
+                raise
+            return await self._post(data)
+
+    async def _post(self, data: dict) -> dict:
         headers = {
             "Cookie": self._cookie,
-            "User-Agent": "Mozilla/5.0 (compatible; TokoKoinBot/1.0)",
+            "User-Agent": USER_AGENT,
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": "https://fragment.com",
@@ -88,11 +148,11 @@ class FragmentClient:
         except httpx.HTTPError as exc:
             raise FragmentError(f"Fragment tidak terjangkau ({type(exc).__name__})") from None
         if response.status_code in (401, 403):
-            raise FragmentAuthError("Sesi Fragment ditolak (login ulang dan perbarui FRAGMENT_HASH/COOKIE).")
+            raise FragmentAuthError("Sesi Fragment ditolak (login ulang dan perbarui FRAGMENT_COOKIE).")
         try:
             result = response.json()
         except ValueError:
-            raise FragmentError(f"Balasan Fragment bukan JSON (HTTP {response.status_code})") from None
+            raise FragmentBadRequest(f"Balasan Fragment bukan JSON (HTTP {response.status_code})") from None
         if isinstance(result, dict) and result.get("error"):
             message = _clean(result["error"], self._hash, self._cookie)
             low = message.lower()
@@ -100,6 +160,8 @@ class FragmentClient:
                 raise FragmentPriceChanged(message)
             if "auth" in low or "unauthorized" in low or "log in" in low:
                 raise FragmentAuthError(message)
+            if "bad request" in low:
+                raise FragmentBadRequest(message)
             if any(x in low for x in ("not found", "invalid", "no telegram users", "user not found")):
                 raise FragmentInvalidRecipient(message)
             raise FragmentError(message)

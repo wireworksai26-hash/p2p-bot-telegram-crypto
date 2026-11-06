@@ -21,13 +21,16 @@ admin memenuhinya manual (beli di Fragment, kirim ke username tujuan, tekan **Su
 | Pembayaran TON **mungkin** sudah keluar tetapi tidak terkonfirmasi, atau proses mati di tengah jalan | `review` + alarm: admin cek wallet/tonviewer dan akun tujuan, lalu **Sudah Dikirim** atau **Tolak** |
 | Nilai pesanan di atas batas per pesanan / batas harian | proses manual |
 
+Pengiriman selalu **anonim** (permintaan klien): kotak "Show my name to the recipient" di Fragment tidak dicentang
+(`show_sender=0`), jadi penerima melihat "Someone sent you a gift", bukan nama akun Fragment kita.
+
 ## Variabel (Railway → Variables)
 
 | Variabel | Isi |
 |---|---|
 | `STARS_AUTOFULFILL` | `true` untuk mengaktifkan (bawaan `false`) |
-| `FRAGMENT_HASH` | nilai `hash` pada URL permintaan `https://fragment.com/api?hash=...` |
-| `FRAGMENT_COOKIE` | seluruh header `Cookie` dari permintaan yang sama (akun Fragment yang sudah KYC) |
+| `FRAGMENT_COOKIE` | **wajib.** Seluruh header `Cookie` dari fragment.com (akun Fragment yang sudah KYC dan wallet TON tersambung) |
+| `FRAGMENT_HASH` | **opsional.** Bot membaca hash terbaru sendiri dari halaman fragment.com/stars memakai cookie, dan mengambil ulang bila ditolak. Isi hanya sebagai nilai awal/cadangan. |
 | `STARS_TON_PRIVATE_KEY` | mnemonic 24 kata / hex wallet **khusus** pembelian Fragment |
 | `STARS_TON_WALLET_ADDRESS` | alamat wallet khusus itu |
 | `STARS_MAX_ORDER_IDR` | batas otomatis per pesanan (bawaan 1.500.000) |
@@ -36,11 +39,13 @@ admin memenuhinya manual (beli di Fragment, kirim ke username tujuan, tekan **Su
 
 Cookie dan hash adalah rahasia akun: simpan hanya di Variables, jangan kirim lewat chat. Bot tidak pernah mencatatnya di log.
 
-### Mengambil `FRAGMENT_HASH` dan `FRAGMENT_COOKIE`
-1. Login di fragment.com dengan akun yang sudah KYC, buka halaman beli Stars.
-2. Buka DevTools browser → tab Network → lakukan pencarian username di kolom penerima.
-3. Pilih permintaan `api?hash=XXXX`: `XXXX` adalah `FRAGMENT_HASH`; header `Cookie` adalah `FRAGMENT_COOKIE`.
-4. Sesi bisa kedaluwarsa. Bila alarm "sesi Fragment kedaluwarsa" muncul, ulangi langkah ini.
+### Mengambil `FRAGMENT_COOKIE` (dan `FRAGMENT_HASH` bila mau)
+1. Login di fragment.com dengan akun yang sudah KYC dan wallet TON tersambung, buka fragment.com/stars.
+2. Buka DevTools browser (F12) → tab Network → filter **Doc** → muat ulang halaman (Ctrl+R).
+3. Klik permintaan **stars** → Headers → Request Headers → **Cookie** → Copy value. Itu `FRAGMENT_COOKIE`.
+4. `FRAGMENT_HASH` tidak perlu diisi: bot membacanya sendiri dari halaman. Bila mau mengisinya, nilainya ada pada
+   `"apiUrl":"\/api?hash=XXXX"` di source halaman yang sama, atau pada permintaan `api?hash=XXXX` di Network.
+5. Sesi bisa kedaluwarsa. Bila alarm "sesi Fragment kedaluwarsa" muncul, ulangi langkah ini.
 
 ### Wallet khusus
 - Buat wallet TON baru (v5r1 atau v4r2). **Jangan** memakai wallet stok GRAM (`TON_PRIVATE_KEY`).

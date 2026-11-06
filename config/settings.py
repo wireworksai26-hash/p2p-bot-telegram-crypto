@@ -69,7 +69,7 @@ class Settings:
 
     # --- Stars & Premium otomatis via Fragment (nonaktif bawaan; lihat docs/stars-premium-fragment.md) ---
     STARS_AUTOFULFILL = os.getenv("STARS_AUTOFULFILL", "false").lower() in ("true", "1", "yes")
-    FRAGMENT_HASH = (os.getenv("FRAGMENT_HASH") or "").strip()        # dari sesi Fragment yang sudah login
+    FRAGMENT_HASH = (os.getenv("FRAGMENT_HASH") or "").strip()        # opsional: hash dibaca otomatis dari halaman Fragment
     FRAGMENT_COOKIE = (os.getenv("FRAGMENT_COOKIE") or "").strip()    # idem; RAHASIA, jangan dicatat di log
     # Wallet TON KHUSUS pembelian Fragment (saldo kecil), terpisah dari wallet stok GRAM (TON_PRIVATE_KEY).
     STARS_TON_PRIVATE_KEY = (os.getenv("STARS_TON_PRIVATE_KEY") or "").strip()

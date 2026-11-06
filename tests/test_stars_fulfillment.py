@@ -385,6 +385,12 @@ def _transport(handler):
 
 
 class TestFragmentClient(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        FC._LEARNED_HASH.clear()
+
+    def tearDown(self):
+        FC._LEARNED_HASH.clear()
+
     def client(self, handler):
         return FC.FragmentClient(HASH_SECRET, COOKIE_SECRET, transport=_transport(handler))
 
@@ -414,6 +420,25 @@ class TestFragmentClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, ["searchStarsRecipient", "initBuyStarsRequest", "getBuyStarsLink"])
         self.assertEqual((result.recipient_name, result.req_id, result.total_nano), ("Teman", "REQ9", 1_500_000_000))
         self.assertEqual(result.messages[0], {"address": "EQdest", "amount_nano": 1_500_000_000, "payload_b64": "te6cc"})
+
+    async def test_pengirim_anonim_untuk_stars_dan_premium(self):
+        """Permintaan klien: "Show my name to the recipient" tidak dicentang, penerima hanya melihat "Someone"."""
+        link_bodies = []
+
+        def handler(request):
+            body = self.form(request)
+            if body["method"].startswith("search"):
+                return httpx.Response(200, json={"found": {"recipient": "R"}})
+            if body["method"].startswith("init"):
+                return httpx.Response(200, json={"req_id": "Q"})
+            link_bodies.append(body)
+            return httpx.Response(200, json={"transaction": {"messages": [{"address": "EQx", "amount": "9", "payload": ""}]}})
+
+        client = self.client(handler)
+        await client.prepare_stars("teman_ku", 50, "UQw")
+        await client.prepare_premium("teman_ku", 3, "UQw")
+        self.assertEqual([b["method"] for b in link_bodies], ["getBuyStarsLink", "getGiftPremiumLink"])
+        self.assertEqual([b["show_sender"] for b in link_bodies], ["0", "0"])
 
     async def test_alur_premium(self):
         seen = []
@@ -496,7 +521,83 @@ class TestFragmentClient(unittest.IsolatedAsyncioTestCase):
             await c.prepare_premium("teman_ku", 4, "UQ")
         self.assertEqual(await c.check_session("owner"), "Owner")
         self.assertTrue(c.configured())
-        self.assertFalse(FC.FragmentClient("", "x").configured())
+        self.assertTrue(FC.FragmentClient("", "x").configured())   # hash opsional, cukup cookie
+        self.assertFalse(FC.FragmentClient("h", "").configured())
+
+    # ───── hash dibaca otomatis dari halaman Fragment ─────
+
+    PAGE = ('<script>ajInit({"version":632,"apiUrl":"\\/api?hash=FRESH123abc","state":{"quickSearch":false}});</script>')
+
+    def test_parse_api_hash(self):
+        self.assertEqual(FC.parse_api_hash(self.PAGE), "FRESH123abc")
+        self.assertEqual(FC.parse_api_hash('{"apiUrl": "/api?hash=ab12&x=1"}'), "ab12")
+        for bad in ("", None, "<html></html>", '{"apiUrl":"/api"}'):
+            self.assertIsNone(FC.parse_api_hash(bad), bad)
+
+    async def test_tanpa_hash_dibaca_dari_halaman_memakai_cookie(self):
+        calls = []
+
+        def handler(request):
+            calls.append((request.method, str(request.url).split("?")[0], request.url.params.get("hash")))
+            if request.method == "GET":
+                self.assertEqual(request.headers["cookie"], COOKIE_SECRET)
+                return httpx.Response(200, text=self.PAGE)
+            return httpx.Response(200, json={"found": {"recipient": "R", "name": "Owner"}})
+
+        client = FC.FragmentClient("", COOKIE_SECRET, transport=_transport(handler))
+        self.assertEqual(await client.check_session("owner"), "Owner")
+        self.assertEqual(calls, [("GET", "https://fragment.com/stars", None),
+                                 ("POST", "https://fragment.com/api", "FRESH123abc")])
+
+    async def test_hash_basi_diambil_ulang_lalu_dicoba_sekali_lagi_dan_diingat(self):
+        posts = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, text=self.PAGE)
+            posts.append(request.url.params.get("hash"))
+            if request.url.params.get("hash") == "STALE":
+                return httpx.Response(200, json={"error": "Bad request"})
+            return httpx.Response(200, json={"found": {"recipient": "R", "name": "Owner"}})
+
+        first = FC.FragmentClient("STALE", COOKIE_SECRET, transport=_transport(handler))
+        self.assertEqual(await first.check_session("owner"), "Owner")
+        self.assertEqual(posts, ["STALE", "FRESH123abc"])
+        # klien baru langsung memakai hash terbaru yang sudah dipelajari, tanpa gagal dulu
+        posts.clear()
+        second = FC.FragmentClient("STALE", COOKIE_SECRET, transport=_transport(handler))
+        self.assertEqual(await second.check_session("owner"), "Owner")
+        self.assertEqual(posts, ["FRESH123abc"])
+
+    async def test_bad_request_tetap_gagal_bila_hash_sama_tidak_mengulang_tanpa_batas(self):
+        posts = []
+
+        def handler(request):
+            if request.method == "GET":
+                return httpx.Response(200, text='"apiUrl":"\\/api?hash=SAMA"')
+            posts.append(request.url.params.get("hash"))
+            return httpx.Response(200, json={"error": "Bad request"})
+
+        client = FC.FragmentClient("SAMA", COOKIE_SECRET, transport=_transport(handler))
+        with self.assertRaises(FC.FragmentBadRequest):
+            await client.check_session("owner")
+        self.assertEqual(posts, ["SAMA"])  # hash tidak berubah → tidak dicoba ulang
+
+    async def test_halaman_tak_bisa_dibaca_dan_tanpa_hash_gagal_jelas_tanpa_bocor(self):
+        def handler(request):
+            return httpx.Response(302 if request.method == "GET" else 200, headers={"location": "/"}, text="login")
+
+        client = FC.FragmentClient("", COOKIE_SECRET, transport=_transport(handler))
+        with self.assertRaises(FC.FragmentAuthError) as ctx:
+            await client.check_session("owner")
+        self.assertNotIn(COOKIE_SECRET, str(ctx.exception))
+        self.assertIn("FRAGMENT_COOKIE", str(ctx.exception))
+
+    async def test_hash_isian_tidak_wajib_untuk_kelengkapan_konfigurasi(self):
+        with patch.object(settings, "FRAGMENT_HASH", ""), patch.object(settings, "FRAGMENT_COOKIE", COOKIE_SECRET), \
+             patch.object(settings, "STARS_TON_PRIVATE_KEY", "ab" * 32), \
+             patch.object(settings, "STARS_TON_WALLET_ADDRESS", "UQwallet"):
+            self.assertEqual(F.missing_config(), [])
 
 
 class TestWalletFragment(unittest.IsolatedAsyncioTestCase):
