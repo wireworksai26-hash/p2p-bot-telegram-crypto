@@ -6,6 +6,7 @@ akun mana pun (milik sendiri atau teman), sesuai permintaan klien tidak ada peng
 import re
 from html import escape as _esc
 
+from bot.utils.emojis import E_STAR, E_CROWN
 from bot.utils.formatter import format_idr
 
 # jumlah Stars -> harga (IDR)
@@ -69,8 +70,8 @@ def pricelist_text() -> str:
     premium = "\n".join(
         f"🔴 {package_label('premium', k)} = {format_idr(p)}" for k, p in PREMIUM_PACKAGES.items())
     return (
-        "📋 <b>PRICELIST TELEGRAM STARS</b>\n" + _esc_block(stars) + "\n\n"
-        "📋 <b>PRICELIST TELEGRAM PREMIUM</b>\n" + _esc_block(premium) + "\n\n"
+        f"{E_STAR()} <b>PRICELIST TELEGRAM STARS</b>\n" + _esc_block(stars) + "\n\n"
+        f"{E_CROWN()} <b>PRICELIST TELEGRAM PREMIUM</b>\n" + _esc_block(premium) + "\n\n"
         "<i>Bisa dikirim ke akun sendiri maupun akun teman: cukup isi username tujuan saat pesan.</i>"
     )
 

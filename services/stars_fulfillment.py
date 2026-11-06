@@ -17,6 +17,7 @@ from typing import Optional
 from config.settings import settings
 from database import stars_crud
 from database.connection import SessionLocal
+from bot.utils.emojis import E_CROSS, E_TAG, E_VERIFIED
 from services.stars_catalog import package_label
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ async def try_auto_fulfill(bot, order_id: str, client=None, wallet=None, price_f
         elif stars_crud.auto_spent_today_idr(db) + int(order.price_idr) > settings.STARS_DAILY_LIMIT_IDR:
             reason = f"batas harian otomatis {_idr(settings.STARS_DAILY_LIMIT_IDR)} terlampaui"
         if reason:
-            await _notify_admin(bot, f"ℹ️ Pesanan {_brief(order)} diproses MANUAL: {reason}.", order_id, kind="ops")
+            await _notify_admin(bot, f"ℹ️ Pesanan {_brief(order)} diproses MANUAL: {reason}.", order_id, kind="stars")
             claimed = stars_crud.claim_fulfillment(db, order_id)  # tandai sudah dipertimbangkan agar sweeper tidak mengulang
             if claimed:
                 stars_crud.release_to_manual(db, order_id, reason)
@@ -165,7 +166,7 @@ async def _run(bot, db, order, client, wallet, price_fn) -> str:
         if refunded:
             await _tell_user(
                 bot, refunded.telegram_id,
-                f"❌ <b>PESANAN DIBATALKAN</b>\n\n🎫 <code>{_esc(order_id)}</code>\n"
+                f"{E_CROSS()} <b>PESANAN DIBATALKAN</b>\n\n{E_TAG()} <code>{_esc(order_id)}</code>\n"
                 f"Username <b>@{_esc(order.recipient_username)}</b> tidak ditemukan. Dana "
                 f"<b>{_idr(refunded.total_idr)}</b> dikembalikan ke Saldo Bot kamu. "
                 "Pesan lagi dengan username yang benar.")
@@ -204,12 +205,17 @@ async def _run(bot, db, order, client, wallet, price_fn) -> str:
         if done:
             await _tell_user(
                 bot, done.telegram_id,
-                f"✅ <b>PESANAN SELESAI</b>\n\n🎫 <code>{_esc(order_id)}</code>\n"
+                f"{E_VERIFIED()} <b>PESANAN SELESAI</b>\n\n{E_TAG()} <code>{_esc(order_id)}</code>\n"
                 f"<b>{package_label(done.product.lower(), done.package)}</b> sudah dikirim ke "
                 f"<b>@{_esc(done.recipient_username)}</b>.\nTerima kasih! 🙏")
             await _notify_admin(
                 bot, f"✅ Pesanan {brief} SELESAI otomatis. Biaya {total_ton:.4f} TON ≈ {_idr(cost_idr)} · "
-                     f"tx <code>{_esc(last.tx_hash)}</code>", order_id, kind="ops")
+                     f"tx <code>{_esc(last.tx_hash)}</code>", order_id, kind="stars")
+            try:
+                from services.testimony_service import post_stars_testimony
+                await post_stars_testimony(bot, done, db)
+            except Exception:
+                logger.exception("Gagal memposting testimoni Stars/Premium %s", order_id)
         return "completed"
 
     error = (last.error_message if last else "") or "pembayaran tidak terkonfirmasi"

@@ -184,6 +184,22 @@ def format_topup_testimony(username: Optional[str], telegram_id: int, net_amount
     )
 
 
+def format_stars_testimony(username: Optional[str], telegram_id: int, product: str, package_text: str,
+                           price_idr: int, payment_method: str, bot_username: str = "TokoKoinID_Bot") -> str:
+    """Teks channel untuk pesanan Stars / Premium yang selesai dikirim (tujuan pengiriman tidak ditampilkan)."""
+    bot_tag = f"@{bot_username.lstrip('@')}" if bot_username else "@TokoKoinID_Bot"
+    jenis = "Telegram Premium" if (product or "").lower() == "premium" else "Telegram Stars"
+    return (
+        f"✅ <b>{jenis} Berhasil Dikirim</b>\n"
+        f"- Jenis Transaksi : Beli {jenis}\n"
+        f"- Paket : {html.escape(package_text)}\n"
+        f"- Harga : {format_idr(int(price_idr or 0))}\n"
+        f"- Pengguna : {anonymize_username(username, telegram_id)}\n"
+        f"- Pembayaran : {_PAYMENT_LABELS.get(payment_method, 'Saldo Bot')}\n"
+        f"- Bot order : {bot_tag}"
+    )
+
+
 def _resolve_bot(sender):
     """
     Kembalikan objek yang punya send_message. Modul detector/watchdog/buy meneruskan
@@ -500,4 +516,39 @@ async def post_topup_testimony(bot, topup, net_amount, db=None, channel: Optiona
         return True
     except Exception as exc:
         logger.error("Gagal mengirim testimoni topup %s ke %s: %s", getattr(topup, "topup_id", "?"), target_channel, exc)
+        return False
+
+
+async def post_stars_testimony(bot, order, db=None, channel: Optional[str] = None) -> bool:
+    """Kirim testimoni Stars/Premium selesai ke channel. Tidak pernah melempar error (pesanan sudah selesai)."""
+    bot = _resolve_bot(bot)
+    if not bot or not order:
+        return False
+    target_channel = channel or os.getenv("TESTIMONY_CHANNEL") or getattr(settings, "TESTIMONY_CHANNEL_ID", None) or DEFAULT_TESTIMONY_CHANNEL
+    try:
+        from services.stars_catalog import package_label
+        telegram_id = int(getattr(order, "telegram_id", 0) or 0)
+        username = None
+        if db and telegram_id:
+            from database.models import User
+            user_obj = db.query(User).filter(User.telegram_id == telegram_id).first()
+            username = user_obj.username if user_obj and user_obj.username else None
+        global _bot_username_cache
+        if _bot_username_cache is None:
+            try:
+                me = await bot.get_me()
+                if me and me.username:
+                    _bot_username_cache = me.username
+            except Exception:
+                pass
+        product = (getattr(order, "product", "") or "").lower()
+        text = format_stars_testimony(
+            username, telegram_id, product, package_label(product, order.package),
+            int(getattr(order, "price_idr", 0) or 0), getattr(order, "payment_method", ""),
+            _bot_username_cache or "TokoKoinID_Bot")
+        await _send_with_retry(bot, chat_id=target_channel, text=text, parse_mode="HTML",
+                               disable_web_page_preview=True)
+        return True
+    except Exception as exc:
+        logger.error("Gagal mengirim testimoni Stars/Premium %s ke %s: %s", getattr(order, "order_id", "?"), target_channel, exc)
         return False

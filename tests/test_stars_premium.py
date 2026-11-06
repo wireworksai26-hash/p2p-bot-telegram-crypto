@@ -270,7 +270,7 @@ class TestFlow(_Db):
         self.assertIn("SIAP DIKIRIM", text)
         self.assertIn("<code>@teman_ku</code>", text)
         self.assertIn("100 Stars", text)
-        self.assertEqual(notif.await_args.kwargs["kind"], "beli")
+        self.assertEqual(notif.await_args.kwargs["kind"], "stars")
         data = {b.callback_data for row in notif.await_args.kwargs["reply_markup"].inline_keyboard for b in row}
         self.assertEqual(data, {f"admin_stp_take_{order.order_id}", f"admin_stp_ok_{order.order_id}", f"admin_stp_no_{order.order_id}"})
 

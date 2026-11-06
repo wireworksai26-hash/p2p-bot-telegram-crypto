@@ -193,8 +193,9 @@ async def safe_send_message(sender, chat_id: int, text: str, parse_mode="HTML",
 
 
 KIND_ALIAS = {"buy": "beli", "sell": "jual", "swap": "convert", "convert": "convert",
-              "ops": "ops", "error": "error", "alarm": "alarm", "topup": "topup", "withdraw": "topup"}
-KIND_RESMI = ("beli", "jual", "convert", "error", "alarm", "topup", "ops")
+              "ops": "ops", "error": "error", "alarm": "alarm", "topup": "topup", "withdraw": "topup",
+              "stars": "stars", "premium": "stars"}
+KIND_RESMI = ("beli", "jual", "convert", "error", "alarm", "topup", "ops", "stars")
 
 
 def normalisasi_kind(kind):
@@ -204,14 +205,19 @@ def normalisasi_kind(kind):
 
 
 def _target_row(kind):
-    """Baris NotificationTarget untuk jenis; None bila belum dipasang."""
+    """Baris NotificationTarget untuk jenis; None bila belum dipasang.
+
+    Jenis "stars" yang belum dipasang memakai topik "beli" agar notifikasi tidak jatuh ke DM saja."""
     try:
         from database.connection import SessionLocal
         from database.models import NotificationTarget
         db = SessionLocal()
         try:
-            return db.query(NotificationTarget).filter(
-                NotificationTarget.kind == normalisasi_kind(kind)).first()
+            kind = normalisasi_kind(kind)
+            row = db.query(NotificationTarget).filter(NotificationTarget.kind == kind).first()
+            if row is None and kind == "stars":
+                row = db.query(NotificationTarget).filter(NotificationTarget.kind == "beli").first()
+            return row
         finally:
             db.close()
     except Exception:

@@ -5100,7 +5100,7 @@ async def settarget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     if not context.args:
         await update.message.reply_text(
-            "Pakai: /settarget beli|jual|convert|error|alarm|topup|ops\n"
+            "Pakai: /settarget beli|jual|convert|error|alarm|topup|stars|ops\n"
             "Jalankan perintah ini di dalam topik tujuan (mis. topik 'Beli Crypto').")
         return
     kind = normalisasi_kind(context.args[0])
@@ -5136,7 +5136,7 @@ async def unsettarget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Pakai: /unsettarget beli|jual|convert|error|alarm|topup|ops")
+        await update.message.reply_text("Pakai: /unsettarget beli|jual|convert|error|alarm|topup|stars|ops")
         return
     kind = normalisasi_kind(context.args[0])
     db = SessionLocal()
